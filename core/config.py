@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     rate_limit_requests_per_minute: int = 10
     polite_crawl_delay_seconds: float = 2.0
 
+    # ── CORS ─────────────────────────────────────────────
+    cors_allowed_origins: str = "http://localhost:3000,http://localhost:5173"
+
     # ── Security ────────────────────────────────────────
     secret_key: str = "change-me"
 
@@ -63,6 +66,13 @@ class Settings(BaseSettings):
         if not self.allowed_senders:
             return []
         return [s.strip() for s in self.allowed_senders.split(",") if s.strip()]
+
+
+    @property
+    def cors_allowed_origin_list(self) -> list[str]:
+        if not self.cors_allowed_origins:
+            return []
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
 
     @property
     def db_is_sqlite(self) -> bool:
