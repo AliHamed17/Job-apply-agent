@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
@@ -16,7 +18,13 @@ from fastapi.templating import Jinja2Templates
 from api.routes.applications import router as applications_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.jobs import router as jobs_router
-from api.routes.webhook import router as webhook_router
+from api.routes.webhook import (
+    get_webhook_metrics_payload,
+    get_webhook_metrics_snapshot,
+)
+from api.routes.webhook import (
+    router as webhook_router,
+)
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from db.session import init_db
@@ -26,17 +34,30 @@ setup_logging()
 logger = structlog.get_logger(__name__)
 
 # ── App creation ─────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize runtime dependencies and validate configuration on startup."""
+    config_errors = settings.validate_runtime_config()
+    if config_errors:
+        raise RuntimeError("; ".join(config_errors))
+
+    init_db()
+    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
+    yield
+
+
 app = FastAPI(
     title="AI Job Apply Agent",
     description="Monitor WhatsApp for job links, extract postings, and draft/submit applications",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # ── CORS (configurable per environment) ──────────────────
 settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=settings.cors_allowed_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,6 +96,18 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+def _is_auth_exempt_path(path: str) -> bool:
+    """Return True only for explicitly exempt endpoints."""
+    exact_exempt = {"/webhook/whatsapp", "/health", "/openapi.json", "/docs", "/redoc"}
+    if path in exact_exempt:
+        return True
+
+    docs_prefixes = ("/docs/", "/redoc/")
+    return path.startswith(docs_prefixes)
+
+
+
+
 # ── API Token Auth Middleware ────────────────────────────
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -82,12 +115,11 @@ async def auth_middleware(request: Request, call_next):
 
     Exempt: /webhook (uses its own verification), /health, /docs, /openapi.json
     """
-    exempt_paths = {"/webhook/whatsapp", "/health", "/docs", "/openapi.json", "/redoc"}
-    if any(request.url.path.startswith(p) for p in exempt_paths):
+    if _is_auth_exempt_path(request.url.path):
         return await call_next(request)
 
-    # If no secret_key is configured (dev mode), skip auth
-    if settings.secret_key == "change-me":
+    # If no secret_key is configured, only allow bypass in non-production
+    if settings.secret_key == "change-me" and not settings.is_production:
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization", "")
@@ -98,7 +130,7 @@ async def auth_middleware(request: Request, call_next):
         )
 
     token = auth_header.removeprefix("Bearer ").strip()
-    if token != settings.secret_key:
+    if not hmac.compare_digest(token, settings.secret_key):
         return JSONResponse(
             status_code=403,
             content={"detail": "Invalid API token"},
@@ -154,7 +186,7 @@ async def metrics():
 
     db = get_session_factory()()
     try:
-        return {
+        metrics = {
             "urls_processed": db.query(ExtractedURL).count(),
             "jobs_extracted": db.query(Job).count(),
             "jobs_skipped": db.query(Job).filter(Job.status == JobStatus.SKIPPED).count(),
@@ -164,13 +196,17 @@ async def metrics():
             ).count(),
             "submissions_total": db.query(Submission).count(),
         }
+        webhook_metrics = get_webhook_metrics_snapshot()
+        for key, value in webhook_metrics.items():
+            metrics[f"whatsapp_{key}"] = value
+
+        return metrics
     finally:
         db.close()
 
 
-# ── Startup ──────────────────────────────────────────────
-@app.on_event("startup")
-async def startup():
-    """Initialize DB tables on startup (MVP mode)."""
-    init_db()
-    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
+
+@app.get("/api/whatsapp/metrics")
+async def whatsapp_metrics():
+    """Detailed WhatsApp interaction metrics, including top URL domains."""
+    return get_webhook_metrics_payload()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
@@ -18,6 +19,31 @@ TRACKING_PARAMS = {
 }
 
 # Known URL shortener domains
+
+# Known job board / ATS host patterns
+JOB_PLATFORM_PATTERNS: dict[str, tuple[str, ...]] = {
+    "greenhouse": ("greenhouse.io",),
+    "lever": ("lever.co",),
+    "workday": ("workdayjobs.com", ".myworkdayjobs.com"),
+    "amazon_jobs": ("amazon.jobs",),
+    "apple_jobs": ("jobs.apple.com",),
+    "smartrecruiters": ("smartrecruiters.com",),
+    "ashby": ("ashbyhq.com",),
+    "icims": ("icims.com",),
+    "successfactors": ("successfactors.com",),
+    "taleo": ("taleo.net",),
+}
+
+# Career path hints that commonly appear on company job pages
+CAREER_PATH_HINTS = (
+    "/careers",
+    "/jobs",
+    "/job/",
+    "/jobsearch",
+    "/join-us",
+)
+
+
 SHORT_URL_DOMAINS = {
     "bit.ly", "t.co", "goo.gl", "tinyurl.com", "ow.ly",
     "is.gd", "buff.ly", "tiny.cc", "lnkd.in", "rb.gy",
@@ -97,3 +123,39 @@ def job_signature(title: str, company: str, location: str) -> str:
     """Generate a dedup signature for a job posting."""
     raw = f"{title.lower().strip()}|{company.lower().strip()}|{location.lower().strip()}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def identify_job_platform(url: str) -> str:
+    """Identify known ATS/job platform from URL host."""
+    try:
+        host = urlparse(url).netloc.lower()
+        for platform, patterns in JOB_PLATFORM_PATTERNS.items():
+            if any(host == p or host.endswith(p) for p in patterns):
+                return platform
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
+def is_likely_job_url(url: str) -> bool:
+    """Heuristic to detect if URL likely points to a job/careers page."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        path = parsed.path.lower()
+
+        if identify_job_platform(url) != "unknown":
+            return True
+
+        if any(hint in path for hint in CAREER_PATH_HINTS):
+            # Corporate domains often host careers pages under these paths
+            return "." in host
+
+        # Common req/job ID query params used on enterprise career portals
+        query_lower = parsed.query.lower()
+        if re.search(r"(^|&)(jobid|job_id|reqid|requisition|gh_jid)=", query_lower):
+            return True
+
+        return False
+    except Exception:
+        return False

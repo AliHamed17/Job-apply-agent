@@ -11,8 +11,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -22,10 +24,50 @@ from sqlalchemy.orm import Session
 from core.config import Settings, get_settings
 from db.models import Application, ExtractedURL, Job, JobStatus, Message
 from db.session import get_db
-from ingestion.url_utils import normalize_url, url_hash
+from ingestion.url_utils import identify_job_platform, is_likely_job_url, normalize_url, url_hash
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
+
+# ── In-memory interaction metrics (process-local) ───────
+_webhook_metrics: dict[str, int] = defaultdict(int)
+_webhook_url_domain_counts: Counter[str] = Counter()
+
+
+def _inc_metric(name: str, amount: int = 1) -> None:
+    _webhook_metrics[name] += amount
+
+
+def _track_url_domain(url: str) -> None:
+    """Track normalized URL host usage for WhatsApp messages."""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().strip()
+    if host:
+        _webhook_url_domain_counts[host] += 1
+
+
+def get_webhook_metrics_snapshot() -> dict[str, int]:
+    """Return a snapshot of webhook interaction counters."""
+    return dict(_webhook_metrics)
+
+
+def get_webhook_metrics_payload(top_n_domains: int = 10) -> dict[str, Any]:
+    """Return detailed WhatsApp metrics payload for APIs and dashboards."""
+    top_domains = [
+        {"domain": domain, "count": count}
+        for domain, count in _webhook_url_domain_counts.most_common(top_n_domains)
+    ]
+    return {
+        "counters": dict(_webhook_metrics),
+        "top_url_domains": top_domains,
+    }
+
+
+def reset_webhook_metrics() -> None:
+    """Reset webhook counters (used by tests)."""
+    _webhook_metrics.clear()
+    _webhook_url_domain_counts.clear()
+
 
 # ── URL extraction regex ────────────────────────────────
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')\]},;]+", re.IGNORECASE)
@@ -59,6 +101,18 @@ def _extract_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
             for msg in value.get("messages", []):
                 messages.append(msg)
     return messages
+
+
+def _parse_action_job_id(action_id: str, prefix: str) -> int | None:
+    """Safely parse a job_id from an action string like `approve_123`."""
+    if not action_id.startswith(prefix):
+        return None
+
+    raw = action_id.removeprefix(prefix).strip()
+    if not raw.isdigit():
+        return None
+
+    return int(raw)
 
 
 # ── WhatsApp API helpers ────────────────────────────────
@@ -251,7 +305,9 @@ async def receive_message(
             raise HTTPException(status_code=403, detail="Invalid signature")
 
     payload = await request.json()
+    _inc_metric("webhook_requests")
     raw_messages = _extract_messages(payload)
+    _inc_metric("messages_received", len(raw_messages))
     processed = 0
 
     for msg in raw_messages:
@@ -260,6 +316,7 @@ async def receive_message(
 
         # Allowed-sender filter
         if settings.allowed_sender_list and sender not in settings.allowed_sender_list:
+            _inc_metric("blocked_sender_messages")
             logger.info("sender_not_allowed", sender=sender)
             continue
 
@@ -269,18 +326,24 @@ async def receive_message(
             button_reply = interactive.get("button_reply", {})
             action_id = button_reply.get("id", "")
 
-            if action_id.startswith("approve_"):
-                job_id = int(action_id.removeprefix("approve_"))
-                await _handle_approve(job_id, sender, db, settings)
-            elif action_id.startswith("skip_"):
-                job_id = int(action_id.removeprefix("skip_"))
-                await _handle_skip(job_id, sender, db, settings)
-            elif action_id.startswith("edit_"):
-                job_id = int(action_id.removeprefix("edit_"))
-                await _handle_edit(job_id, sender, db, settings)
-            else:
-                logger.warning("unknown_interactive_action", action=action_id)
+            approve_job_id = _parse_action_job_id(action_id, "approve_")
+            skip_job_id = _parse_action_job_id(action_id, "skip_")
+            edit_job_id = _parse_action_job_id(action_id, "edit_")
 
+            if approve_job_id is not None:
+                _inc_metric("interactive_approve_actions")
+                await _handle_approve(approve_job_id, sender, db, settings)
+            elif skip_job_id is not None:
+                _inc_metric("interactive_skip_actions")
+                await _handle_skip(skip_job_id, sender, db, settings)
+            elif edit_job_id is not None:
+                _inc_metric("interactive_edit_actions")
+                await _handle_edit(edit_job_id, sender, db, settings)
+            else:
+                _inc_metric("interactive_invalid_actions")
+                logger.warning("unknown_or_invalid_interactive_action", action=action_id)
+
+            _inc_metric("interactive_messages")
             processed += 1
             continue
 
@@ -289,26 +352,25 @@ async def receive_message(
 
         # Check for text-based approve/skip commands
         text_lower = text_body.strip().lower()
-        if text_lower.startswith("approve_"):
-            try:
-                job_id = int(text_lower.removeprefix("approve_"))
-                await _handle_approve(job_id, sender, db, settings)
-                processed += 1
-                continue
-            except ValueError:
-                pass
-        elif text_lower.startswith("skip_"):
-            try:
-                job_id = int(text_lower.removeprefix("skip_"))
-                await _handle_skip(job_id, sender, db, settings)
-                processed += 1
-                continue
-            except ValueError:
-                pass
+        approve_job_id = _parse_action_job_id(text_lower, "approve_")
+        skip_job_id = _parse_action_job_id(text_lower, "skip_")
+
+        if approve_job_id is not None:
+            _inc_metric("text_approve_actions")
+            await _handle_approve(approve_job_id, sender, db, settings)
+            processed += 1
+            continue
+
+        if skip_job_id is not None:
+            _inc_metric("text_skip_actions")
+            await _handle_skip(skip_job_id, sender, db, settings)
+            processed += 1
+            continue
 
         # Dedup by message ID
         exists = db.query(Message).filter(Message.whatsapp_message_id == msg_id).first()
         if exists:
+            _inc_metric("duplicate_messages")
             continue
 
         # Persist message
@@ -322,8 +384,18 @@ async def receive_message(
 
         # Extract URLs and enqueue processing
         urls = extract_urls(text_body)
+        _inc_metric("urls_extracted", len(urls))
         for raw_url in urls:
             normalized = normalize_url(raw_url)
+            platform = identify_job_platform(normalized)
+            if platform != "unknown":
+                _inc_metric(f"platform_{platform}_urls")
+
+            if is_likely_job_url(normalized):
+                _inc_metric("likely_job_urls")
+            else:
+                _inc_metric("non_job_urls")
+
             uhash = url_hash(normalized)
 
             if db.query(ExtractedURL).filter(ExtractedURL.url_hash == uhash).first():
@@ -337,6 +409,8 @@ async def receive_message(
             )
             db.add(db_url)
             db.flush()
+            _inc_metric("urls_enqueued")
+            _track_url_domain(normalized)
 
             # Enqueue URL processing
             from worker.tasks import process_url_task
