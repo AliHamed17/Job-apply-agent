@@ -8,6 +8,7 @@ Each task enforces proper state transitions and approval checks.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import structlog
 from celery import shared_task
@@ -27,7 +28,7 @@ from ingestion.url_utils import job_signature, normalize_url, url_hash
 from ingestion.whatsapp_webhook import extract_urls
 from jobs.extractor import extract_jobs
 from jobs.fetcher import fetch_page
-from match.scoring import Action, decide_action, score_job
+from match.scoring import AUTO_APPLY_THRESHOLD, Action, decide_action, score_job
 
 logger = structlog.get_logger(__name__)
 
@@ -317,6 +318,25 @@ def generate_application_task(self, job_id: int):
             job=db_job.title,
             has_placeholders=generated.has_placeholders,
         )
+
+        settings = get_settings()
+        if (
+            settings.auto_apply
+            and not settings.draft_only
+            and db_job.score is not None
+            and db_job.score >= AUTO_APPLY_THRESHOLD
+        ):
+            app.status = JobStatus.APPROVED
+            app.approved_at = datetime.utcnow()
+            db_job.status = JobStatus.APPROVED
+            db.commit()
+            submit_application_task.delay(app.id)
+            logger.info(
+                "application_auto_approved_and_queued",
+                job=db_job.title,
+                score=db_job.score,
+                application_id=app.id,
+            )
 
     except Exception as exc:
         db.rollback()
