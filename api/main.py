@@ -6,6 +6,7 @@ import hmac
 import os
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
@@ -27,10 +28,23 @@ setup_logging()
 logger = structlog.get_logger(__name__)
 
 # ── App creation ─────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize runtime dependencies and validate configuration on startup."""
+    config_errors = settings.validate_runtime_config()
+    if config_errors:
+        raise RuntimeError("; ".join(config_errors))
+
+    init_db()
+    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
+    yield
+
+
 app = FastAPI(
     title="AI Job Apply Agent",
     description="Monitor WhatsApp for job links, extract postings, and draft/submit applications",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # ── CORS (configurable per environment) ──────────────────
@@ -179,14 +193,3 @@ async def metrics():
     finally:
         db.close()
 
-
-# ── Startup ──────────────────────────────────────────────
-@app.on_event("startup")
-async def startup():
-    """Initialize DB tables on startup (MVP mode)."""
-    config_errors = settings.validate_runtime_config()
-    if config_errors:
-        raise RuntimeError("; ".join(config_errors))
-
-    init_db()
-    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)

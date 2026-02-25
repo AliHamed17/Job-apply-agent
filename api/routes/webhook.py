@@ -302,22 +302,18 @@ async def receive_message(
 
         # Check for text-based approve/skip commands
         text_lower = text_body.strip().lower()
-        if text_lower.startswith("approve_"):
-            try:
-                job_id = int(text_lower.removeprefix("approve_"))
-                await _handle_approve(job_id, sender, db, settings)
-                processed += 1
-                continue
-            except ValueError:
-                pass
-        elif text_lower.startswith("skip_"):
-            try:
-                job_id = int(text_lower.removeprefix("skip_"))
-                await _handle_skip(job_id, sender, db, settings)
-                processed += 1
-                continue
-            except ValueError:
-                pass
+        approve_job_id = _parse_action_job_id(text_lower, "approve_")
+        skip_job_id = _parse_action_job_id(text_lower, "skip_")
+
+        if approve_job_id is not None:
+            await _handle_approve(approve_job_id, sender, db, settings)
+            processed += 1
+            continue
+
+        if skip_job_id is not None:
+            await _handle_skip(skip_job_id, sender, db, settings)
+            processed += 1
+            continue
 
         # Dedup by message ID
         exists = db.query(Message).filter(Message.whatsapp_message_id == msg_id).first()

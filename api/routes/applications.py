@@ -7,7 +7,7 @@ from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from db.models import Application, JobStatus
@@ -33,8 +33,7 @@ class ApplicationResponse(BaseModel):
     submission_status: str | None = None
     submission_platform: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApproveResponse(BaseModel):
