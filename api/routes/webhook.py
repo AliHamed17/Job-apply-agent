@@ -11,9 +11,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -30,10 +31,19 @@ router = APIRouter(prefix="/webhook", tags=["webhook"])
 
 # ── In-memory interaction metrics (process-local) ───────
 _webhook_metrics: dict[str, int] = defaultdict(int)
+_webhook_url_domain_counts: Counter[str] = Counter()
 
 
 def _inc_metric(name: str, amount: int = 1) -> None:
     _webhook_metrics[name] += amount
+
+
+def _track_url_domain(url: str) -> None:
+    """Track normalized URL host usage for WhatsApp messages."""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().strip()
+    if host:
+        _webhook_url_domain_counts[host] += 1
 
 
 def get_webhook_metrics_snapshot() -> dict[str, int]:
@@ -41,9 +51,22 @@ def get_webhook_metrics_snapshot() -> dict[str, int]:
     return dict(_webhook_metrics)
 
 
+def get_webhook_metrics_payload(top_n_domains: int = 10) -> dict[str, Any]:
+    """Return detailed WhatsApp metrics payload for APIs and dashboards."""
+    top_domains = [
+        {"domain": domain, "count": count}
+        for domain, count in _webhook_url_domain_counts.most_common(top_n_domains)
+    ]
+    return {
+        "counters": dict(_webhook_metrics),
+        "top_url_domains": top_domains,
+    }
+
+
 def reset_webhook_metrics() -> None:
     """Reset webhook counters (used by tests)."""
     _webhook_metrics.clear()
+    _webhook_url_domain_counts.clear()
 
 
 # ── URL extraction regex ────────────────────────────────
@@ -378,6 +401,7 @@ async def receive_message(
             db.add(db_url)
             db.flush()
             _inc_metric("urls_enqueued")
+            _track_url_domain(normalized)
 
             # Enqueue URL processing
             from worker.tasks import process_url_task

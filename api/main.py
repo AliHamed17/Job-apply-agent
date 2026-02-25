@@ -19,6 +19,7 @@ from api.routes.applications import router as applications_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.jobs import router as jobs_router
 from api.routes.webhook import (
+    get_webhook_metrics_payload,
     get_webhook_metrics_snapshot,
 )
 from api.routes.webhook import (
@@ -203,3 +204,9 @@ async def metrics():
     finally:
         db.close()
 
+
+
+@app.get("/api/whatsapp/metrics")
+async def whatsapp_metrics():
+    """Detailed WhatsApp interaction metrics, including top URL domains."""
+    return get_webhook_metrics_payload()
