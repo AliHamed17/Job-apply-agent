@@ -2,16 +2,18 @@
 
 import json
 import re
-import pytest
 
-from llm.generation import _check_placeholders, GeneratedApplication
+from llm.generation import GeneratedApplication, _check_placeholders
 
 
 class TestPlaceholderDetection:
     """Tests for placeholder detection in generated text."""
 
     def test_detect_placeholders(self):
-        text = "Dear [PLACEHOLDER: hiring manager name], I am writing about [PLACEHOLDER: specific project]."
+        text = (
+            "Dear [PLACEHOLDER: hiring manager name], "
+            "I am writing about [PLACEHOLDER: specific project]."
+        )
         placeholders = _check_placeholders(text)
         assert len(placeholders) == 2
         assert "hiring manager name" in placeholders

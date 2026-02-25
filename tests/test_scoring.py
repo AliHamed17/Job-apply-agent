@@ -1,24 +1,21 @@
 """Tests for the matching and scoring engine."""
 
-import pytest
 
-from jobs.models import JobData
-from match.scoring import (
-    SKIP_THRESHOLD,
-    AUTO_APPLY_THRESHOLD,
-    Action,
-    ScoreBreakdown,
-    decide_action,
-    score_job,
-)
 from profile.models import (
-    CoverLetterConfig,
-    Links,
     Personal,
     Preferences,
     Resume,
     SalaryPreference,
     UserProfile,
+)
+
+from jobs.models import JobData
+from match.scoring import (
+    SKIP_THRESHOLD,
+    Action,
+    ScoreBreakdown,
+    decide_action,
+    score_job,
 )
 
 

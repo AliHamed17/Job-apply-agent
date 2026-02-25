@@ -197,6 +197,7 @@ def process_url_task(self, url_id: int):
 def score_job_task(self, job_id: int):
     """Score a job against the user profile and decide the action."""
     from profile.loader import get_profile
+
     from jobs.models import JobData
 
     db = _get_db()
@@ -266,9 +267,10 @@ def score_job_task(self, job_id: int):
 def generate_application_task(self, job_id: int):
     """Generate cover letter, recruiter message, and Q&A answers via LLM."""
     import asyncio
-    from llm.generation import generate_full_application
     from profile.loader import get_profile
+
     from jobs.models import JobData
+    from llm.generation import generate_full_application
 
     db = _get_db()
     try:
@@ -336,10 +338,11 @@ def submit_application_task(self, application_id: int):
     """
     import asyncio
     from profile.loader import get_profile
-    from submitters.base import DraftOnlySubmitter, SubmitterRegistry
+
+    from jobs.models import JobData
+    from submitters.base import SubmitterRegistry
     from submitters.greenhouse import GreenhouseSubmitter
     from submitters.lever import LeverSubmitter
-    from jobs.models import JobData
 
     db = _get_db()
     try:

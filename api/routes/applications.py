@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.models import Application, Job, JobStatus, Submission
+from db.models import Application, JobStatus
 from db.session import get_db
 
 logger = structlog.get_logger(__name__)

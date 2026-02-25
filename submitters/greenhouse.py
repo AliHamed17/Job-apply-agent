@@ -64,11 +64,13 @@ class GreenhouseSubmitter(BaseSubmitter):
                 )
 
             personal = user_profile.get("personal", {})
+            full_name = personal.get("name", "")
+            name_parts = full_name.split() if full_name else []
 
             # Build candidate payload
             candidate_data = {
-                "first_name": personal.get("name", "").split()[0] if personal.get("name") else "",
-                "last_name": " ".join(personal.get("name", "").split()[1:]) if personal.get("name") else "",
+                "first_name": name_parts[0] if name_parts else "",
+                "last_name": " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
                 "email_addresses": [{"value": personal.get("email", ""), "type": "personal"}],
                 "phone_numbers": [{"value": personal.get("phone", ""), "type": "mobile"}],
                 "applications": [{"job_id": int(job_id)}],

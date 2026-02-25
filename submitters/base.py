@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import structlog
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+
+import structlog
 
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
