@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from core.config import Settings, get_settings
 from db.models import Application, ExtractedURL, Job, JobStatus, Message
 from db.session import get_db
-from ingestion.url_utils import normalize_url, url_hash
+from ingestion.url_utils import identify_job_platform, is_likely_job_url, normalize_url, url_hash
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -387,6 +387,15 @@ async def receive_message(
         _inc_metric("urls_extracted", len(urls))
         for raw_url in urls:
             normalized = normalize_url(raw_url)
+            platform = identify_job_platform(normalized)
+            if platform != "unknown":
+                _inc_metric(f"platform_{platform}_urls")
+
+            if is_likely_job_url(normalized):
+                _inc_metric("likely_job_urls")
+            else:
+                _inc_metric("non_job_urls")
+
             uhash = url_hash(normalized)
 
             if db.query(ExtractedURL).filter(ExtractedURL.url_hash == uhash).first():

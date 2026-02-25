@@ -2,6 +2,8 @@
 
 
 from ingestion.url_utils import (
+    identify_job_platform,
+    is_likely_job_url,
     is_short_url,
     job_signature,
     normalize_url,
@@ -177,3 +179,25 @@ class TestWebhookActionParsing:
         assert _parse_action_job_id("approve_abc", "approve_") is None
         assert _parse_action_job_id("approve_-1", "approve_") is None
         assert _parse_action_job_id("skip_2", "approve_") is None
+
+
+class TestJobUrlClassification:
+    def test_identify_platform_greenhouse(self):
+        assert identify_job_platform("https://boards.greenhouse.io/nvidia/jobs/123") == "greenhouse"
+
+    def test_identify_platform_workday(self):
+        url = "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/123"
+        assert identify_job_platform(url) == "workday"
+
+    def test_likely_job_urls_for_major_companies(self):
+        assert is_likely_job_url("https://boards.greenhouse.io/qualcomm/jobs/987")
+        assert is_likely_job_url("https://amazon.jobs/en/jobs/123456/software-development-engineer")
+        assert is_likely_job_url("https://jobs.apple.com/en-us/details/200000123/software-engineer")
+        assert is_likely_job_url("https://careers.nvidia.com/job/santa-clara/software-engineer/157/123456")
+        assert is_likely_job_url(
+            "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/123"
+        )
+
+    def test_mobile_and_non_job_urls(self):
+        assert is_likely_job_url("https://m.qualcomm.com/company/careers/mobile-engineer")
+        assert not is_likely_job_url("https://www.apple.com/iphone/")
