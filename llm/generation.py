@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from profile.models import UserProfile
 
 import structlog
 
@@ -14,7 +15,6 @@ from llm.prompts import (
     RECRUITER_MESSAGE_PROMPT,
     SYSTEM_PROMPT,
 )
-from profile.models import UserProfile
 
 logger = structlog.get_logger(__name__)
 

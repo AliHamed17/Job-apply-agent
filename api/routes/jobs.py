@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import structlog
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -36,8 +34,8 @@ class JobResponse(BaseModel):
 
 @router.get("/jobs", response_model=list[JobResponse])
 async def list_jobs(
-    status: Optional[str] = Query(None, description="Filter by status"),
-    min_score: Optional[float] = Query(None, description="Minimum score"),
+    status: str | None = Query(None, description="Filter by status"),
+    min_score: float | None = Query(None, description="Minimum score"),
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),

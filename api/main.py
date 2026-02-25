@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections import defaultdict
 
 import structlog
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
+from api.routes.applications import router as applications_router
+from api.routes.dashboard import router as dashboard_router
+from api.routes.jobs import router as jobs_router
+from api.routes.webhook import router as webhook_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from db.session import init_db
@@ -114,20 +121,11 @@ async def correlation_id_middleware(request: Request, call_next):
 
 
 # ── Register routes ──────────────────────────────────────
-from api.routes.webhook import router as webhook_router
-from api.routes.jobs import router as jobs_router
-from api.routes.applications import router as applications_router
-from api.routes.dashboard import router as dashboard_router
-
 app.include_router(webhook_router)
 app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 
-
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-import os
 
 # ── Static and Templates ─────────────────────────────────
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -151,8 +149,8 @@ async def serve_dashboard(request: Request):
 @app.get("/metrics")
 async def metrics():
     """Basic metrics endpoint."""
+    from db.models import Application, ExtractedURL, Job, JobStatus, Submission
     from db.session import get_session_factory
-    from db.models import Job, Application, Submission, ExtractedURL, JobStatus
 
     db = get_session_factory()()
     try:

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
+from profile.models import UserProfile
 
-import yaml
 import structlog
+import yaml
 
 from core.config import get_settings
-from profile.models import UserProfile
 
 logger = structlog.get_logger(__name__)
 
@@ -34,7 +33,7 @@ def load_profile(path: Path | None = None) -> UserProfile:
         return _profile
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
 
         _profile = UserProfile(**raw)

@@ -113,9 +113,18 @@ async def _send_approval_buttons(
                         },
                         "action": {
                             "buttons": [
-                                {"type": "reply", "reply": {"id": f"approve_{job_id}", "title": "✅ Approve"}},
-                                {"type": "reply", "reply": {"id": f"skip_{job_id}", "title": "⏭️ Skip"}},
-                                {"type": "reply", "reply": {"id": f"edit_{job_id}", "title": "✏️ Edit"}},
+                                {
+                                    "type": "reply",
+                                    "reply": {"id": f"approve_{job_id}", "title": "✅ Approve"},
+                                },
+                                {
+                                    "type": "reply",
+                                    "reply": {"id": f"skip_{job_id}", "title": "⏭️ Skip"},
+                                },
+                                {
+                                    "type": "reply",
+                                    "reply": {"id": f"edit_{job_id}", "title": "✏️ Edit"},
+                                },
                             ]
                         },
                     },
@@ -132,7 +141,11 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
     """Handle approve_ action: mark application as approved and enqueue submission."""
     app = db.query(Application).filter(Application.job_id == job_id).first()
     if not app:
-        await _send_whatsapp_message(sender, f"❌ Application for job #{job_id} not found.", settings)
+        await _send_whatsapp_message(
+            sender,
+            f"❌ Application for job #{job_id} not found.",
+            settings,
+        )
         return
 
     if app.status == JobStatus.APPROVED:
@@ -154,7 +167,10 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
 
     await _send_whatsapp_message(
         sender,
-        f"✅ Approved! Application for *{job.title if job else 'Unknown'}* has been queued for submission.",
+        (
+            f"✅ Approved! Application for *{job.title if job else 'Unknown'}* "
+            "has been queued for submission."
+        ),
         settings,
     )
     logger.info("application_approved_via_whatsapp", job_id=job_id)
@@ -188,7 +204,7 @@ async def _handle_edit(job_id: int, sender: str, db: Session, settings: Settings
     job = db.query(Job).filter(Job.id == job_id).first()
 
     if not app or not job:
-        await _send_whatsapp_message(sender, f"❌ Application not found.", settings)
+        await _send_whatsapp_message(sender, "❌ Application not found.", settings)
         return
 
     # Send cover letter preview

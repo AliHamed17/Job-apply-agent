@@ -1,11 +1,9 @@
 """Tests for job parsing — JSON-LD, HTML heuristic, and platform parsers."""
 
 import json
-import pytest
 
-from jobs.models import JobData
-from jobs.parsers.jsonld import parse_jsonld
 from jobs.parsers.html_heuristic import parse_html_heuristic
+from jobs.parsers.jsonld import parse_jsonld
 
 
 class TestJsonLdParser:
@@ -89,7 +87,10 @@ class TestJsonLdParser:
         assert jobs == []
 
     def test_invalid_jsonld(self):
-        html = '<html><head><script type="application/ld+json">not valid json</script></head></html>'
+        html = (
+            '<html><head><script type="application/ld+json">'
+            'not valid json</script></head></html>'
+        )
         jobs = parse_jsonld(html, "https://example.com")
         assert jobs == []
 

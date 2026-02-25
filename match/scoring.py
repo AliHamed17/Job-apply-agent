@@ -7,14 +7,13 @@ Returns a 0–100 score with a detailed breakdown and action decision.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from profile.models import UserProfile
 
 import structlog
 
 from jobs.models import JobData
-from profile.models import UserProfile
 
 logger = structlog.get_logger(__name__)
 

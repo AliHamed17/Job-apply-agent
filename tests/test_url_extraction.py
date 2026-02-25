@@ -1,10 +1,7 @@
 """Tests for URL extraction, normalization, and hashing."""
 
-import pytest
 
 from ingestion.url_utils import (
-    SHORT_URL_DOMAINS,
-    TRACKING_PARAMS,
     is_short_url,
     job_signature,
     normalize_url,
