@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 import time
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
@@ -24,6 +26,51 @@ _page_cache: dict[str, str] = {}
 _robots_cache: dict[str, RobotFileParser] = {}
 
 USER_AGENT = "JobApplyAgent/1.0 (+https://github.com/AliHamed17/Job-apply-agent)"
+
+
+def _is_url_fetch_allowed(url: str) -> tuple[bool, str]:
+    """Block unsafe URLs to reduce SSRF risk."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "Invalid URL"
+
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return False, "Only http/https URLs are allowed"
+
+    if parsed.username or parsed.password:
+        return False, "URLs with embedded credentials are not allowed"
+
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False, "URL host is missing"
+
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        return False, "Localhost domains are not allowed"
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False, "Could not resolve host"
+
+    for info in infos:
+        ip_text = info[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_text)
+        except ValueError:
+            continue
+
+        if (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_multicast
+            or ip_obj.is_reserved
+            or ip_obj.is_unspecified
+        ):
+            return False, "Private or local network addresses are not allowed"
+
+    return True, ""
 
 
 def _check_robots_txt(url: str) -> bool:
@@ -99,6 +146,11 @@ def fetch_page(url: str) -> FetchResult:
     Returns a FetchResult with success/failure metadata.
     """
     settings = get_settings()
+
+    allowed, reason = _is_url_fetch_allowed(url)
+    if not allowed:
+        logger.warning("fetch_blocked_unsafe_url", url=url, reason=reason)
+        return FetchResult(url=url, error=reason, blocked=True)
 
     # Check cache
     if url in _page_cache:
