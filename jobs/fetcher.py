@@ -105,6 +105,7 @@ class FetchResult:
         success: bool = False,
         error: str = "",
         blocked: bool = False,
+        auth_required: bool = False,
     ):
         self.url = url
         self.html = html
@@ -112,6 +113,7 @@ class FetchResult:
         self.success = success
         self.error = error
         self.blocked = blocked
+        self.auth_required = auth_required
 
 
 @retry(
@@ -138,6 +140,29 @@ _BLOCK_INDICATORS = [
     "captcha", "cf-challenge", "access denied", "blocked",
     "please verify you are a human", "enable javascript",
 ]
+
+_AUTH_INDICATORS = [
+    "sign in", "log in", "login", "single sign-on", "sso",
+    "continue with google", "google account", "microsoft account",
+    "okta", "auth0", "sign in to continue",
+]
+
+
+def _detect_auth_requirement(resp: httpx.Response) -> str | None:
+    """Detect if page likely requires authentication/SSO."""
+    if resp.status_code in {401, 407}:
+        return f"HTTP {resp.status_code} indicates authentication is required"
+
+    final_url = str(resp.url).lower()
+    if any(marker in final_url for marker in ("/login", "/signin", "accounts.google.com", "oauth")):
+        return "Redirected to a login/authentication page"
+
+    lower_html = resp.text[:8000].lower()
+    for indicator in _AUTH_INDICATORS:
+        if indicator in lower_html:
+            return f"Authentication wall detected: {indicator}"
+
+    return None
 
 
 def fetch_page(url: str) -> FetchResult:
@@ -167,6 +192,18 @@ def fetch_page(url: str) -> FetchResult:
 
     try:
         resp = _do_fetch(url)
+
+        auth_error = _detect_auth_requirement(resp)
+        if auth_error:
+            logger.warning("auth_required_detected", url=url, reason=auth_error)
+            return FetchResult(
+                url=url,
+                html=resp.text,
+                status_code=resp.status_code,
+                error=auth_error,
+                blocked=True,
+                auth_required=True,
+            )
 
         # Check for bot protection
         if resp.status_code == 403 or resp.status_code == 429:

@@ -53,6 +53,7 @@ def test_list_urls_shows_pipeline_visibility():
         payload = resp.json()
         assert payload["total"] >= 1
         assert any(item["auto_apply_candidates"] >= 1 for item in payload["items"])
+        assert all("requires_auth" in item for item in payload["items"])
     finally:
         db.close()
 

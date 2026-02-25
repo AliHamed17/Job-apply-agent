@@ -112,7 +112,14 @@ def process_url_task(self, url_id: int):
             db_url.status = URLStatus.BLOCKED
             db_url.fetch_error = result.error
             db.commit()
-            logger.warning("url_blocked", url=db_url.normalized_url, error=result.error)
+            if result.auth_required:
+                logger.warning(
+                    "url_requires_authentication",
+                    url=db_url.normalized_url,
+                    error=result.error,
+                )
+            else:
+                logger.warning("url_blocked", url=db_url.normalized_url, error=result.error)
             return
 
         if not result.success:

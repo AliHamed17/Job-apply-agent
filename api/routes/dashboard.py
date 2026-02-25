@@ -42,6 +42,7 @@ class URLPipelineItem(BaseModel):
     jobs_found: int
     applications_ready: int
     auto_apply_candidates: int
+    requires_auth: bool
 
 
 class URLPipelineSummary(BaseModel):
@@ -147,6 +148,10 @@ async def list_pipeline_urls(
                 jobs_found=len(jobs),
                 applications_ready=apps_ready,
                 auto_apply_candidates=auto_candidates,
+                requires_auth=(
+                    "auth" in (row.fetch_error or "").lower()
+                    or "login" in (row.fetch_error or "").lower()
+                ),
             )
         )
 
