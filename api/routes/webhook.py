@@ -46,6 +46,12 @@ def _track_url_domain(url: str) -> None:
         _webhook_url_domain_counts[host] += 1
 
 
+def _safe_ratio(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
 def get_webhook_metrics_snapshot() -> dict[str, int]:
     """Return a snapshot of webhook interaction counters."""
     return dict(_webhook_metrics)
@@ -53,13 +59,36 @@ def get_webhook_metrics_snapshot() -> dict[str, int]:
 
 def get_webhook_metrics_payload(top_n_domains: int = 10) -> dict[str, Any]:
     """Return detailed WhatsApp metrics payload for APIs and dashboards."""
+    counters = dict(_webhook_metrics)
     top_domains = [
         {"domain": domain, "count": count}
         for domain, count in _webhook_url_domain_counts.most_common(top_n_domains)
     ]
+
+    platform_counts = {
+        key.removeprefix("platform_").removesuffix("_urls"): value
+        for key, value in counters.items()
+        if key.startswith("platform_") and key.endswith("_urls")
+    }
+
+    messages_received = counters.get("messages_received", 0)
+    urls_extracted = counters.get("urls_extracted", 0)
+    urls_enqueued = counters.get("urls_enqueued", 0)
+    likely_job_urls = counters.get("likely_job_urls", 0)
+    duplicate_messages = counters.get("duplicate_messages", 0)
+
+    quality = {
+        "urls_per_message": _safe_ratio(urls_extracted, messages_received),
+        "likely_job_url_rate": _safe_ratio(likely_job_urls, urls_extracted),
+        "url_enqueue_rate": _safe_ratio(urls_enqueued, urls_extracted),
+        "message_dedup_rate": _safe_ratio(duplicate_messages, messages_received),
+    }
+
     return {
-        "counters": dict(_webhook_metrics),
+        "counters": counters,
         "top_url_domains": top_domains,
+        "platform_breakdown": platform_counts,
+        "quality": quality,
     }
 
 
@@ -301,8 +330,10 @@ async def receive_message(
     # Signature verification
     if settings.whatsapp_app_secret:
         if not _verify_signature(body, x_hub_signature_256, settings.whatsapp_app_secret):
+            _inc_metric("signature_invalid")
             logger.warning("invalid_webhook_signature")
             raise HTTPException(status_code=403, detail="Invalid signature")
+        _inc_metric("signature_valid")
 
     payload = await request.json()
     _inc_metric("webhook_requests")
@@ -350,6 +381,8 @@ async def receive_message(
         # ── Handle text messages (also check for text-based actions) ──
         text_body = msg.get("text", {}).get("body", "")
 
+        _inc_metric("text_messages")
+
         # Check for text-based approve/skip commands
         text_lower = text_body.strip().lower()
         approve_job_id = _parse_action_job_id(text_lower, "approve_")
@@ -385,6 +418,8 @@ async def receive_message(
         # Extract URLs and enqueue processing
         urls = extract_urls(text_body)
         _inc_metric("urls_extracted", len(urls))
+        if not urls:
+            _inc_metric("messages_without_urls")
         for raw_url in urls:
             normalized = normalize_url(raw_url)
             platform = identify_job_platform(normalized)

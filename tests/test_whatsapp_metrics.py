@@ -93,6 +93,9 @@ def test_detailed_whatsapp_metrics_include_top_domains(monkeypatch):
         payload = detailed.json()
 
     assert "counters" in payload
+    assert "platform_breakdown" in payload
+    assert "quality" in payload
+    assert payload["quality"]["urls_per_message"] > 0
     assert payload["counters"].get("urls_enqueued", 0) >= 3
     domains = {item["domain"]: item["count"] for item in payload["top_url_domains"]}
     assert domains["example.com"] >= 2
@@ -123,3 +126,32 @@ def test_metrics_track_platform_and_non_job_urls(monkeypatch):
 
     assert metrics["whatsapp_platform_workday_urls"] >= 1
     assert metrics["whatsapp_non_job_urls"] >= 1
+
+
+def test_metrics_quality_and_platform_breakdown(monkeypatch):
+    reset_webhook_metrics()
+    monkeypatch.setattr(process_url_task, "delay", lambda _job_id: None)
+
+    uid = uuid4().hex[:6]
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/webhook/whatsapp",
+            json=_webhook_payload(
+                "wamid.metrics.5",
+                "15550001111",
+                "https://boards.greenhouse.io/example/jobs/1 "
+                "https://nvidia.wd5.myworkdayjobs.com/site/job/2 "
+                f"https://example.com/careers/software?jobid={uid}",
+            ),
+        )
+        assert resp.status_code == 200
+
+        detailed = client.get("/api/whatsapp/metrics")
+        assert detailed.status_code == 200
+        payload = detailed.json()
+
+    assert payload["platform_breakdown"].get("greenhouse", 0) >= 1
+    assert payload["platform_breakdown"].get("workday", 0) >= 1
+    assert payload["quality"]["likely_job_url_rate"] > 0
+    assert payload["quality"]["url_enqueue_rate"] > 0
