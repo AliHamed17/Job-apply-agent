@@ -1,0 +1,92 @@
+# ───────────────────────────────────────────────────────
+# User Profile — fill in your details below
+# ───────────────────────────────────────────────────────
+
+personal:
+  name: "Jane Doe"
+  email: "jane.doe@example.com"
+  phone: "+1-555-123-4567"
+  location: "San Francisco, CA"
+  work_authorization: "US Citizen"
+
+links:
+  linkedin: "https://linkedin.com/in/janedoe"
+  github: "https://github.com/janedoe"
+  portfolio: "https://janedoe.dev"
+
+resume:
+  # Plain text version of your resume (used for keyword matching & LLM context)
+  text: |
+    JANE DOE
+    Software Engineer with 5 years of experience in Python, FastAPI, and cloud services.
+
+    EXPERIENCE
+    - Senior Backend Engineer at TechCorp (2022–present)
+      Built microservices handling 10k req/s, reduced latency by 40%.
+    - Software Engineer at StartupXYZ (2019–2022)
+      Full-stack development with Python/React.
+
+    EDUCATION
+    - B.S. Computer Science, UC Berkeley, 2019
+
+    SKILLS
+    Python, FastAPI, Django, PostgreSQL, Redis, AWS, Docker, Kubernetes, CI/CD
+
+  # Path to your resume PDF (used for job board uploads)
+  pdf_path: "./resume.pdf"
+
+cover_letter:
+  # Style guide for LLM-generated cover letters
+  style: "professional but personable, concise (3-4 paragraphs), highlight relevant experience"
+
+preferences:
+  # Target roles (case-insensitive matching)
+  roles:
+    - "Software Engineer"
+    - "Backend Engineer"
+    - "Python Developer"
+    - "Full Stack Engineer"
+
+  # Preferred locations (or "Remote")
+  locations:
+    - "San Francisco, CA"
+    - "Remote"
+    - "New York, NY"
+
+  # Work arrangement
+  remote_ok: true
+  hybrid_ok: true
+  onsite_ok: false
+
+  # Salary expectations
+  salary:
+    min: 120000
+    max: 200000
+    currency: "USD"
+
+  # Keywords to boost score
+  keywords:
+    - "python"
+    - "fastapi"
+    - "microservices"
+    - "aws"
+    - "kubernetes"
+    - "backend"
+
+  # Companies to never apply to
+  blacklist_companies:
+    - "SpamCorp"
+    - "BadCompanyInc"
+
+  # Seniority levels to target
+  seniority:
+    - "mid"
+    - "senior"
+    - "lead"
+
+# Attachments (additional docs to upload when supported)
+attachments:
+  - path: "./resume.pdf"
+    label: "Resume"
+  - path: "./certificates/aws_cert.pdf"
+    label: "AWS Certification"

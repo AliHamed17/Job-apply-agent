@@ -1,0 +1,161 @@
+"""FastAPI application — main entry point with auth, rate limiting, and CORS."""
+
+from __future__ import annotations
+
+import time
+from collections import defaultdict
+
+import structlog
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from core.config import get_settings
+from core.logging import new_correlation_id, setup_logging
+from db.session import init_db
+
+# Setup structured logging
+setup_logging()
+logger = structlog.get_logger(__name__)
+
+# ── App creation ─────────────────────────────────────────
+app = FastAPI(
+    title="AI Job Apply Agent",
+    description="Monitor WhatsApp for job links, extract postings, and draft/submit applications",
+    version="0.1.0",
+)
+
+# ── CORS (configurable per environment) ──────────────────
+settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Rate Limiting Middleware ─────────────────────────────
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Simple in-memory rate limiter per client IP."""
+    # Skip rate limiting for webhook (Meta sends bursts)
+    if request.url.path.startswith("/webhook"):
+        return await call_next(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window = 60.0  # 1 minute window
+    max_requests = settings.rate_limit_requests_per_minute
+
+    # Clean old entries
+    _rate_limit_store[client_ip] = [
+        t for t in _rate_limit_store[client_ip] if now - t < window
+    ]
+
+    if len(_rate_limit_store[client_ip]) >= max_requests:
+        logger.warning("rate_limited", client=client_ip)
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Try again later."},
+        )
+
+    _rate_limit_store[client_ip].append(now)
+    return await call_next(request)
+
+
+# ── API Token Auth Middleware ────────────────────────────
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Bearer token authentication for API endpoints.
+
+    Exempt: /webhook (uses its own verification), /health, /docs, /openapi.json
+    """
+    exempt_paths = {"/webhook/whatsapp", "/health", "/docs", "/openapi.json", "/redoc"}
+    if any(request.url.path.startswith(p) for p in exempt_paths):
+        return await call_next(request)
+
+    # If no secret_key is configured (dev mode), skip auth
+    if settings.secret_key == "change-me":
+        return await call_next(request)
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Missing or invalid Authorization header"},
+        )
+
+    token = auth_header.removeprefix("Bearer ").strip()
+    if token != settings.secret_key:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Invalid API token"},
+        )
+
+    return await call_next(request)
+
+
+# ── Correlation ID Middleware ────────────────────────────
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    """Attach a correlation ID to every request for log tracing."""
+    import structlog.contextvars
+    correlation_id = request.headers.get("X-Correlation-ID", new_correlation_id())
+    structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
+    response = await call_next(request)
+    response.headers["X-Correlation-ID"] = correlation_id
+    structlog.contextvars.unbind_contextvars("correlation_id")
+    return response
+
+
+# ── Register routes ──────────────────────────────────────
+from api.routes.webhook import router as webhook_router
+from api.routes.jobs import router as jobs_router
+from api.routes.applications import router as applications_router
+from api.routes.dashboard import router as dashboard_router
+
+app.include_router(webhook_router)
+app.include_router(jobs_router, prefix="/api")
+app.include_router(applications_router, prefix="/api")
+app.include_router(dashboard_router, prefix="/api")
+
+
+# ── Health + Metrics ─────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Basic metrics endpoint."""
+    from db.session import get_session_factory
+    from db.models import Job, Application, Submission, ExtractedURL, JobStatus
+
+    db = get_session_factory()()
+    try:
+        return {
+            "urls_processed": db.query(ExtractedURL).count(),
+            "jobs_extracted": db.query(Job).count(),
+            "jobs_skipped": db.query(Job).filter(Job.status == JobStatus.SKIPPED).count(),
+            "applications_drafted": db.query(Application).count(),
+            "applications_approved": db.query(Application).filter(
+                Application.status == JobStatus.APPROVED
+            ).count(),
+            "submissions_total": db.query(Submission).count(),
+        }
+    finally:
+        db.close()
+
+
+# ── Startup ──────────────────────────────────────────────
+@app.on_event("startup")
+async def startup():
+    """Initialize DB tables on startup (MVP mode)."""
+    init_db()
+    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
