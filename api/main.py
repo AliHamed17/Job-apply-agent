@@ -18,7 +18,12 @@ from fastapi.templating import Jinja2Templates
 from api.routes.applications import router as applications_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.jobs import router as jobs_router
-from api.routes.webhook import router as webhook_router
+from api.routes.webhook import (
+    get_webhook_metrics_snapshot,
+)
+from api.routes.webhook import (
+    router as webhook_router,
+)
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from db.session import init_db
@@ -180,7 +185,7 @@ async def metrics():
 
     db = get_session_factory()()
     try:
-        return {
+        metrics = {
             "urls_processed": db.query(ExtractedURL).count(),
             "jobs_extracted": db.query(Job).count(),
             "jobs_skipped": db.query(Job).filter(Job.status == JobStatus.SKIPPED).count(),
@@ -190,6 +195,11 @@ async def metrics():
             ).count(),
             "submissions_total": db.query(Submission).count(),
         }
+        webhook_metrics = get_webhook_metrics_snapshot()
+        for key, value in webhook_metrics.items():
+            metrics[f"whatsapp_{key}"] = value
+
+        return metrics
     finally:
         db.close()
 

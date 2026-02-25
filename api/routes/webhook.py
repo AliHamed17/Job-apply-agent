@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +27,24 @@ from ingestion.url_utils import normalize_url, url_hash
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
+
+# ── In-memory interaction metrics (process-local) ───────
+_webhook_metrics: dict[str, int] = defaultdict(int)
+
+
+def _inc_metric(name: str, amount: int = 1) -> None:
+    _webhook_metrics[name] += amount
+
+
+def get_webhook_metrics_snapshot() -> dict[str, int]:
+    """Return a snapshot of webhook interaction counters."""
+    return dict(_webhook_metrics)
+
+
+def reset_webhook_metrics() -> None:
+    """Reset webhook counters (used by tests)."""
+    _webhook_metrics.clear()
+
 
 # ── URL extraction regex ────────────────────────────────
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')\]},;]+", re.IGNORECASE)
@@ -263,7 +282,9 @@ async def receive_message(
             raise HTTPException(status_code=403, detail="Invalid signature")
 
     payload = await request.json()
+    _inc_metric("webhook_requests")
     raw_messages = _extract_messages(payload)
+    _inc_metric("messages_received", len(raw_messages))
     processed = 0
 
     for msg in raw_messages:
@@ -272,6 +293,7 @@ async def receive_message(
 
         # Allowed-sender filter
         if settings.allowed_sender_list and sender not in settings.allowed_sender_list:
+            _inc_metric("blocked_sender_messages")
             logger.info("sender_not_allowed", sender=sender)
             continue
 
@@ -286,14 +308,19 @@ async def receive_message(
             edit_job_id = _parse_action_job_id(action_id, "edit_")
 
             if approve_job_id is not None:
+                _inc_metric("interactive_approve_actions")
                 await _handle_approve(approve_job_id, sender, db, settings)
             elif skip_job_id is not None:
+                _inc_metric("interactive_skip_actions")
                 await _handle_skip(skip_job_id, sender, db, settings)
             elif edit_job_id is not None:
+                _inc_metric("interactive_edit_actions")
                 await _handle_edit(edit_job_id, sender, db, settings)
             else:
+                _inc_metric("interactive_invalid_actions")
                 logger.warning("unknown_or_invalid_interactive_action", action=action_id)
 
+            _inc_metric("interactive_messages")
             processed += 1
             continue
 
@@ -306,11 +333,13 @@ async def receive_message(
         skip_job_id = _parse_action_job_id(text_lower, "skip_")
 
         if approve_job_id is not None:
+            _inc_metric("text_approve_actions")
             await _handle_approve(approve_job_id, sender, db, settings)
             processed += 1
             continue
 
         if skip_job_id is not None:
+            _inc_metric("text_skip_actions")
             await _handle_skip(skip_job_id, sender, db, settings)
             processed += 1
             continue
@@ -318,6 +347,7 @@ async def receive_message(
         # Dedup by message ID
         exists = db.query(Message).filter(Message.whatsapp_message_id == msg_id).first()
         if exists:
+            _inc_metric("duplicate_messages")
             continue
 
         # Persist message
@@ -331,6 +361,7 @@ async def receive_message(
 
         # Extract URLs and enqueue processing
         urls = extract_urls(text_body)
+        _inc_metric("urls_extracted", len(urls))
         for raw_url in urls:
             normalized = normalize_url(raw_url)
             uhash = url_hash(normalized)
@@ -346,6 +377,7 @@ async def receive_message(
             )
             db.add(db_url)
             db.flush()
+            _inc_metric("urls_enqueued")
 
             # Enqueue URL processing
             from worker.tasks import process_url_task
