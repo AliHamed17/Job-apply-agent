@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Job Apply Agent | Dashboard</title>
+    <!-- Modern web fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Lucide icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="logo">
+                <div class="logo-icon"><i data-lucide="bot"></i></div>
+                <span>Job Agent</span>
+            </div>
+            
+            <!-- Overall Stats -->
+            <div class="nav-stats">
+                <div class="stat-item active" data-tab="dashboard">
+                    <i data-lucide="layout-dashboard"></i> Dashboard
+                </div>
+                <div class="stat-item" data-tab="applications">
+                    <i data-lucide="file-check-2"></i> Approvals
+                    <span class="badge pending-badge" id="nav-pending-count">0</span>
+                </div>
+                <div class="stat-item" data-tab="jobs">
+                    <i data-lucide="briefcase"></i> Job Pipeline
+                </div>
+                <!-- Manual Ingest Trigger -->
+                <div class="stat-item action-btn" id="btn-ingest-modal">
+                    <i data-lucide="plus-circle"></i> Add Job URL
+                </div>
+            </div>
+
+            <!-- Auth Input area -->
+            <div class="auth-box">
+                <label for="api-secret">API Secret (if enabled)</label>
+                <input type="password" id="api-secret" placeholder="Bearer Token...">
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="topbar">
+                <h1 id="page-title">Dashboard</h1>
+                <div class="topbar-actions">
+                    <button class="icon-btn" id="btn-refresh" title="Refresh Data">
+                        <i data-lucide="refresh-cw"></i>
+                    </button>
+                    <div class="status-indicator">
+                        <span class="dot pulse"></span> Default: Draft Mode
+                    </div>
+                </div>
+            </header>
+
+            <!-- Views -->
+            <div class="view-container">
+                <!-- Dashboard View -->
+                <section id="view-dashboard" class="view active">
+                    <div class="stats-grid" id="dashboard-stats">
+                        <!-- Populated via JS -->
+                    </div>
+                </section>
+
+                <!-- Applications View -->
+                <section id="view-applications" class="view">
+                    <div class="list-header">
+                        <h2>Pending Approvals</h2>
+                        <div class="filter-group">
+                            <button class="filter-btn active" data-status="draft">Drafts</button>
+                            <button class="filter-btn" data-status="approved">Approved</button>
+                            <button class="filter-btn" data-status="skipped">Skipped</button>
+                        </div>
+                    </div>
+                    <div class="cards-list" id="applications-list">
+                        <!-- Populated via JS -->
+                    </div>
+                </section>
+
+                <!-- Jobs View -->
+                <section id="view-jobs" class="view">
+                    <div class="list-header">
+                        <h2>Discovered Jobs</h2>
+                        <div class="filter-group">
+                            <button class="filter-btn active" data-status="">All</button>
+                            <button class="filter-btn" data-status="scored">Scored</button>
+                            <button class="filter-btn" data-status="skipped">Skipped</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Job Title</th>
+                                    <th>Company</th>
+                                    <th>Score</th>
+                                    <th>Status</th>
+                                    <th>Date</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jobs-table-body">
+                                <!-- Populated via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Application Review Modal -->
+    <div class="modal" id="review-modal">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h3>Review Application: <span id="modal-job-title" class="highlight-text"></span></h3>
+                <button class="close-btn"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="review-grid">
+                    <!-- Left Column: Details -->
+                    <div class="review-col">
+                        <div class="info-card">
+                            <h4>Job Details</h4>
+                            <p><strong>Company:</strong> <span id="modal-company"></span></p>
+                            <p><strong>Score:</strong> <span id="modal-score" class="score-badge"></span>/100</p>
+                            <div class="action-links mt-1">
+                                <a href="#" id="modal-apply-url" target="_blank" class="glass-link">
+                                    <i data-lucide="external-link"></i> Original Job Post
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="info-card mt-2">
+                            <h4>Recruiter Message</h4>
+                            <div class="code-block" id="modal-recruiter-msg"></div>
+                        </div>
+                        
+                        <div class="info-card mt-2">
+                            <h4>Q&A Answers</h4>
+                            <div class="qa-list" id="modal-qa-list"></div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Cover Letter -->
+                    <div class="review-col col-span-2">
+                        <div class="info-card h-full">
+                            <div class="flex-between">
+                                <h4>Generated Cover Letter</h4>
+                                <button class="btn-sm btn-glass" onclick="copyCoverLetter()" title="Copy entire letter">
+                                    <i data-lucide="copy"></i> Copy
+                                </button>
+                            </div>
+                            <textarea id="modal-cover-letter" class="cover-letter-editor" spellcheck="false"></textarea>
+                            <p class="text-sm text-dim mt-1"><i data-lucide="info" class="icon-sm"></i> Review placeholders ([PLACEHOLDER: ...]) before approving.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer flex-end gap-1">
+                <button class="btn btn-secondary" id="btn-reject-app">Skip / Reject</button>
+                <button class="btn btn-primary" id="btn-approve-app">Approve Application</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ingest URL Modal -->
+    <div class="modal" id="ingest-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Manual URL Ingestion</h3>
+                <button class="close-btn"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-dim mb-2">Paste a job board URL here to test extraction and processing without using WhatsApp.</p>
+                <div class="form-group">
+                    <label>Job URL</label>
+                    <input type="url" id="ingest-url" placeholder="https://boards.greenhouse.io/.../jobs/..." class="full-width">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary full-width" id="btn-submit-url">Process URL</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

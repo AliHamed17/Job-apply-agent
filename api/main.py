@@ -125,11 +125,28 @@ app.include_router(applications_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+import os
+
+# ── Static and Templates ─────────────────────────────────
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+templates_dir = os.path.join(os.path.dirname(__file__), "templates")
+os.makedirs(static_dir, exist_ok=True)
+os.makedirs(templates_dir, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+templates = Jinja2Templates(directory=templates_dir)
+
 # ── Health + Metrics ─────────────────────────────────────
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "0.1.0"}
 
+@app.get("/")
+async def serve_dashboard(request: Request):
+    """Serve the main dashboard UI."""
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/metrics")
 async def metrics():
