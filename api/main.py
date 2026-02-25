@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from api.routes.applications import router as applications_router
 from api.routes.dashboard import router as dashboard_router
+from api.routes.feedback import router as feedback_router
 from api.routes.jobs import router as jobs_router
 from api.routes.webhook import router as webhook_router
 from core.config import get_settings
@@ -125,6 +126,7 @@ app.include_router(webhook_router)
 app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
+app.include_router(feedback_router, prefix="/api")
 
 
 # ── Static and Templates ─────────────────────────────────

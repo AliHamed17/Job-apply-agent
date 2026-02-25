@@ -177,3 +177,27 @@ class UserProfileVersion(Base):
     profile_yaml = Column(Text, nullable=False)
     version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=func.now(), nullable=False)
+
+
+class CoverLetterFeedback(Base):
+    """User corrections to LLM-generated cover letters (Phase 10 feedback loop).
+
+    Stores original draft alongside the human-corrected version.
+    These pairs are injected as few-shot examples into future LLM prompts,
+    steering output toward the user's preferred style.
+    """
+
+    __tablename__ = "cover_letter_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
+    original_text = Column(Text, nullable=False)    # LLM-generated draft
+    corrected_text = Column(Text, nullable=False)   # Human-corrected version
+    feedback_note = Column(Text, nullable=True)     # Optional explanation
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    application = relationship("Application", backref="feedbacks")
+
+    __table_args__ = (
+        Index("ix_cover_letter_feedback_app_id", "application_id"),
+    )

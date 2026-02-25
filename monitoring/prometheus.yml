@@ -1,0 +1,48 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    job_agent: 'production'
+
+# ── Alert rules ───────────────────────────────────────────────────────────
+rule_files: []
+# rule_files:
+#   - /etc/prometheus/rules/*.yml
+
+# ── Alertmanager ─────────────────────────────────────────────────────────
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#       - targets: ['alertmanager:9093']
+
+# ── Scrape targets ────────────────────────────────────────────────────────
+scrape_configs:
+
+  # Prometheus self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # FastAPI application metrics (via /metrics endpoint)
+  - job_name: web-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['web-api:8000']
+    # The /metrics endpoint is protected; pass bearer token if SECRET_KEY is set
+    # authorization:
+    #   credentials_file: /run/secrets/api_token
+
+  # Redis metrics (via redis_exporter sidecar — add to docker-compose if needed)
+  # - job_name: redis
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+
+  # PostgreSQL metrics (via postgres_exporter sidecar)
+  # - job_name: postgres
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']
+
+  # Celery metrics (via flower or celery-prometheus-exporter)
+  # - job_name: celery
+  #   static_configs:
+  #     - targets: ['celery-exporter:9808']

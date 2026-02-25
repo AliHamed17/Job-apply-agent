@@ -45,6 +45,15 @@ dev = [
 browser = [
     "playwright>=1.41,<2",
 ]
+# PDF resume text extraction (Phase 9)
+pdf = [
+    "pypdf>=4.0,<5",           # primary: pure-Python, no system deps
+    "pdfminer.six>=20221105",  # fallback: layout-aware extraction
+]
+# PostgreSQL support (Phase 9)
+postgres = [
+    "psycopg2-binary>=2.9,<3",
+]
 
 [tool.setuptools.packages.find]
 include = [
@@ -54,6 +63,7 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100

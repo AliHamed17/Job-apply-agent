@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -v --tb=short)",
+      "Bash(.venv/Scripts/python.exe -c \":*)",
+      "Bash(.venv/Scripts/python.exe -c \"from ingestion.url_utils import extract_urls, extract_urls_from_whatsapp_message, normalize_url, is_likely_job_url, is_short_url, expand_short_url; print\\(''url_utils OK''\\)\")"
+    ]
+  }
+}

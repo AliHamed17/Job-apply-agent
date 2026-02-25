@@ -340,9 +340,16 @@ def submit_application_task(self, application_id: int):
     from profile.loader import get_profile
 
     from jobs.models import JobData
+    from submitters.ashby import AshbySubmitter
     from submitters.base import SubmitterRegistry
     from submitters.greenhouse import GreenhouseSubmitter
+    from submitters.indeed import IndeedSubmitter
+    from submitters.jobvite import JobviteSubmitter
     from submitters.lever import LeverSubmitter
+    from submitters.linkedin import LinkedInSubmitter
+    from submitters.smartrecruiters import SmartRecruitersSubmitter
+    from submitters.workable import WorkableSubmitter
+    from submitters.workday import WorkdaySubmitter
 
     db = _get_db()
     try:
@@ -368,10 +375,31 @@ def submit_application_task(self, application_id: int):
 
         profile = get_profile()
 
-        # Build submitter registry
+        # Build submitter registry — ordered: API-based first, browser last
         registry = SubmitterRegistry()
-        registry.register(GreenhouseSubmitter())
-        registry.register(LeverSubmitter())
+
+        # Tier 1: Official public APIs (most reliable)
+        registry.register(GreenhouseSubmitter(api_key=settings.greenhouse_api_key))
+        registry.register(LeverSubmitter(api_key=settings.lever_api_key))
+        registry.register(AshbySubmitter())
+        registry.register(WorkableSubmitter())
+        registry.register(SmartRecruitersSubmitter(api_key=settings.smartrecruiters_api_key))
+        registry.register(JobviteSubmitter())
+
+        # Tier 2: Browser automation (Playwright, requires credentials)
+        registry.register(LinkedInSubmitter(
+            cookies_file=settings.linkedin_cookies_file,
+            email=settings.linkedin_email,
+            password=settings.linkedin_password,
+        ))
+        registry.register(IndeedSubmitter(
+            cookies_file=settings.indeed_cookies_file,
+            email=settings.indeed_email,
+            password=settings.indeed_password,
+        ))
+
+        # Tier 3: Draft-only — Workday SSO wall, never auto-submit
+        registry.register(WorkdaySubmitter())
 
         submitter = registry.get_submitter(
             JobData(title=db_job.title, apply_url=db_job.apply_url,
