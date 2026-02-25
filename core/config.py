@@ -19,6 +19,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # ── Environment ──────────────────────────────────────
+    app_env: Literal["dev", "test", "prod"] = "dev"
+
     # ── WhatsApp Cloud API ──────────────────────────────
     whatsapp_verify_token: str = ""
     whatsapp_api_token: str = ""
@@ -68,6 +71,25 @@ class Settings(BaseSettings):
     @property
     def profile_path(self) -> Path:
         return Path(self.user_profile_path)
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "prod"
+
+    def validate_runtime_config(self) -> list[str]:
+        """Validate critical runtime settings and return errors, if any."""
+        errors: list[str] = []
+
+        if self.is_production and self.secret_key == "change-me":
+            errors.append("SECRET_KEY must be set to a secure random value in production")
+
+        if self.is_production and self.whatsapp_api_token and not self.whatsapp_app_secret:
+            errors.append(
+                "WHATSAPP_APP_SECRET must be set in production "
+                "when WHATSAPP_API_TOKEN is configured"
+            )
+
+        return errors
 
 
 @lru_cache

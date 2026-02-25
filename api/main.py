@@ -86,8 +86,8 @@ async def auth_middleware(request: Request, call_next):
     if any(request.url.path.startswith(p) for p in exempt_paths):
         return await call_next(request)
 
-    # If no secret_key is configured (dev mode), skip auth
-    if settings.secret_key == "change-me":
+    # If no secret_key is configured, only allow bypass in non-production
+    if settings.secret_key == "change-me" and not settings.is_production:
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization", "")
@@ -172,5 +172,9 @@ async def metrics():
 @app.on_event("startup")
 async def startup():
     """Initialize DB tables on startup (MVP mode)."""
+    config_errors = settings.validate_runtime_config()
+    if config_errors:
+        raise RuntimeError("; ".join(config_errors))
+
     init_db()
     logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
