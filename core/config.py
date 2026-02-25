@@ -99,6 +99,9 @@ class Settings(BaseSettings):
                 "when WHATSAPP_API_TOKEN is configured"
             )
 
+        if self.is_production and "*" in self.cors_allowed_origin_list:
+            errors.append("CORS_ALLOWED_ORIGINS cannot contain wildcard '*' in production")
+
         return errors
 
 

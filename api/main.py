@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import time
 from collections import defaultdict
@@ -75,6 +76,18 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+def _is_auth_exempt_path(path: str) -> bool:
+    """Return True only for explicitly exempt endpoints."""
+    exact_exempt = {"/webhook/whatsapp", "/health", "/openapi.json", "/docs", "/redoc"}
+    if path in exact_exempt:
+        return True
+
+    docs_prefixes = ("/docs/", "/redoc/")
+    return path.startswith(docs_prefixes)
+
+
+
+
 # ── API Token Auth Middleware ────────────────────────────
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -82,8 +95,7 @@ async def auth_middleware(request: Request, call_next):
 
     Exempt: /webhook (uses its own verification), /health, /docs, /openapi.json
     """
-    exempt_paths = {"/webhook/whatsapp", "/health", "/docs", "/openapi.json", "/redoc"}
-    if any(request.url.path.startswith(p) for p in exempt_paths):
+    if _is_auth_exempt_path(request.url.path):
         return await call_next(request)
 
     # If no secret_key is configured, only allow bypass in non-production
@@ -98,7 +110,7 @@ async def auth_middleware(request: Request, call_next):
         )
 
     token = auth_header.removeprefix("Bearer ").strip()
-    if token != settings.secret_key:
+    if not hmac.compare_digest(token, settings.secret_key):
         return JSONResponse(
             status_code=403,
             content={"detail": "Invalid API token"},

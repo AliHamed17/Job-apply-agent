@@ -163,3 +163,17 @@ class TestJobSignature:
         s1 = job_signature("  Software Engineer  ", "TechCorp", "SF")
         s2 = job_signature("Software Engineer", "TechCorp", "SF")
         assert s1 == s2
+
+
+class TestWebhookActionParsing:
+    def test_parse_action_job_id_valid(self):
+        from api.routes.webhook import _parse_action_job_id
+
+        assert _parse_action_job_id("approve_123", "approve_") == 123
+
+    def test_parse_action_job_id_invalid_inputs(self):
+        from api.routes.webhook import _parse_action_job_id
+
+        assert _parse_action_job_id("approve_abc", "approve_") is None
+        assert _parse_action_job_id("approve_-1", "approve_") is None
+        assert _parse_action_job_id("skip_2", "approve_") is None

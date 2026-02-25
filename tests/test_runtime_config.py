@@ -31,3 +31,13 @@ class TestRuntimeConfigValidation:
     def test_dev_allows_default_secret_key(self):
         settings = Settings(app_env="dev", secret_key="change-me")
         assert settings.validate_runtime_config() == []
+
+
+    def test_prod_rejects_wildcard_cors_origin(self):
+        settings = Settings(
+            app_env="prod",
+            secret_key="super-secret",
+            cors_allowed_origins="https://example.com,*",
+        )
+        errors = settings.validate_runtime_config()
+        assert any("CORS_ALLOWED_ORIGINS" in error for error in errors)

@@ -61,6 +61,18 @@ def _extract_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return messages
 
 
+def _parse_action_job_id(action_id: str, prefix: str) -> int | None:
+    """Safely parse a job_id from an action string like `approve_123`."""
+    if not action_id.startswith(prefix):
+        return None
+
+    raw = action_id.removeprefix(prefix).strip()
+    if not raw.isdigit():
+        return None
+
+    return int(raw)
+
+
 # ── WhatsApp API helpers ────────────────────────────────
 
 async def _send_whatsapp_message(
@@ -269,17 +281,18 @@ async def receive_message(
             button_reply = interactive.get("button_reply", {})
             action_id = button_reply.get("id", "")
 
-            if action_id.startswith("approve_"):
-                job_id = int(action_id.removeprefix("approve_"))
-                await _handle_approve(job_id, sender, db, settings)
-            elif action_id.startswith("skip_"):
-                job_id = int(action_id.removeprefix("skip_"))
-                await _handle_skip(job_id, sender, db, settings)
-            elif action_id.startswith("edit_"):
-                job_id = int(action_id.removeprefix("edit_"))
-                await _handle_edit(job_id, sender, db, settings)
+            approve_job_id = _parse_action_job_id(action_id, "approve_")
+            skip_job_id = _parse_action_job_id(action_id, "skip_")
+            edit_job_id = _parse_action_job_id(action_id, "edit_")
+
+            if approve_job_id is not None:
+                await _handle_approve(approve_job_id, sender, db, settings)
+            elif skip_job_id is not None:
+                await _handle_skip(skip_job_id, sender, db, settings)
+            elif edit_job_id is not None:
+                await _handle_edit(edit_job_id, sender, db, settings)
             else:
-                logger.warning("unknown_interactive_action", action=action_id)
+                logger.warning("unknown_or_invalid_interactive_action", action=action_id)
 
             processed += 1
             continue

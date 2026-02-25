@@ -41,3 +41,18 @@ def test_auth_not_bypassed_in_prod_with_default_secret():
     finally:
         settings.app_env = original_env
         settings.secret_key = original_secret
+
+
+def test_non_exact_docs_path_is_not_auth_exempt():
+    original_env = settings.app_env
+    original_secret = settings.secret_key
+    _rate_limit_store.clear()
+    try:
+        settings.app_env = "prod"
+        settings.secret_key = "real-secret"
+        with TestClient(app) as client:
+            resp = client.get("/docsx")
+        assert resp.status_code == 401
+    finally:
+        settings.app_env = original_env
+        settings.secret_key = original_secret
