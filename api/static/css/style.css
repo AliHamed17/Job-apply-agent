@@ -728,3 +728,61 @@ h1, h2, h3, h4, h5 {
 ::-webkit-scrollbar-track { background: var(--bg-base); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+
+.quick-apply-panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 24px;
+}
+
+.quick-apply-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+}
+
+.quick-url-card {
+    background: var(--bg-base);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+}
+
+.quick-url-card h4 {
+    font-size: 0.92rem;
+    margin-bottom: 8px;
+    word-break: break-all;
+}
+
+.quick-url-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.card-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-warning {
+    background: var(--warning);
+    color: #111827;
+}
+.btn-warning:hover { opacity: 0.9; }
+
+.btn-danger {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+
+.app-actions-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}

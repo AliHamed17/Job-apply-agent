@@ -68,6 +68,16 @@
                     <div class="stats-grid" id="dashboard-stats">
                         <!-- Populated via JS -->
                     </div>
+                    <div class="quick-apply-panel mt-2">
+                        <div class="list-header">
+                            <h2>Quick Apply Center</h2>
+                            <div class="filter-group">
+                                <button class="filter-btn" id="btn-approve-visible-drafts">Approve Visible Drafts</button>
+                                <button class="filter-btn" id="btn-refresh-url-pipeline">Refresh URL Queue</button>
+                            </div>
+                        </div>
+                        <div class="quick-apply-grid" id="url-pipeline-list"></div>
+                    </div>
                 </section>
 
                 <!-- Applications View -->
@@ -78,6 +88,7 @@
                             <button class="filter-btn active" data-status="draft">Drafts</button>
                             <button class="filter-btn" data-status="approved">Approved</button>
                             <button class="filter-btn" data-status="skipped">Skipped</button>
+                            <button class="filter-btn" id="btn-open-draft-links">Open Draft Apply Links</button>
                         </div>
                     </div>
                     <div class="cards-list" id="applications-list">

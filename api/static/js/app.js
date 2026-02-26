@@ -9,6 +9,7 @@ const state = {
     dashboardData: null,
     applications: [],
     jobs: [],
+    urlPipeline: [],
     filters: {
         applications: 'draft',
         jobs: '' // empty means all
@@ -33,6 +34,10 @@ const els = {
     // Jobs
     jobsTableBody: document.getElementById('jobs-table-body'),
     jobFilters: document.querySelectorAll('#view-jobs .filter-btn'),
+    urlPipelineList: document.getElementById('url-pipeline-list'),
+    btnRefreshUrlPipeline: document.getElementById('btn-refresh-url-pipeline'),
+    btnApproveVisibleDrafts: document.getElementById('btn-approve-visible-drafts'),
+    btnOpenDraftLinks: document.getElementById('btn-open-draft-links'),
     
     // Modals
     reviewModal: document.getElementById('review-modal'),
@@ -94,6 +99,18 @@ function setupEventListeners() {
             fetchJobs(); // Need to fetch because filtering is done API side right now
         });
     });
+
+    if (els.btnRefreshUrlPipeline) {
+        els.btnRefreshUrlPipeline.addEventListener('click', () => fetchUrlPipeline());
+    }
+
+    if (els.btnApproveVisibleDrafts) {
+        els.btnApproveVisibleDrafts.addEventListener('click', () => approveVisibleDrafts());
+    }
+
+    if (els.btnOpenDraftLinks) {
+        els.btnOpenDraftLinks.addEventListener('click', () => openDraftApplyLinks());
+    }
     
     // Auth token
     els.apiTokenInput.addEventListener('change', (e) => {
@@ -193,6 +210,7 @@ async function apiCall(endpoint, method = 'GET', body = null) {
 
 async function refreshAllData() {
     await fetchDashboard();
+    await fetchUrlPipeline();
     if (state.currentTab === 'applications') await fetchApplications();
     if (state.currentTab === 'jobs') await fetchJobs();
 }
@@ -222,6 +240,13 @@ async function fetchJobs() {
     if (!data) return;
     state.jobs = data;
     renderJobs();
+}
+
+async function fetchUrlPipeline() {
+    const data = await apiCall('/api/urls?limit=12');
+    if (!data || !data.items) return;
+    state.urlPipeline = data.items;
+    renderUrlPipeline();
 }
 
 // ── Rendering ───────────────────────────────────────────
@@ -283,11 +308,12 @@ function renderApplications() {
                 <div class="app-excerpt">${app.cover_letter}</div>
             </div>
             
-            <div class="flex-between mt-auto pt-4" style="border-top: 1px solid var(--border-light)">
-                ${app.status === 'draft' ? 
-                    `<button class="btn btn-primary full-width" onclick="openReviewModal(${app.id})">Review &amp; Approve</button>` : 
-                    `<button class="btn btn-secondary full-width" onclick="openReviewModal(${app.id})">View Details</button>`
-                }
+            <div class="app-actions-row mt-auto pt-4" style="border-top: 1px solid var(--border-light)">
+                ${app.status === 'draft' ? `
+                    <button class="btn btn-primary" onclick="quickApprove(${app.id})">Approve & Submit</button>
+                    <button class="btn btn-secondary" onclick="openReviewModal(${app.id})">Review</button>
+                ` : `<button class="btn btn-secondary" onclick="openReviewModal(${app.id})">View Details</button>`}
+                ${app.apply_url ? `<a class="btn btn-glass" href="${app.apply_url}" target="_blank" rel="noopener">Open Apply Page</a>` : ''}
             </div>
         </div>
     `).join('');
@@ -316,6 +342,32 @@ function renderJobs() {
     `).join('');
     
     lucide.createIcons();
+}
+
+function renderUrlPipeline() {
+    if (!els.urlPipelineList) return;
+
+    if (!state.urlPipeline.length) {
+        els.urlPipelineList.innerHTML = `<div class="text-dim">No URL pipeline items yet. Add a job URL to start.</div>`;
+        return;
+    }
+
+    els.urlPipelineList.innerHTML = state.urlPipeline.map((item) => `
+        <div class="quick-url-card">
+            <h4>${item.normalized_url}</h4>
+            <div class="quick-url-meta">
+                <span class="status ${item.status.toLowerCase()}">${item.status}</span>
+                <span class="status scored">Jobs ${item.jobs_found}</span>
+                <span class="status draft">Drafts ${item.applications_ready}</span>
+                <span class="status approved">Auto ${item.auto_apply_candidates}</span>
+            </div>
+            <div class="card-actions">
+                <button class="btn btn-primary btn-sm" onclick="triggerUrlAutoApply(${item.url_id})">Auto-Apply URL</button>
+                ${item.requires_auth ? `<button class="btn btn-warning btn-sm" onclick="resolveAuthPrompt(${item.url_id})">Resolve Auth</button>` : ''}
+                <a class="btn btn-glass btn-sm" href="${item.normalized_url}" target="_blank" rel="noopener">Open</a>
+            </div>
+        </div>
+    `).join('');
 }
 
 // ── Interactions ────────────────────────────────────────
@@ -350,7 +402,8 @@ window.openReviewModal = (appId) => {
     if (app.status === 'draft') {
         els.btnApproveApp.style.display = 'inline-flex';
         els.btnRejectApp.style.display = 'inline-flex';
-        
+        els.modalCoverLetter.readOnly = false;
+
         els.btnApproveApp.onclick = () => handleApprove(app.id);
         els.btnRejectApp.onclick = () => handleReject(app.id);
     } else {
@@ -415,3 +468,62 @@ function showToast(message, type = 'info') {
         setTimeout(() => toast.remove(), 300);
     }, 4000);
 }
+
+window.quickApprove = async (appId) => {
+    const res = await apiCall(`/api/applications/${appId}/approve`, 'POST');
+    if (res) {
+        showToast('Application approved and queued', 'success');
+        refreshAllData();
+    }
+};
+
+async function approveVisibleDrafts() {
+    if (state.applications.length === 0) {
+        await fetchApplications();
+    }
+
+    const drafts = state.applications.filter((a) => a.status === 'draft');
+    if (!drafts.length) {
+        showToast('No draft applications to approve', 'info');
+        return;
+    }
+
+    let approved = 0;
+    for (const app of drafts) {
+        const res = await apiCall(`/api/applications/${app.id}/approve`, 'POST');
+        if (res) approved += 1;
+    }
+
+    showToast(`Approved ${approved}/${drafts.length} drafts`, approved ? 'success' : 'info');
+    refreshAllData();
+}
+
+function openDraftApplyLinks() {
+    const drafts = state.applications.filter((a) => a.status === 'draft' && a.apply_url);
+    if (!drafts.length) {
+        showToast('No draft apply links available', 'info');
+        return;
+    }
+
+    drafts.slice(0, 8).forEach((app, index) => {
+        setTimeout(() => window.open(app.apply_url, '_blank', 'noopener'), 120 * index);
+    });
+    showToast(`Opened ${Math.min(drafts.length, 8)} apply links in new tabs`, 'success');
+}
+
+window.triggerUrlAutoApply = async (urlId) => {
+    const res = await apiCall(`/api/urls/${urlId}/auto-apply`, 'POST');
+    if (!res) return;
+    showToast(`URL auto-apply queued: ${res.queued_submission_count}`, 'success');
+    refreshAllData();
+};
+
+window.resolveAuthPrompt = async (urlId) => {
+    const authenticatedUrl = window.prompt('Paste authenticated URL (same host/path scope):');
+    if (!authenticatedUrl) return;
+
+    const res = await apiCall(`/api/urls/${urlId}/resolve-auth`, 'POST', { authenticated_url: authenticatedUrl });
+    if (!res) return;
+    showToast('Authenticated URL updated and re-queued', 'success');
+    refreshAllData();
+};
