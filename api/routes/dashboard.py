@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import urlparse
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from db.models import Application, ExtractedURL, Job, JobStatus, Message, Submission, URLStatus
@@ -16,6 +17,25 @@ from match.scoring import AUTO_APPLY_THRESHOLD
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["dashboard"])
 
+
+def _detect_auth_requirement(fetch_error: str | None) -> bool:
+    text = (fetch_error or "").lower()
+    return ("auth" in text) or ("login" in text) or ("sign in" in text)
+
+
+def _detect_auth_provider_hint(url: str, fetch_error: str | None) -> str | None:
+    source = f"{url} {(fetch_error or '')}".lower()
+    if "google" in source or "accounts.google.com" in source:
+        return "google"
+    if "microsoft" in source or "login.microsoftonline.com" in source or "azuread" in source:
+        return "microsoft"
+    if "okta" in source:
+        return "okta"
+    if "auth0" in source:
+        return "auth0"
+    if _detect_auth_requirement(fetch_error):
+        return "generic_sso"
+    return None
 
 class DashboardSummary(BaseModel):
     total_messages: int
@@ -34,6 +54,7 @@ class ManualIngestRequest(BaseModel):
 
 
 class URLPipelineItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     url_id: int
     original_url: str
     normalized_url: str
@@ -43,6 +64,7 @@ class URLPipelineItem(BaseModel):
     applications_ready: int
     auto_apply_candidates: int
     requires_auth: bool
+    auth_provider_hint: str | None
 
 
 class URLPipelineSummary(BaseModel):
@@ -55,6 +77,17 @@ class URLAutoApplyResponse(BaseModel):
     approved_count: int
     queued_submission_count: int
     skipped_count: int
+    message: str
+
+
+class URLAuthResolveRequest(BaseModel):
+    authenticated_url: str
+
+
+class URLAuthResolveResponse(BaseModel):
+    url_id: int
+    old_url: str
+    authenticated_url: str
     message: str
 
 @router.get("/dashboard", response_model=DashboardSummary)
@@ -148,14 +181,66 @@ async def list_pipeline_urls(
                 jobs_found=len(jobs),
                 applications_ready=apps_ready,
                 auto_apply_candidates=auto_candidates,
-                requires_auth=(
-                    "auth" in (row.fetch_error or "").lower()
-                    or "login" in (row.fetch_error or "").lower()
+                requires_auth=_detect_auth_requirement(row.fetch_error),
+                auth_provider_hint=_detect_auth_provider_hint(
+                    row.normalized_url,
+                    row.fetch_error,
                 ),
             )
         )
 
     return URLPipelineSummary(items=items, total=total)
+
+
+
+
+@router.post("/urls/{url_id}/resolve-auth", response_model=URLAuthResolveResponse)
+async def resolve_auth_for_url(
+    url_id: int,
+    req: URLAuthResolveRequest,
+    db: Session = Depends(get_db),
+):
+    """Replace an auth-gated URL with a manually authenticated URL and re-queue it."""
+    from ingestion.url_utils import normalize_url, url_hash
+    from worker.tasks import process_url_task
+
+    row = db.query(ExtractedURL).filter(ExtractedURL.id == url_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="URL not found")
+
+    if not _detect_auth_requirement(row.fetch_error):
+        raise HTTPException(status_code=400, detail="URL is not marked as auth-required")
+
+    normalized_new = normalize_url(req.authenticated_url)
+    old_host = urlparse(row.normalized_url).netloc.lower()
+    new_host = urlparse(normalized_new).netloc.lower()
+    if not new_host:
+        raise HTTPException(status_code=400, detail="Invalid authenticated URL")
+
+    if old_host and new_host != old_host:
+        raise HTTPException(
+            status_code=400,
+            detail="Authenticated URL host must match original host",
+        )
+
+    old_url = row.normalized_url
+
+    row.original_url = req.authenticated_url
+    row.normalized_url = normalized_new
+    row.url_hash = url_hash(normalized_new)
+    row.fetch_error = None
+    row.status = URLStatus.PENDING
+    db.commit()
+
+    process_url_task.delay(row.id)
+
+    logger.info("url_auth_resolved", url_id=row.id, host=new_host)
+    return URLAuthResolveResponse(
+        url_id=row.id,
+        old_url=old_url,
+        authenticated_url=normalized_new,
+        message="Authenticated URL updated and re-queued",
+    )
 
 
 @router.post("/urls/{url_id}/auto-apply", response_model=URLAutoApplyResponse)

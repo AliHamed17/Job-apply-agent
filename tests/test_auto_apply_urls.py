@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app, settings
 from core.config import get_settings
-from db.models import Application, ExtractedURL, Job, JobStatus, Message
+from db.models import Application, ExtractedURL, Job, JobStatus, Message, URLStatus
 from db.session import get_session_factory, init_db
 from worker.tasks import submit_application_task
 
@@ -193,4 +193,84 @@ def test_generation_task_auto_apply(monkeypatch):
         settings.draft_only = original_draft_only
         runtime_settings.auto_apply = original_auto_apply
         runtime_settings.draft_only = original_draft_only
+        db.close()
+
+
+def test_list_urls_shows_auth_provider_hint():
+    init_db()
+    db = get_session_factory()()
+    try:
+        msg = Message(
+            whatsapp_message_id=f"msg-auto-auth-{uuid4().hex[:8]}",
+            sender_phone="15550001111",
+            body="https://careers.example.com/jobs/1",
+        )
+        db.add(msg)
+        db.flush()
+
+        extracted = ExtractedURL(
+            message_id=msg.id,
+            original_url="https://careers.example.com/jobs/1",
+            normalized_url="https://careers.example.com/jobs/1",
+            url_hash=f"hash-auth-{uuid4().hex[:8]}",
+            status=URLStatus.FAILED,
+            fetch_error="Redirected to accounts.google.com sign in",
+        )
+        db.add(extracted)
+        db.commit()
+
+        with TestClient(app) as client:
+            resp = client.get("/api/urls")
+        assert resp.status_code == 200
+        payload = resp.json()
+
+        matched = [item for item in payload["items"] if item["url_id"] == extracted.id][0]
+        assert matched["requires_auth"] is True
+        assert matched["auth_provider_hint"] == "google"
+    finally:
+        db.close()
+
+
+def test_resolve_auth_for_url_requeues(monkeypatch):
+    init_db()
+    db = get_session_factory()()
+    try:
+        msg = Message(
+            whatsapp_message_id=f"msg-auto-auth2-{uuid4().hex[:8]}",
+            sender_phone="15550001111",
+            body="https://careers.example.com/jobs/2",
+        )
+        db.add(msg)
+        db.flush()
+
+        extracted = ExtractedURL(
+            message_id=msg.id,
+            original_url="https://careers.example.com/jobs/2",
+            normalized_url="https://careers.example.com/jobs/2",
+            url_hash=f"hash-auth2-{uuid4().hex[:8]}",
+            fetch_error="Authentication wall detected: sign in",
+            status=URLStatus.BLOCKED,
+        )
+        db.add(extracted)
+        db.commit()
+
+        from worker.tasks import process_url_task
+        queued = []
+        monkeypatch.setattr(process_url_task, "delay", lambda url_id: queued.append(url_id))
+
+        with TestClient(app) as client:
+            resp = client.post(
+                f"/api/urls/{extracted.id}/resolve-auth",
+                json={"authenticated_url": "https://careers.example.com/jobs/2?session=ok"},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["url_id"] == extracted.id
+        assert len(queued) == 1
+
+        db.expire_all()
+        refreshed = db.query(ExtractedURL).filter(ExtractedURL.id == extracted.id).first()
+        assert refreshed.fetch_error is None
+    finally:
         db.close()
