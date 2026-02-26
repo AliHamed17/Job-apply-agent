@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Application, ExtractedURL, Job, JobStatus, Message, Submission, URLStatus
 from db.session import get_db
+from ingestion.url_utils import normalize_url, url_hash
 from match.scoring import AUTO_APPLY_THRESHOLD
 
 logger = structlog.get_logger(__name__)
@@ -201,7 +202,6 @@ async def resolve_auth_for_url(
     db: Session = Depends(get_db),
 ):
     """Replace an auth-gated URL with a manually authenticated URL and re-queue it."""
-    from ingestion.url_utils import normalize_url, url_hash
     from worker.tasks import process_url_task
 
     row = db.query(ExtractedURL).filter(ExtractedURL.id == url_id).first()
@@ -212,8 +212,20 @@ async def resolve_auth_for_url(
         raise HTTPException(status_code=400, detail="URL is not marked as auth-required")
 
     normalized_new = normalize_url(req.authenticated_url)
-    old_host = urlparse(row.normalized_url).netloc.lower()
-    new_host = urlparse(normalized_new).netloc.lower()
+    parsed_old = urlparse(row.normalized_url)
+    parsed_new = urlparse(normalized_new)
+
+    if parsed_new.scheme.lower() not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="Authenticated URL must be http/https")
+
+    if parsed_new.username or parsed_new.password:
+        raise HTTPException(
+            status_code=400,
+            detail="Authenticated URL must not include credentials",
+        )
+
+    old_host = parsed_old.netloc.lower()
+    new_host = parsed_new.netloc.lower()
     if not new_host:
         raise HTTPException(status_code=400, detail="Invalid authenticated URL")
 
@@ -222,6 +234,13 @@ async def resolve_auth_for_url(
             status_code=400,
             detail="Authenticated URL host must match original host",
         )
+
+    if parsed_old.path and parsed_old.path != "/":
+        if not parsed_new.path.startswith(parsed_old.path):
+            raise HTTPException(
+                status_code=400,
+                detail="Authenticated URL path must stay within the original URL path",
+            )
 
     old_url = row.normalized_url
 
@@ -313,8 +332,6 @@ async def auto_apply_for_url(url_id: int, db: Session = Depends(get_db)):
 @router.post("/ingest")
 async def manual_ingest(req: ManualIngestRequest, db: Session = Depends(get_db)):
     """Manually ingest a URL (useful for testing without WhatsApp)."""
-    from ingestion.url_utils import normalize_url, url_hash
-
     normalized = normalize_url(req.url)
     uhash = url_hash(normalized)
 

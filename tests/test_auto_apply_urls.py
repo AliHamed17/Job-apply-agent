@@ -274,3 +274,79 @@ def test_resolve_auth_for_url_requeues(monkeypatch):
         assert refreshed.fetch_error is None
     finally:
         db.close()
+
+
+def test_resolve_auth_rejects_cross_host(monkeypatch):
+    init_db()
+    db = get_session_factory()()
+    try:
+        msg = Message(
+            whatsapp_message_id=f"msg-auth-cross-{uuid4().hex[:8]}",
+            sender_phone="15550001111",
+            body="https://careers.example.com/jobs/3",
+        )
+        db.add(msg)
+        db.flush()
+
+        extracted = ExtractedURL(
+            message_id=msg.id,
+            original_url="https://careers.example.com/jobs/3",
+            normalized_url="https://careers.example.com/jobs/3",
+            url_hash=f"hash-auth3-{uuid4().hex[:8]}",
+            fetch_error="Authentication wall detected: sign in",
+            status=URLStatus.BLOCKED,
+        )
+        db.add(extracted)
+        db.commit()
+
+        from worker.tasks import process_url_task
+        monkeypatch.setattr(process_url_task, "delay", lambda _url_id: None)
+
+        with TestClient(app) as client:
+            resp = client.post(
+                f"/api/urls/{extracted.id}/resolve-auth",
+                json={"authenticated_url": "https://evil.example.net/jobs/3?session=ok"},
+            )
+
+        assert resp.status_code == 400
+        assert "host" in resp.json()["detail"].lower()
+    finally:
+        db.close()
+
+
+def test_resolve_auth_rejects_credential_url(monkeypatch):
+    init_db()
+    db = get_session_factory()()
+    try:
+        msg = Message(
+            whatsapp_message_id=f"msg-auth-cred-{uuid4().hex[:8]}",
+            sender_phone="15550001111",
+            body="https://careers.example.com/jobs/4",
+        )
+        db.add(msg)
+        db.flush()
+
+        extracted = ExtractedURL(
+            message_id=msg.id,
+            original_url="https://careers.example.com/jobs/4",
+            normalized_url="https://careers.example.com/jobs/4",
+            url_hash=f"hash-auth4-{uuid4().hex[:8]}",
+            fetch_error="Authentication wall detected: sign in",
+            status=URLStatus.BLOCKED,
+        )
+        db.add(extracted)
+        db.commit()
+
+        from worker.tasks import process_url_task
+        monkeypatch.setattr(process_url_task, "delay", lambda _url_id: None)
+
+        with TestClient(app) as client:
+            resp = client.post(
+                f"/api/urls/{extracted.id}/resolve-auth",
+                json={"authenticated_url": "https://user:pass@careers.example.com/jobs/4"},
+            )
+
+        assert resp.status_code == 400
+        assert "credentials" in resp.json()["detail"].lower()
+    finally:
+        db.close()
