@@ -11,7 +11,16 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
-from db.models import Application, ExtractedURL, Job, JobStatus, Message, Submission, URLStatus
+from db.models import (
+    Application,
+    ExtractedURL,
+    Job,
+    JobStatus,
+    Message,
+    Submission,
+    SubmissionStatus,
+    URLStatus,
+)
 from db.session import get_db
 from ingestion.url_utils import normalize_url, url_hash
 from match.scoring import get_auto_apply_threshold
@@ -118,7 +127,7 @@ async def dashboard_summary(db: Session = Depends(get_db)):
 
     total_subs = db.query(Submission).count()
     success_subs = db.query(Submission).filter(
-        Submission.status == "success"  # SubmissionStatus enum
+        Submission.status == SubmissionStatus.SUCCESS
     ).count()
 
     return DashboardSummary(
