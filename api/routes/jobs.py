@@ -7,6 +7,7 @@ from datetime import datetime
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from db.models import (
@@ -96,11 +97,24 @@ async def list_jobs(
     else:
         query = query.order_by(Job.created_at.desc() if sort_desc else Job.created_at.asc())
 
-    jobs = query.offset(offset).limit(limit).all()
-
     if platform:
         platform_filter = platform.lower().strip()
-        jobs = [j for j in jobs if identify_job_platform(j.apply_url or j.source_url) == platform_filter]
+        platform_predicates = {
+            "greenhouse": ["%greenhouse.io%", "%boards.greenhouse.io%"],
+            "lever": ["%lever.co%", "%jobs.lever.co%"],
+            "workday": ["%myworkdayjobs.com%", "%workday%"],
+            "linkedin": ["%linkedin.com/jobs%"],
+            "indeed": ["%indeed.com%"],
+        }
+        patterns = platform_predicates.get(platform_filter, [])
+        if patterns:
+            query = query.filter(
+                or_(
+                    *([Job.apply_url.ilike(p) for p in patterns] + [Job.source_url.ilike(p) for p in patterns])
+                )
+            )
+
+    jobs = query.offset(offset).limit(limit).all()
 
     return [
         JobResponse(

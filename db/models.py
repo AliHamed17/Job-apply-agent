@@ -49,6 +49,7 @@ class SubmissionStatus(str, enum.Enum):
     SUCCESS = "success"
     FAILED = "failed"
     DRAFT_ONLY = "draft_only"
+    NEEDS_HUMAN_CONFIRMATION = "needs_human_confirmation"
 
 
 # ── Models ───────────────────────────────────────────────

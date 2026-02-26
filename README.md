@@ -119,16 +119,20 @@ curl -X POST http://localhost:8000/api/ingest \
 | GET | `/health` | No | Health check |
 | GET | `/metrics` | Bearer | Pipeline metrics |
 | GET/POST | `/webhook/whatsapp` | Meta signature | WhatsApp webhook |
-| GET | `/api/jobs` | Bearer | List jobs (filter by status, min_score) |
+| GET | `/api/jobs` | Bearer | List jobs (filters: status, min_score, platform, has_application, date range; sorting supported) |
 | GET | `/api/jobs/{id}` | Bearer | Get job details |
 | GET | `/api/applications` | Bearer | List applications |
 | GET | `/api/applications/{id}` | Bearer | Get application details |
 | POST | `/api/applications/{id}/approve` | Bearer | Approve and queue for submission |
 | POST | `/api/applications/{id}/reject` | Bearer | Reject application |
+| POST | `/api/applications/{id}/retry-submit` | Bearer | Retry submission for an approved application |
+| GET | `/api/submissions` | Bearer | List submission queue entries (status/error/platform) |
 | GET | `/api/dashboard` | Bearer | Pipeline summary stats |
 | POST | `/api/ingest` | Bearer | Manually ingest a URL |
 
 **Auth**: Set `SECRET_KEY` in `.env`, then pass `Authorization: Bearer <your-secret-key>` header.
+
+For local-only development, `ALLOW_INSECURE_AUTH_BYPASS=true` can temporarily allow requests without a token when `SECRET_KEY=change-me` and `APP_ENV!=prod`.
 
 ## Running Tests
 

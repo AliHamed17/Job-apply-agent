@@ -460,8 +460,10 @@ def submit_application_task(self, application_id: int):
         submission_status = (
             SubmissionStatus.SUCCESS
             if result.success
+            else SubmissionStatus.NEEDS_HUMAN_CONFIRMATION
+            if result.status == "requires_human_confirmation"
             else SubmissionStatus.DRAFT_ONLY
-            if result.status in {"draft_only", "requires_human_confirmation"}
+            if result.status == "draft_only"
             else SubmissionStatus.FAILED
         )
         submission = Submission(

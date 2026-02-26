@@ -50,6 +50,10 @@ def _metrics_key(name: str) -> str:
 # ── In-memory interaction metrics (process-local) ───────
 _webhook_metrics: dict[str, int] = defaultdict(int)
 _webhook_url_domain_counts: Counter[str] = Counter()
+WEBHOOK_METRICS_HASH_KEY = "webhook:metrics"
+WEBHOOK_DOMAINS_ZSET_KEY = "webhook:domains"
+WEBHOOK_METRICS_TTL_SECONDS = 60 * 60 * 24 * 30
+WEBHOOK_MAX_DOMAIN_CARDINALITY = 1000
 
 
 def _inc_metric(name: str, amount: int = 1) -> None:
@@ -58,7 +62,8 @@ def _inc_metric(name: str, amount: int = 1) -> None:
     redis_client = _get_redis_client()
     if redis_client is not None:
         try:
-            redis_client.incrby(_metrics_key(name), amount)
+            redis_client.hincrby(WEBHOOK_METRICS_HASH_KEY, name, amount)
+            redis_client.expire(WEBHOOK_METRICS_HASH_KEY, WEBHOOK_METRICS_TTL_SECONDS)
         except Exception:
             pass
 
@@ -75,7 +80,9 @@ def _track_url_domain(url: str) -> None:
     redis_client = _get_redis_client()
     if redis_client is not None:
         try:
-            redis_client.zincrby("webhook:domains", 1, host)
+            redis_client.zincrby(WEBHOOK_DOMAINS_ZSET_KEY, 1, host)
+            redis_client.expire(WEBHOOK_DOMAINS_ZSET_KEY, WEBHOOK_METRICS_TTL_SECONDS)
+            redis_client.zremrangebyrank(WEBHOOK_DOMAINS_ZSET_KEY, 0, -WEBHOOK_MAX_DOMAIN_CARDINALITY - 1)
         except Exception:
             pass
 
@@ -93,10 +100,11 @@ def get_webhook_metrics_snapshot() -> dict[str, int]:
     redis_client = _get_redis_client()
     if redis_client is not None:
         try:
-            for key in redis_client.scan_iter(match="webhook:metric:*"):
-                raw_key = key.decode() if isinstance(key, bytes) else key
-                metric_name = raw_key.removeprefix("webhook:metric:")
-                counters[metric_name] = int(redis_client.get(key) or 0)
+            raw = redis_client.hgetall(WEBHOOK_METRICS_HASH_KEY)
+            counters = {
+                (k.decode() if isinstance(k, bytes) else str(k)): int(v)
+                for k, v in raw.items()
+            }
         except Exception:
             pass
 
@@ -114,7 +122,7 @@ def get_webhook_metrics_payload(top_n_domains: int = 10) -> dict[str, Any]:
     redis_client = _get_redis_client()
     if redis_client is not None:
         try:
-            redis_domains = redis_client.zrevrange("webhook:domains", 0, top_n_domains - 1, withscores=True)
+            redis_domains = redis_client.zrevrange(WEBHOOK_DOMAINS_ZSET_KEY, 0, top_n_domains - 1, withscores=True)
             top_domains = [
                 {"domain": domain.decode() if isinstance(domain, bytes) else domain, "count": int(score)}
                 for domain, score in redis_domains
@@ -157,10 +165,8 @@ def reset_webhook_metrics() -> None:
     redis_client = _get_redis_client()
     if redis_client is not None:
         try:
-            keys = list(redis_client.scan_iter(match="webhook:metric:*"))
-            if keys:
-                redis_client.delete(*keys)
-            redis_client.delete("webhook:domains")
+            redis_client.delete(WEBHOOK_METRICS_HASH_KEY)
+            redis_client.delete(WEBHOOK_DOMAINS_ZSET_KEY)
         except Exception:
             pass
 
