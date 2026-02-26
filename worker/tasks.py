@@ -392,9 +392,13 @@ def submit_application_task(self, application_id: int):
     from profile.loader import get_profile
 
     from jobs.models import JobData
+    from submitters.ashby import AshbySubmitter
     from submitters.base import SubmitterRegistry
     from submitters.greenhouse import GreenhouseSubmitter
+    from submitters.jobvite import JobviteSubmitter
     from submitters.lever import LeverSubmitter
+    from submitters.smartrecruiters import SmartRecruitersSubmitter
+    from submitters.workable import WorkableSubmitter
 
     db = _get_db()
     try:
@@ -424,6 +428,10 @@ def submit_application_task(self, application_id: int):
         registry = SubmitterRegistry()
         registry.register(GreenhouseSubmitter())
         registry.register(LeverSubmitter())
+        registry.register(AshbySubmitter())
+        registry.register(WorkableSubmitter())
+        registry.register(SmartRecruitersSubmitter())
+        registry.register(JobviteSubmitter())
 
         submitter = registry.get_submitter(
             JobData(title=db_job.title, apply_url=db_job.apply_url,
