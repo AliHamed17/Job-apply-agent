@@ -45,6 +45,10 @@ def _is_url_fetch_allowed(url: str) -> tuple[bool, str]:
     if not host:
         return False, "URL host is missing"
 
+    allowed_domains = get_settings().fetch_allowed_domain_list
+    if allowed_domains and not any(host == d or host.endswith(f".{d}") for d in allowed_domains):
+        return False, "Host is not in FETCH_ALLOWED_DOMAINS allowlist"
+
     if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
         return False, "Localhost domains are not allowed"
 
@@ -192,6 +196,11 @@ def fetch_page(url: str) -> FetchResult:
 
     try:
         resp = _do_fetch(url)
+
+        final_allowed, final_reason = _is_url_fetch_allowed(str(resp.url))
+        if not final_allowed:
+            logger.warning("fetch_blocked_redirect_target", url=str(resp.url), reason=final_reason)
+            return FetchResult(url=url, status_code=resp.status_code, error=final_reason, blocked=True)
 
         auth_error = _detect_auth_requirement(resp)
         if auth_error:

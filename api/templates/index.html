@@ -33,6 +33,9 @@
                 <div class="stat-item" data-tab="jobs">
                     <i data-lucide="briefcase"></i> Job Pipeline
                 </div>
+                <div class="stat-item" data-tab="submissions">
+                    <i data-lucide="send"></i> Submission Queue
+                </div>
                 <!-- Manual Ingest Trigger -->
                 <div class="stat-item action-btn" id="btn-ingest-modal">
                     <i data-lucide="plus-circle"></i> Add Job URL
@@ -127,6 +130,27 @@
                         </table>
                     </div>
                 </section>
+                <section id="view-submissions" class="view">
+                    <div class="list-header">
+                        <h2>Submission Queue</h2>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Job</th>
+                                    <th>Platform</th>
+                                    <th>Status</th>
+                                    <th>Error</th>
+                                    <th>Date</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="submissions-table-body"></tbody>
+                        </table>
+                    </div>
+                </section>
+
             </div>
         </main>
     </div>

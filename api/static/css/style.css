@@ -399,6 +399,9 @@ h1, h2, h3, h4, h5 {
 .status.skipped { background: var(--danger-bg); color: var(--danger); }
 .status.scored { background: rgba(59, 130, 246, 0.1); color: var(--primary); }
 .status.submitted { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
+.status.pending { background: rgba(59,130,246,0.12); color: #60a5fa; }
+.status.failed { background: var(--danger-bg); color: var(--danger); }
+.status.requires_human_confirmation { background: var(--warning-bg); color: var(--warning); }
 
 /* Table */
 .table-container {

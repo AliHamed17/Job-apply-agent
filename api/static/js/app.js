@@ -10,6 +10,7 @@ const state = {
     applications: [],
     jobs: [],
     urlPipeline: [],
+    submissions: [],
     filters: {
         applications: 'draft',
         jobs: '', // empty means all
@@ -40,6 +41,9 @@ const els = {
     btnApproveVisibleDrafts: document.getElementById('btn-approve-visible-drafts'),
     btnOpenDraftLinks: document.getElementById('btn-open-draft-links'),
     jobsSearch: document.getElementById('jobs-search'),
+    submissionsTableBody: document.getElementById('submissions-table-body'),
+    applySessionModal: document.getElementById('apply-session-modal'),
+    applySessionList: document.getElementById('apply-session-list'),
     
     // Modals
     reviewModal: document.getElementById('review-modal'),
@@ -186,6 +190,7 @@ function switchTab(tabId) {
     if (tabId === 'dashboard' && !state.dashboardData) fetchDashboard();
     if (tabId === 'applications' && state.applications.length === 0) fetchApplications();
     if (tabId === 'jobs' && state.jobs.length === 0) fetchJobs();
+    if (tabId === 'submissions' && state.submissions.length === 0) fetchSubmissions();
 }
 
 // ── API Layer ───────────────────────────────────────────
@@ -222,6 +227,7 @@ async function refreshAllData() {
     await fetchUrlPipeline();
     if (state.currentTab === 'applications') await fetchApplications();
     if (state.currentTab === 'jobs') await fetchJobs();
+    if (state.currentTab === 'submissions') await fetchSubmissions();
 }
 
 async function fetchDashboard() {
@@ -244,7 +250,16 @@ async function fetchApplications() {
 
 async function fetchJobs() {
     const status = state.filters.jobs;
-    const url = status ? `/api/jobs?status=${status}&limit=100` : '/api/jobs?limit=100';
+    const params = new URLSearchParams();
+    params.set('limit', '100');
+    params.set('sort_by', 'score');
+    params.set('sort_order', 'desc');
+    params.set('has_application', 'true');
+    if (status) params.set('status', status);
+    const search = (state.filters.jobsSearch || '').trim().toLowerCase();
+    const platforms = ['greenhouse','lever','linkedin','indeed','workday'];
+    if (platforms.includes(search)) params.set('platform', search);
+    const url = `/api/jobs?${params.toString()}`;
     const data = await apiCall(url);
     if (!data) return;
     state.jobs = data;
@@ -256,6 +271,13 @@ async function fetchUrlPipeline() {
     if (!data || !data.items) return;
     state.urlPipeline = data.items;
     renderUrlPipeline();
+}
+
+async function fetchSubmissions() {
+    const data = await apiCall('/api/submissions');
+    if (!data) return;
+    state.submissions = data;
+    renderSubmissions();
 }
 
 // ── Rendering ───────────────────────────────────────────
@@ -389,6 +411,29 @@ function renderUrlPipeline() {
                 <a class="btn btn-glass btn-sm" href="${item.normalized_url}" target="_blank" rel="noopener">Open</a>
             </div>
         </div>
+    `).join('');
+}
+
+function renderSubmissions() {
+    if (!els.submissionsTableBody) return;
+
+    if (!state.submissions.length) {
+        els.submissionsTableBody.innerHTML = `<tr><td colspan="6" class="text-center text-dim py-4">No submissions yet.</td></tr>`;
+        return;
+    }
+
+    els.submissionsTableBody.innerHTML = state.submissions.map((s) => `
+        <tr>
+            <td>${s.job_title || '-'}</td>
+            <td>${s.submitter_name || '-'}</td>
+            <td><span class="status ${s.status}">${s.status}</span></td>
+            <td class="text-dim">${s.error_message || '-'}</td>
+            <td class="text-dim">${new Date(s.created_at).toLocaleString()}</td>
+            <td>
+                ${s.application_id ? `<button class="btn btn-secondary btn-sm" onclick="retrySubmission(${s.application_id})">Retry</button>` : ''}
+                ${s.confirmation_url ? `<a class="btn btn-glass btn-sm" href="${s.confirmation_url}" target="_blank" rel="noopener">Open</a>` : ''}
+            </td>
+        </tr>
     `).join('');
 }
 
@@ -527,10 +572,18 @@ function openDraftApplyLinks() {
         return;
     }
 
-    drafts.slice(0, 8).forEach((app, index) => {
-        setTimeout(() => window.open(app.apply_url, '_blank', 'noopener'), 120 * index);
-    });
-    showToast(`Opened ${Math.min(drafts.length, 8)} apply links in new tabs`, 'success');
+    els.applySessionList.innerHTML = drafts.slice(0, 20).map((app) => `
+        <div class="qa-item">
+            <div class="qa-q">${app.job_title} — ${app.job_company}</div>
+            <div class="card-actions mt-1">
+                <a class="btn btn-glass btn-sm" href="${app.apply_url}" target="_blank" rel="noopener">Open Link</a>
+                <button class="btn btn-secondary btn-sm" onclick="copyText('${app.apply_url.replace(/'/g, "\'")}')">Copy Link</button>
+            </div>
+        </div>
+    `).join('');
+
+    els.applySessionModal.classList.add('visible');
+    showToast(`Prepared ${Math.min(drafts.length, 20)} draft links`, 'success');
 }
 
 window.triggerUrlAutoApply = async (urlId) => {
@@ -556,4 +609,17 @@ window.applyNowForJob = async (jobId) => {
     if (!res) return;
     showToast('Job approved and queued for submission', 'success');
     refreshAllData();
+};
+
+
+window.retrySubmission = async (appId) => {
+    const res = await apiCall(`/api/applications/${appId}/retry-submit`, 'POST');
+    if (!res) return;
+    showToast('Retry queued', 'success');
+    fetchSubmissions();
+};
+
+window.copyText = (value) => {
+    navigator.clipboard.writeText(value);
+    showToast('Copied link', 'success');
 };

@@ -457,20 +457,30 @@ def submit_application_task(self, application_id: int):
             loop.close()
 
         # Record submission
+        submission_status = (
+            SubmissionStatus.SUCCESS
+            if result.success
+            else SubmissionStatus.DRAFT_ONLY
+            if result.status in {"draft_only", "requires_human_confirmation"}
+            else SubmissionStatus.FAILED
+        )
         submission = Submission(
             application_id=application_id,
             submitter_name=submitter.platform_name,
-            status=(SubmissionStatus.SUCCESS if result.success
-                    else SubmissionStatus.DRAFT_ONLY if result.status == "draft_only"
-                    else SubmissionStatus.FAILED),
+            status=submission_status,
             confirmation_url=result.confirmation_url,
             confirmation_id=result.confirmation_id,
             error_message=result.error,
         )
         db.add(submission)
 
-        db_job.status = (JobStatus.SUBMITTED if result.success
-                         else JobStatus.FAILED)
+        db_job.status = (
+            JobStatus.SUBMITTED
+            if result.success
+            else JobStatus.DRAFT
+            if result.status in {"draft_only", "requires_human_confirmation"}
+            else JobStatus.FAILED
+        )
         db.commit()
 
         logger.info(

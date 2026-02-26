@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-import structlog
 from datetime import datetime
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from db.models import Application, Job, JobStatus
+from db.models import (
+    Application,
+    Job,
+    JobStatus,
+    Submission,
+    SubmissionStatus,
+)
 from db.session import get_db
+from ingestion.url_utils import identify_job_platform
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["jobs"])
@@ -29,6 +36,7 @@ class JobResponse(BaseModel):
     score: float | None
     status: str
     created_at: str
+    platform: str
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,6 +45,12 @@ class JobResponse(BaseModel):
 async def list_jobs(
     status: str | None = Query(None, description="Filter by status"),
     min_score: float | None = Query(None, description="Minimum score"),
+    platform: str | None = Query(None, description="Filter by job platform"),
+    has_application: bool | None = Query(None, description="Filter jobs with generated application"),
+    start_date: str | None = Query(None, description="ISO date lower bound for created_at"),
+    end_date: str | None = Query(None, description="ISO date upper bound for created_at"),
+    sort_by: str = Query("created_at", description="Sort field: created_at|score"),
+    sort_order: str = Query("desc", description="Sort order: asc|desc"),
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -54,7 +68,39 @@ async def list_jobs(
     if min_score is not None:
         query = query.filter(Job.score >= min_score)
 
-    jobs = query.order_by(Job.created_at.desc()).offset(offset).limit(limit).all()
+    if has_application is not None:
+        if has_application:
+            query = query.join(Application, Application.job_id == Job.id)
+        else:
+            query = query.outerjoin(Application, Application.job_id == Job.id).filter(
+                Application.id.is_(None)
+            )
+
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date)
+            query = query.filter(Job.created_at >= start_dt)
+        except ValueError:
+            pass
+
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date)
+            query = query.filter(Job.created_at <= end_dt)
+        except ValueError:
+            pass
+
+    sort_desc = sort_order.lower() != "asc"
+    if sort_by == "score":
+        query = query.order_by(Job.score.desc() if sort_desc else Job.score.asc())
+    else:
+        query = query.order_by(Job.created_at.desc() if sort_desc else Job.created_at.asc())
+
+    jobs = query.offset(offset).limit(limit).all()
+
+    if platform:
+        platform_filter = platform.lower().strip()
+        jobs = [j for j in jobs if identify_job_platform(j.apply_url or j.source_url) == platform_filter]
 
     return [
         JobResponse(
@@ -70,6 +116,7 @@ async def list_jobs(
             score=j.score,
             status=j.status.value if j.status else "",
             created_at=j.created_at.isoformat() if j.created_at else "",
+            platform=identify_job_platform(j.apply_url or j.source_url),
         )
         for j in jobs
     ]
@@ -80,7 +127,6 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
     """Get a single job by ID."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Job not found")
 
     return JobResponse(
@@ -96,6 +142,7 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
         score=job.score,
         status=job.status.value if job.status else "",
         created_at=job.created_at.isoformat() if job.created_at else "",
+        platform=identify_job_platform(job.apply_url or job.source_url),
     )
 
 
@@ -112,8 +159,16 @@ async def apply_now_for_job(job_id: int, db: Session = Depends(get_db)):
     if not app:
         raise HTTPException(status_code=400, detail="No generated application found for this job")
 
+    existing_submission = db.query(Submission).filter(Submission.application_id == app.id).first()
+    if existing_submission and existing_submission.status in {
+        SubmissionStatus.PENDING,
+        SubmissionStatus.SUCCESS,
+    }:
+        return {"message": "Submission already pending or completed", "job_id": job_id}
+
     if app.status == JobStatus.APPROVED:
-        return {"message": "Application already approved", "job_id": job_id}
+        submit_application_task.delay(app.id)
+        return {"message": "Application already approved; submission queued", "job_id": job_id}
 
     if app.status != JobStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Only draft applications can be quick-applied")

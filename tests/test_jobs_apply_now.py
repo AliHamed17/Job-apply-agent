@@ -3,7 +3,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from api.main import app
-from db.models import Application, ExtractedURL, Job, JobStatus, Message
+from db.models import Application, ExtractedURL, Job, JobStatus, Message, Submission, SubmissionStatus
 from db.session import get_session_factory, init_db
 
 
@@ -97,6 +97,14 @@ def test_apply_now_for_job_is_idempotent_for_approved(monkeypatch):
 
         app_row = Application(job_id=job.id, status=JobStatus.APPROVED)
         db.add(app_row)
+        db.flush()
+
+        submission = Submission(
+            application_id=app_row.id,
+            submitter_name="lever",
+            status=SubmissionStatus.PENDING,
+        )
+        db.add(submission)
         db.commit()
 
         from worker.tasks import submit_application_task
@@ -108,7 +116,7 @@ def test_apply_now_for_job_is_idempotent_for_approved(monkeypatch):
             resp = client.post(f"/api/jobs/{job.id}/apply-now")
 
         assert resp.status_code == 200
-        assert resp.json()["message"] == "Application already approved"
+        assert resp.json()["message"] == "Submission already pending or completed"
         assert queued == []
     finally:
         db.close()

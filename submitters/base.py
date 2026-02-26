@@ -19,7 +19,7 @@ class SubmissionResult:
 
     success: bool
     platform: str
-    status: str  # "submitted", "draft_only", "failed", "captcha_blocked"
+    status: str  # "submitted", "draft_only", "requires_human_confirmation", "failed", "captcha_blocked"
     confirmation_id: str | None = None
     confirmation_url: str | None = None
     error: str | None = None

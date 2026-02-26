@@ -171,9 +171,9 @@ class LeverSubmitter(BaseSubmitter):
                 await browser.close()
 
             return SubmissionResult(
-                success=True,
+                success=False,
                 platform=self.platform_name,
-                status="draft_only",
+                status="requires_human_confirmation",
                 error="Browser form filled (submission left for final human confirmation)",
             )
         except PlaywrightTimeoutError:

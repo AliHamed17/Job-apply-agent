@@ -55,9 +55,13 @@ class Settings(BaseSettings):
 
     # ── Security ────────────────────────────────────────
     secret_key: str = "change-me"
+    allow_insecure_auth_bypass: bool = False
 
     # ── Allowed Senders ─────────────────────────────────
     allowed_senders: str = ""  # comma-separated phone numbers
+
+    # ── Fetch Safety Allowlist (optional) ────────────────
+    fetch_allowed_domains: str = ""
 
     # ── Paths ───────────────────────────────────────────
     user_profile_path: str = "user_profile.yaml"
@@ -79,6 +83,13 @@ class Settings(BaseSettings):
     @property
     def db_is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+
+    @property
+    def fetch_allowed_domain_list(self) -> list[str]:
+        if not self.fetch_allowed_domains:
+            return []
+        return [d.strip().lower() for d in self.fetch_allowed_domains.split(",") if d.strip()]
 
     @property
     def profile_path(self) -> Path:

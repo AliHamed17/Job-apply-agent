@@ -11,19 +11,27 @@ def test_cors_origins_parsing():
     assert parsed == ["https://a.com", "https://b.com"]
 
 
-def test_auth_bypass_allowed_in_dev_with_default_secret():
+def test_auth_bypass_allowed_only_with_explicit_flag():
     original_env = settings.app_env
     original_secret = settings.secret_key
+    original_bypass = settings.allow_insecure_auth_bypass
     _rate_limit_store.clear()
     try:
         settings.app_env = "dev"
         settings.secret_key = "change-me"
+        settings.allow_insecure_auth_bypass = False
+        with TestClient(app) as client:
+            resp = client.get("/api/jobs")
+        assert resp.status_code == 401
+
+        settings.allow_insecure_auth_bypass = True
         with TestClient(app) as client:
             resp = client.get("/api/jobs")
         assert resp.status_code == 200
     finally:
         settings.app_env = original_env
         settings.secret_key = original_secret
+        settings.allow_insecure_auth_bypass = original_bypass
 
 
 def test_auth_not_bypassed_in_prod_with_default_secret():

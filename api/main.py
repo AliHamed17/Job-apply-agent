@@ -152,8 +152,12 @@ async def auth_middleware(request: Request, call_next):
     if _is_auth_exempt_path(request.url.path):
         return await call_next(request)
 
-    # If no secret_key is configured, only allow bypass in non-production
-    if settings.secret_key == "change-me" and not settings.is_production:
+    # Optional insecure bypass for local/dev only when explicitly enabled
+    if (
+        settings.secret_key == "change-me"
+        and not settings.is_production
+        and settings.allow_insecure_auth_bypass
+    ):
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization", "")

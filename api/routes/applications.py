@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from db.models import Application, JobStatus
+from db.models import Application, JobStatus, Submission, SubmissionStatus
 from db.session import get_db
 
 logger = structlog.get_logger(__name__)
@@ -167,3 +167,49 @@ async def reject_application(
     db.commit()
     logger.info("application_rejected_via_api", app_id=app.id, reason=reason)
     return {"message": "Application rejected", "application_id": app.id}
+
+
+@router.get("/submissions")
+async def list_submissions(db: Session = Depends(get_db)):
+    """List submission queue entries with job/application context."""
+    rows = db.query(Submission).order_by(Submission.created_at.desc()).limit(200).all()
+    payload = []
+    for row in rows:
+        app = row.application
+        job = app.job if app else None
+        payload.append(
+            {
+                "submission_id": row.id,
+                "application_id": row.application_id,
+                "job_id": app.job_id if app else None,
+                "job_title": job.title if job else "",
+                "company": job.company if job else "",
+                "status": row.status.value if row.status else "",
+                "submitter_name": row.submitter_name,
+                "error_message": row.error_message,
+                "created_at": row.created_at.isoformat() if row.created_at else "",
+                "confirmation_url": row.confirmation_url,
+            }
+        )
+    return payload
+
+
+@router.post("/applications/{app_id}/retry-submit")
+async def retry_submission(app_id: int, db: Session = Depends(get_db)):
+    """Retry submission for an approved application."""
+    from worker.tasks import submit_application_task
+
+    app = db.query(Application).filter(Application.id == app_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if app.status != JobStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Only approved applications can be retried")
+
+    submission = app.submission
+    if submission and submission.status == SubmissionStatus.PENDING:
+        return {"message": "Submission already pending", "application_id": app_id}
+
+    submit_application_task.delay(app_id)
+    logger.info("submission_retry_queued", application_id=app_id)
+    return {"message": "Submission retry queued", "application_id": app_id}
