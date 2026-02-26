@@ -113,8 +113,7 @@ async def apply_now_for_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="No generated application found for this job")
 
     if app.status == JobStatus.APPROVED:
-        submit_application_task.delay(app.id)
-        return {"message": "Application already approved; submission queued", "job_id": job_id}
+        return {"message": "Application already approved", "job_id": job_id}
 
     if app.status != JobStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Only draft applications can be quick-applied")

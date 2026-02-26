@@ -5,9 +5,11 @@ from __future__ import annotations
 import hmac
 import os
 import time
+from functools import lru_cache
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
+import redis
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,6 +71,17 @@ app.add_middleware(
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 
 
+@lru_cache
+def _get_redis_client():
+    """Best-effort Redis client for shared runtime state (rate limits/metrics)."""
+    try:
+        client = redis.from_url(settings.redis_url, socket_connect_timeout=0.2, socket_timeout=0.2)
+        client.ping()
+        return client
+    except Exception:
+        return None
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """Simple in-memory rate limiter per client IP."""
@@ -78,16 +91,36 @@ async def rate_limit_middleware(request: Request, call_next):
 
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
-    window = 60.0  # 1 minute window
     max_requests = settings.rate_limit_requests_per_minute
 
-    # Clean old entries
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            bucket = int(now // 60)
+            key = f"rate_limit:{client_ip}:{bucket}"
+            count = redis_client.incr(key)
+            if count == 1:
+                redis_client.expire(key, 120)
+
+            if count > max_requests:
+                logger.warning("rate_limited", client=client_ip, backend="redis")
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Rate limit exceeded. Try again later."},
+                )
+
+            return await call_next(request)
+        except Exception:
+            pass
+
+    # Fallback: in-memory rate limiting
+    window = 60.0
     _rate_limit_store[client_ip] = [
         t for t in _rate_limit_store[client_ip] if now - t < window
     ]
 
     if len(_rate_limit_store[client_ip]) >= max_requests:
-        logger.warning("rate_limited", client=client_ip)
+        logger.warning("rate_limited", client=client_ip, backend="memory")
         return JSONResponse(
             status_code=429,
             content={"detail": "Rate limit exceeded. Try again later."},

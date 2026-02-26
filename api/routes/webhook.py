@@ -11,12 +11,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from functools import lru_cache
 from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+import redis
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -29,6 +31,22 @@ from ingestion.url_utils import identify_job_platform, is_likely_job_url, normal
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
+
+@lru_cache
+def _get_redis_client():
+    """Best-effort Redis client for shared webhook metrics."""
+    try:
+        settings = get_settings()
+        client = redis.from_url(settings.redis_url, socket_connect_timeout=0.2, socket_timeout=0.2)
+        client.ping()
+        return client
+    except Exception:
+        return None
+
+
+def _metrics_key(name: str) -> str:
+    return f"webhook:metric:{name}"
+
 # ── In-memory interaction metrics (process-local) ───────
 _webhook_metrics: dict[str, int] = defaultdict(int)
 _webhook_url_domain_counts: Counter[str] = Counter()
@@ -37,13 +55,29 @@ _webhook_url_domain_counts: Counter[str] = Counter()
 def _inc_metric(name: str, amount: int = 1) -> None:
     _webhook_metrics[name] += amount
 
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            redis_client.incrby(_metrics_key(name), amount)
+        except Exception:
+            pass
+
 
 def _track_url_domain(url: str) -> None:
     """Track normalized URL host usage for WhatsApp messages."""
     parsed = urlparse(url)
     host = parsed.netloc.lower().strip()
-    if host:
-        _webhook_url_domain_counts[host] += 1
+    if not host:
+        return
+
+    _webhook_url_domain_counts[host] += 1
+
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            redis_client.zincrby("webhook:domains", 1, host)
+        except Exception:
+            pass
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float:
@@ -54,16 +88,39 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
 
 def get_webhook_metrics_snapshot() -> dict[str, int]:
     """Return a snapshot of webhook interaction counters."""
-    return dict(_webhook_metrics)
+    counters = dict(_webhook_metrics)
+
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            for key in redis_client.scan_iter(match="webhook:metric:*"):
+                raw_key = key.decode() if isinstance(key, bytes) else key
+                metric_name = raw_key.removeprefix("webhook:metric:")
+                counters[metric_name] = int(redis_client.get(key) or 0)
+        except Exception:
+            pass
+
+    return counters
 
 
 def get_webhook_metrics_payload(top_n_domains: int = 10) -> dict[str, Any]:
     """Return detailed WhatsApp metrics payload for APIs and dashboards."""
-    counters = dict(_webhook_metrics)
+    counters = get_webhook_metrics_snapshot()
     top_domains = [
         {"domain": domain, "count": count}
         for domain, count in _webhook_url_domain_counts.most_common(top_n_domains)
     ]
+
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            redis_domains = redis_client.zrevrange("webhook:domains", 0, top_n_domains - 1, withscores=True)
+            top_domains = [
+                {"domain": domain.decode() if isinstance(domain, bytes) else domain, "count": int(score)}
+                for domain, score in redis_domains
+            ]
+        except Exception:
+            pass
 
     platform_counts = {
         key.removeprefix("platform_").removesuffix("_urls"): value
@@ -96,6 +153,16 @@ def reset_webhook_metrics() -> None:
     """Reset webhook counters (used by tests)."""
     _webhook_metrics.clear()
     _webhook_url_domain_counts.clear()
+
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            keys = list(redis_client.scan_iter(match="webhook:metric:*"))
+            if keys:
+                redis_client.delete(*keys)
+            redis_client.delete("webhook:domains")
+        except Exception:
+            pass
 
 
 # ── URL extraction regex ────────────────────────────────

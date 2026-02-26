@@ -60,3 +60,55 @@ def test_apply_now_for_job_approves_and_queues(monkeypatch):
         assert refreshed.status == JobStatus.APPROVED
     finally:
         db.close()
+
+
+def test_apply_now_for_job_is_idempotent_for_approved(monkeypatch):
+    init_db()
+    db = get_session_factory()()
+    try:
+        msg = Message(
+            whatsapp_message_id=f"msg-jobs-approved-{uuid4().hex[:8]}",
+            sender_phone="15550001111",
+            body="https://example.com/jobs/2",
+        )
+        db.add(msg)
+        db.flush()
+
+        extracted = ExtractedURL(
+            message_id=msg.id,
+            original_url="https://example.com/jobs/2",
+            normalized_url="https://example.com/jobs/2",
+            url_hash=f"hash-jobs-approved-{uuid4().hex[:8]}",
+        )
+        db.add(extracted)
+        db.flush()
+
+        job = Job(
+            extracted_url_id=extracted.id,
+            title="Platform Engineer",
+            company="Acme",
+            source_url="https://example.com/jobs/2",
+            apply_url="https://example.com/jobs/2/apply",
+            status=JobStatus.APPROVED,
+            score=90,
+        )
+        db.add(job)
+        db.flush()
+
+        app_row = Application(job_id=job.id, status=JobStatus.APPROVED)
+        db.add(app_row)
+        db.commit()
+
+        from worker.tasks import submit_application_task
+
+        queued = []
+        monkeypatch.setattr(submit_application_task, "delay", lambda app_id: queued.append(app_id))
+
+        with TestClient(app) as client:
+            resp = client.post(f"/api/jobs/{job.id}/apply-now")
+
+        assert resp.status_code == 200
+        assert resp.json()["message"] == "Application already approved"
+        assert queued == []
+    finally:
+        db.close()
