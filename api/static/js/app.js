@@ -12,7 +12,8 @@ const state = {
     urlPipeline: [],
     filters: {
         applications: 'draft',
-        jobs: '' // empty means all
+        jobs: '', // empty means all
+        jobsSearch: ''
     }
 };
 
@@ -38,6 +39,7 @@ const els = {
     btnRefreshUrlPipeline: document.getElementById('btn-refresh-url-pipeline'),
     btnApproveVisibleDrafts: document.getElementById('btn-approve-visible-drafts'),
     btnOpenDraftLinks: document.getElementById('btn-open-draft-links'),
+    jobsSearch: document.getElementById('jobs-search'),
     
     // Modals
     reviewModal: document.getElementById('review-modal'),
@@ -110,6 +112,13 @@ function setupEventListeners() {
 
     if (els.btnOpenDraftLinks) {
         els.btnOpenDraftLinks.addEventListener('click', () => openDraftApplyLinks());
+    }
+
+    if (els.jobsSearch) {
+        els.jobsSearch.addEventListener('input', (e) => {
+            state.filters.jobsSearch = (e.target.value || '').trim().toLowerCase();
+            renderJobs();
+        });
     }
     
     // Auth token
@@ -322,12 +331,19 @@ function renderApplications() {
 }
 
 function renderJobs() {
-    if (state.jobs.length === 0) {
-        els.jobsTableBody.innerHTML = `<tr><td colspan="5" class="text-center text-dim py-4">No jobs found.</td></tr>`;
+    const query = state.filters.jobsSearch || '';
+    const filteredJobs = state.jobs.filter((job) => {
+        if (!query) return true;
+        const haystack = `${job.title} ${job.company} ${job.location}`.toLowerCase();
+        return haystack.includes(query);
+    });
+
+    if (filteredJobs.length === 0) {
+        els.jobsTableBody.innerHTML = `<tr><td colspan="6" class="text-center text-dim py-4">No jobs found.</td></tr>`;
         return;
     }
-    
-    els.jobsTableBody.innerHTML = state.jobs.map(job => `
+
+    els.jobsTableBody.innerHTML = filteredJobs.map(job => `
         <tr>
             <td class="font-medium">
                 <a href="${job.apply_url || job.source_url}" target="_blank" class="text-main" style="text-decoration:none">
@@ -338,9 +354,15 @@ function renderJobs() {
             <td><span class="status scored">${job.score !== null ? job.score : '-'}</span></td>
             <td><span class="status ${job.status}">${job.status.replace('_', ' ')}</span></td>
             <td class="text-dim">${new Date(job.created_at).toLocaleDateString()}</td>
+            <td>
+                <div class="card-actions">
+                    <button class="btn btn-primary btn-sm" onclick="applyNowForJob(${job.id})">Apply Now</button>
+                    <a class="btn btn-glass btn-sm" href="${job.apply_url || job.source_url}" target="_blank" rel="noopener">Open</a>
+                </div>
+            </td>
         </tr>
     `).join('');
-    
+
     lucide.createIcons();
 }
 
@@ -525,5 +547,13 @@ window.resolveAuthPrompt = async (urlId) => {
     const res = await apiCall(`/api/urls/${urlId}/resolve-auth`, 'POST', { authenticated_url: authenticatedUrl });
     if (!res) return;
     showToast('Authenticated URL updated and re-queued', 'success');
+    refreshAllData();
+};
+
+
+window.applyNowForJob = async (jobId) => {
+    const res = await apiCall(`/api/jobs/${jobId}/apply-now`, 'POST');
+    if (!res) return;
+    showToast('Job approved and queued for submission', 'success');
     refreshAllData();
 };

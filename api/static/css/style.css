@@ -786,3 +786,24 @@ h1, h2, h3, h4, h5 {
     gap: 8px;
     flex-wrap: wrap;
 }
+
+
+.jobs-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.jobs-search {
+    min-width: 260px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+}
+
+.jobs-search:focus {
+    outline: none;
+    border-color: var(--primary);
+}

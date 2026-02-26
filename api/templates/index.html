@@ -100,10 +100,13 @@
                 <section id="view-jobs" class="view">
                     <div class="list-header">
                         <h2>Discovered Jobs</h2>
-                        <div class="filter-group">
+                        <div class="jobs-toolbar">
+                            <input id="jobs-search" class="jobs-search" placeholder="Search title/company/location..." />
+                            <div class="filter-group">
                             <button class="filter-btn active" data-status="">All</button>
                             <button class="filter-btn" data-status="scored">Scored</button>
                             <button class="filter-btn" data-status="skipped">Skipped</button>
+                        </div>
                         </div>
                     </div>
                     <div class="table-container">
@@ -115,6 +118,7 @@
                                     <th>Score</th>
                                     <th>Status</th>
                                     <th>Date</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="jobs-table-body">

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, Depends, Query
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from db.models import Job, JobStatus
+from db.models import Application, Job, JobStatus
 from db.session import get_db
 
 logger = structlog.get_logger(__name__)
@@ -95,3 +97,33 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
         status=job.status.value if job.status else "",
         created_at=job.created_at.isoformat() if job.created_at else "",
     )
+
+
+@router.post("/jobs/{job_id}/apply-now")
+async def apply_now_for_job(job_id: int, db: Session = Depends(get_db)):
+    """Quick-apply a single job by approving its draft application and queueing submission."""
+    from worker.tasks import submit_application_task
+
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    app = db.query(Application).filter(Application.job_id == job_id).first()
+    if not app:
+        raise HTTPException(status_code=400, detail="No generated application found for this job")
+
+    if app.status == JobStatus.APPROVED:
+        submit_application_task.delay(app.id)
+        return {"message": "Application already approved; submission queued", "job_id": job_id}
+
+    if app.status != JobStatus.DRAFT:
+        raise HTTPException(status_code=400, detail="Only draft applications can be quick-applied")
+
+    app.status = JobStatus.APPROVED
+    app.approved_at = datetime.utcnow()
+    job.status = JobStatus.APPROVED
+    db.commit()
+
+    submit_application_task.delay(app.id)
+    logger.info("job_quick_applied", job_id=job_id, application_id=app.id)
+    return {"message": "Application approved and queued", "job_id": job_id}
