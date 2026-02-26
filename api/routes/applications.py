@@ -9,6 +9,7 @@ from functools import lru_cache
 import redis
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
+from jobs.models import JobData
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -54,6 +55,13 @@ class ApproveResponse(BaseModel):
     message: str
     application_id: int
     status: str
+
+
+class InterviewPrepResponse(BaseModel):
+    application_id: int
+    job_id: int
+    generated_at: str
+    prep: str
 
 
 @router.get("/applications", response_model=list[ApplicationResponse])
@@ -255,3 +263,44 @@ async def retry_submission(
         previous_submission_status=submission.status.value if submission and submission.status else None,
     )
     return {"message": "Submission retry queued", "application_id": app_id, "force": force}
+
+
+@router.post("/applications/{app_id}/interview-prep", response_model=InterviewPrepResponse)
+async def generate_application_interview_prep(app_id: int, db: Session = Depends(get_db)):
+    """Generate interview-prep notes tailored to a specific application."""
+    from llm.generation import generate_interview_prep
+    from profile.loader import get_profile
+
+    app = db.query(Application).filter(Application.id == app_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    job = app.job
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found for application")
+
+    profile = get_profile()
+    job_data = JobData(
+        title=job.title or "",
+        company=job.company or "",
+        location=job.location or "",
+        employment_type=job.employment_type or "",
+        seniority=job.seniority or "",
+        description=job.description or "",
+        requirements=job.requirements or "",
+        apply_url=job.apply_url or "",
+        source_url=job.source_url or "",
+    )
+
+    try:
+        prep = await generate_interview_prep(job_data, profile)
+    except Exception as exc:
+        logger.error("interview_prep_generation_failed", application_id=app_id, error=str(exc))
+        raise HTTPException(status_code=502, detail="Failed to generate interview prep") from exc
+
+    return InterviewPrepResponse(
+        application_id=app.id,
+        job_id=job.id,
+        generated_at=datetime.utcnow().isoformat(),
+        prep=prep,
+    )

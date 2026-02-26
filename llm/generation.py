@@ -14,6 +14,7 @@ from llm.prompts import (
     QA_ANSWERS_PROMPT,
     RECRUITER_MESSAGE_PROMPT,
     SYSTEM_PROMPT,
+    INTERVIEW_PREP_PROMPT,
 )
 
 logger = structlog.get_logger(__name__)
@@ -155,3 +156,29 @@ async def generate_full_application(
         has_placeholders=app.has_placeholders,
     )
     return app
+
+
+async def generate_interview_prep(
+    job: JobData,
+    profile: UserProfile,
+    client: LLMClient | None = None,
+) -> str:
+    """Generate a tailored interview prep brief for a specific job."""
+    if client is None:
+        client = get_llm_client()
+
+    prompt = INTERVIEW_PREP_PROMPT.format(
+        job_title=job.title,
+        company=job.company,
+        location=job.location,
+        description=(job.description or "")[:3500],
+        requirements=(job.requirements or "")[:2500],
+        name=profile.personal.name,
+        user_location=profile.personal.location,
+        work_authorization=profile.personal.work_authorization,
+        resume_text=profile.resume.text[:5000],
+    )
+
+    result = await client.generate(prompt=prompt, system=SYSTEM_PROMPT, max_tokens=1800)
+    logger.info("interview_prep_generated", job=job.title, length=len(result))
+    return result

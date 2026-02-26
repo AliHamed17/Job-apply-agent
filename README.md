@@ -131,6 +131,7 @@ curl -X POST http://localhost:8000/api/ingest \
 | POST | `/api/applications/{id}/approve` | Bearer | Approve and queue for submission |
 | POST | `/api/applications/{id}/reject` | Bearer | Reject application |
 | POST | `/api/applications/{id}/retry-submit` | Bearer | Retry submission for an approved application |
+| POST | `/api/applications/{id}/interview-prep` | Bearer | Generate a tailored interview prep brief for the application |
 | GET | `/api/submissions` | Bearer | List submission queue entries (status/error/platform) |
 | GET | `/api/dashboard` | Bearer | Pipeline summary stats |
 | POST | `/api/ingest` | Bearer | Manually ingest a URL |

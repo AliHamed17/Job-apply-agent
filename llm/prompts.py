@@ -83,3 +83,35 @@ If info is missing, use [PLACEHOLDER: ...].
 
 Respond with the JSON object only.
 """
+
+
+# ── Interview Prep Prompt ─────────────────────────────────
+INTERVIEW_PREP_PROMPT = """\
+Create a concise interview prep brief for this specific application.
+
+## Job Details
+- Title: {job_title}
+- Company: {company}
+- Location: {location}
+- Description: {description}
+- Requirements: {requirements}
+
+## Candidate Profile
+- Name: {name}
+- Location: {user_location}
+- Work Authorization: {work_authorization}
+- Resume: {resume_text}
+
+## Output Format
+Return plain text with these sections in order:
+1) Role Snapshot (5 bullets)
+2) Likely Technical Questions (8 bullets with short prep hints)
+3) Behavioral Stories to Prepare (5 bullets mapped to resume evidence)
+4) Company-Fit Talking Points (5 bullets)
+5) 30-60-90 Day Value Plan (3 bullets)
+
+Rules:
+- Use only information present in job/profile context.
+- If a critical detail is missing, use [PLACEHOLDER: ...].
+- Keep it practical and interview-focused.
+"""

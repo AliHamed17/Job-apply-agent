@@ -344,6 +344,7 @@ function renderApplications() {
                     <button class="btn btn-primary" onclick="quickApprove(${app.id})">Approve & Submit</button>
                     <button class="btn btn-secondary" onclick="openReviewModal(${app.id})">Review</button>
                 ` : `<button class="btn btn-secondary" onclick="openReviewModal(${app.id})">View Details</button>`}
+                <button class="btn btn-glass" onclick="generateInterviewPrep(${app.id})">Interview Prep</button>
                 ${app.apply_url ? `<a class="btn btn-glass" href="${app.apply_url}" target="_blank" rel="noopener">Open Apply Page</a>` : ''}
             </div>
         </div>
@@ -514,6 +515,31 @@ async function handleReject(appId) {
         refreshAllData();
     }
 }
+
+window.generateInterviewPrep = async (appId) => {
+    const res = await apiCall(`/api/applications/${appId}/interview-prep`, 'POST');
+    if (!res || !res.prep) return;
+
+    const app = state.applications.find((a) => a.id === appId);
+    const title = app ? `${app.job_title} - Interview Prep` : `application-${appId}-interview-prep`;
+    const payload = `${title}
+
+Generated: ${res.generated_at}
+
+${res.prep}`;
+
+    const blob = new Blob([payload], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${title.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    showToast('Interview prep generated and downloaded', 'success');
+};
 
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
