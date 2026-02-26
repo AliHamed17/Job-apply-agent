@@ -28,7 +28,7 @@ from ingestion.url_utils import job_signature, normalize_url, url_hash
 from ingestion.whatsapp_webhook import extract_urls
 from jobs.extractor import extract_jobs
 from jobs.fetcher import fetch_page
-from match.scoring import AUTO_APPLY_THRESHOLD, Action, decide_action, score_job
+from match.scoring import Action, decide_action, get_auto_apply_threshold, score_job
 
 logger = structlog.get_logger(__name__)
 
@@ -241,6 +241,28 @@ def score_job_task(self, job_id: int):
             auto_apply_all_jobs=settings.auto_apply_all_jobs,
         )
 
+        threshold = get_auto_apply_threshold()
+        if action == Action.AUTO_APPLY:
+            decision_reason = "Score above threshold"
+        elif action == Action.SKIP and breakdown.skip_reason:
+            decision_reason = breakdown.skip_reason
+        elif breakdown.total < threshold:
+            decision_reason = "Score below threshold or draft_only enabled"
+        else:
+            decision_reason = "Draft mode or auto-apply disabled"
+
+        logger.info(
+            "auto_apply_decision",
+            job_id=job_id,
+            score=breakdown.total,
+            threshold=threshold,
+            action=action.value,
+            reason=decision_reason,
+            auto_apply_enabled=settings.auto_apply,
+            draft_only=settings.draft_only,
+            auto_apply_all_jobs=settings.auto_apply_all_jobs,
+        )
+
         db_job.score = breakdown.total
         db_job.status = JobStatus.SCORED
 
@@ -333,7 +355,7 @@ def generate_application_task(self, job_id: int):
             and not settings.draft_only
             and (
                 settings.auto_apply_all_jobs
-                or (db_job.score is not None and db_job.score >= AUTO_APPLY_THRESHOLD)
+                or (db_job.score is not None and db_job.score >= get_auto_apply_threshold())
             )
         ):
             app.status = JobStatus.APPROVED

@@ -109,7 +109,8 @@ curl -X POST http://localhost:8000/api/ingest \
 | Mode | Env Var | Default | Behavior |
 |------|---------|---------|----------|
 | Draft Only | `DRAFT_ONLY=true` | **true** | Generate applications but never auto-submit |
-| Auto Apply | `AUTO_APPLY=true` | **false** | Auto-submit high-score jobs (only if DRAFT_ONLY=false) |
+| Auto Apply | `AUTO_APPLY=true` | **false** | Auto-submit jobs that meet `AUTO_APPLY_THRESHOLD` (only if DRAFT_ONLY=false) |
+| Auto Apply Threshold | `AUTO_APPLY_THRESHOLD=80.0` | **80.0** | Minimum score required for auto-apply when enabled |
 
 ## API Endpoints
 

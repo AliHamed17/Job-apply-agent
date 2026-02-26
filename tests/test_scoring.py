@@ -15,6 +15,7 @@ from match.scoring import (
     Action,
     ScoreBreakdown,
     decide_action,
+    get_auto_apply_threshold,
     score_job,
 )
 
@@ -241,3 +242,17 @@ class TestAutoApplyAllJobs:
             auto_apply_all_jobs=True,
         )
         assert action == Action.AUTO_APPLY
+
+
+def test_auto_apply_threshold_from_settings():
+    from core.config import get_settings
+
+    settings = get_settings()
+    original = settings.auto_apply_threshold
+    try:
+        settings.auto_apply_threshold = 61.5
+        assert get_auto_apply_threshold() == 61.5
+        action = decide_action(score=62, draft_only=False, auto_apply_enabled=True)
+        assert action == Action.AUTO_APPLY
+    finally:
+        settings.auto_apply_threshold = original

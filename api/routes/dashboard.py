@@ -14,7 +14,7 @@ from core.config import get_settings
 from db.models import Application, ExtractedURL, Job, JobStatus, Message, Submission, URLStatus
 from db.session import get_db
 from ingestion.url_utils import normalize_url, url_hash
-from match.scoring import AUTO_APPLY_THRESHOLD
+from match.scoring import get_auto_apply_threshold
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["dashboard"])
@@ -167,7 +167,7 @@ async def list_pipeline_urls(
 
             if (
                 job.score is not None
-                and job.score >= AUTO_APPLY_THRESHOLD
+                and job.score >= get_auto_apply_threshold()
                 and app is not None
                 and app.status == JobStatus.DRAFT
             ):
@@ -300,7 +300,7 @@ async def auto_apply_for_url(url_id: int, db: Session = Depends(get_db)):
 
         if (
             not settings.auto_apply_all_jobs
-            and (job.score is None or job.score < AUTO_APPLY_THRESHOLD)
+            and (job.score is None or job.score < get_auto_apply_threshold())
         ):
             skipped += 1
             continue

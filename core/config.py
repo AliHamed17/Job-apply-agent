@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     draft_only: bool = True
     auto_apply: bool = False
     auto_apply_all_jobs: bool = False
+    auto_apply_threshold: float = 80.0
 
     # ── Rate Limiting ───────────────────────────────────
     rate_limit_requests_per_minute: int = 10

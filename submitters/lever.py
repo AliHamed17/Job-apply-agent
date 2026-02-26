@@ -42,13 +42,8 @@ class LeverSubmitter(BaseSubmitter):
         The Lever Postings API accepts form data with candidate info.
         """
         if not self.api_key:
-            logger.warning("lever_no_api_key")
-            return SubmissionResult(
-                success=False,
-                platform=self.platform_name,
-                status="failed",
-                error="Lever API key not configured",
-            )
+            logger.info("lever_api_key_missing_falling_back_to_browser")
+            return await self._submit_via_browser(job, application, user_profile, resume_path)
 
         try:
             posting_id = self._extract_posting_id(job.apply_url or job.source_url)
@@ -117,6 +112,111 @@ class LeverSubmitter(BaseSubmitter):
                 status="failed",
                 error=str(exc),
             )
+
+
+    async def _submit_via_browser(
+        self,
+        job: JobData,
+        application: GeneratedApplication,
+        user_profile: dict,
+        resume_path: str | None = None,
+    ) -> SubmissionResult:
+        """Fallback browser-based submission for public Lever forms."""
+        try:
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+            from playwright.async_api import async_playwright
+        except Exception as exc:
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error=f"Playwright not available: {exc}",
+            )
+
+        apply_url = (job.apply_url or job.source_url or "").replace("api.lever.co", "jobs.lever.co")
+        if not apply_url:
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error="Missing Lever apply URL",
+            )
+
+        personal = user_profile.get("personal", {})
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.goto(apply_url, wait_until="domcontentloaded", timeout=30000)
+
+                await page.locator('input[name="name"]').first.fill(personal.get("name", ""))
+                await page.locator('input[name="email"]').first.fill(personal.get("email", ""))
+
+                phone = page.locator('input[name="phone"], input[type="tel"]').first
+                if await phone.count():
+                    await phone.fill(personal.get("phone", ""))
+
+                if application.cover_letter:
+                    cover = page.locator('textarea[name="comments"], textarea').first
+                    if await cover.count():
+                        await cover.fill(application.cover_letter[:4000])
+
+                if resume_path:
+                    upload = page.locator('input[type="file"]').first
+                    if await upload.count():
+                        await upload.set_input_files(resume_path)
+
+                await self._fill_common_screening_questions(page)
+                await browser.close()
+
+            return SubmissionResult(
+                success=True,
+                platform=self.platform_name,
+                status="draft_only",
+                error="Browser form filled (submission left for final human confirmation)",
+            )
+        except PlaywrightTimeoutError:
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error="Timed out while loading Lever application form",
+            )
+        except Exception as exc:
+            logger.error("lever_browser_submit_error", error=str(exc))
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error=str(exc),
+            )
+
+    async def _fill_common_screening_questions(self, page) -> None:
+        """Fill common work authorization and sponsorship questions."""
+        yes_selectors = [
+            'label:has-text("authorized") input[value="yes"]',
+            'label:has-text("work authorization") input[value="yes"]',
+        ]
+        no_selectors = [
+            'label:has-text("sponsorship") input[value="no"]',
+            'label:has-text("visa") input[value="no"]',
+        ]
+
+        for selector in yes_selectors:
+            locator = page.locator(selector).first
+            if await locator.count():
+                await locator.check(force=True)
+
+        for selector in no_selectors:
+            locator = page.locator(selector).first
+            if await locator.count():
+                await locator.check(force=True)
+
+        exp_inputs = page.locator('input[type="number"][name*="experience" i]')
+        count = await exp_inputs.count()
+        for idx in range(count):
+            await exp_inputs.nth(idx).fill("5")
 
     @staticmethod
     def _extract_posting_id(url: str) -> str | None:

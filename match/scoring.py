@@ -33,7 +33,17 @@ EMPLOYMENT_WEIGHT = 10
 SALARY_WEIGHT = 5  # bonus, can push above 100
 
 SKIP_THRESHOLD = 20
-AUTO_APPLY_THRESHOLD = 80
+
+def get_auto_apply_threshold() -> float:
+    """Read auto-apply threshold from runtime settings with safe fallback."""
+    try:
+        from core.config import get_settings
+
+        threshold = float(get_settings().auto_apply_threshold)
+    except Exception:
+        threshold = 80.0
+
+    return max(0.0, min(100.0, threshold))
 
 
 @dataclass
@@ -219,7 +229,7 @@ def decide_action(
     Rules:
     - If blacklisted or score < SKIP_THRESHOLD → SKIP
     - If draft_only=True (default) → always DRAFT
-    - If auto_apply=True AND score >= AUTO_APPLY_THRESHOLD → AUTO_APPLY
+    - If auto_apply=True AND score >= configured auto-apply threshold → AUTO_APPLY
     - Otherwise → DRAFT
     """
     if skip_reason:
@@ -234,7 +244,9 @@ def decide_action(
     if draft_only:
         return Action.DRAFT
 
-    if auto_apply_enabled and score >= AUTO_APPLY_THRESHOLD:
+    threshold = get_auto_apply_threshold()
+
+    if auto_apply_enabled and score >= threshold:
         return Action.AUTO_APPLY
 
     return Action.DRAFT
