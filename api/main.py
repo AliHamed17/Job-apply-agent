@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     if config_errors:
         raise RuntimeError("; ".join(config_errors))
 
+    _rate_limit_store.clear()
     init_db()
     logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
     yield

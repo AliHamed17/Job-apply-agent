@@ -286,6 +286,7 @@ async def auto_apply_for_url(url_id: int, db: Session = Depends(get_db)):
     approved_count = 0
     queued_count = 0
     skipped = 0
+    approved_app_ids: list[int] = []
 
     for job in jobs:
         app = db.query(Application).filter(Application.job_id == job.id).first()
@@ -308,14 +309,13 @@ async def auto_apply_for_url(url_id: int, db: Session = Depends(get_db)):
         app.approved_at = datetime.utcnow()
         job.status = JobStatus.APPROVED
         approved_count += 1
+        approved_app_ids.append(app.id)
 
     db.commit()
 
-    for job in jobs:
-        app = db.query(Application).filter(Application.job_id == job.id).first()
-        if app and app.status == JobStatus.APPROVED:
-            submit_application_task.delay(app.id)
-            queued_count += 1
+    for application_id in approved_app_ids:
+        submit_application_task.delay(application_id)
+        queued_count += 1
 
     logger.info(
         "url_auto_apply_triggered",
