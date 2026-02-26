@@ -99,20 +99,12 @@ async def list_jobs(
 
     if platform:
         platform_filter = platform.lower().strip()
-        platform_predicates = {
-            "greenhouse": ["%greenhouse.io%", "%boards.greenhouse.io%"],
-            "lever": ["%lever.co%", "%jobs.lever.co%"],
-            "workday": ["%myworkdayjobs.com%", "%workday%"],
-            "linkedin": ["%linkedin.com/jobs%"],
-            "indeed": ["%indeed.com%"],
-        }
-        patterns = platform_predicates.get(platform_filter, [])
-        if patterns:
-            query = query.filter(
-                or_(
-                    *([Job.apply_url.ilike(p) for p in patterns] + [Job.source_url.ilike(p) for p in patterns])
-                )
+        query = query.filter(
+            or_(
+                Job.platform == platform_filter,
+                Job.platform.is_(None),
             )
+        )
 
     jobs = query.offset(offset).limit(limit).all()
 
@@ -130,7 +122,7 @@ async def list_jobs(
             score=j.score,
             status=j.status.value if j.status else "",
             created_at=j.created_at.isoformat() if j.created_at else "",
-            platform=identify_job_platform(j.apply_url or j.source_url),
+            platform=j.platform or identify_job_platform(j.apply_url or j.source_url),
         )
         for j in jobs
     ]
@@ -156,7 +148,7 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
         score=job.score,
         status=job.status.value if job.status else "",
         created_at=job.created_at.isoformat() if job.created_at else "",
-        platform=identify_job_platform(job.apply_url or job.source_url),
+        platform=job.platform or identify_job_platform(job.apply_url or job.source_url),
     )
 
 

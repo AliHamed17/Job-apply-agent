@@ -118,6 +118,7 @@ class Job(Base):
     job_signature = Column(String(64), nullable=True)  # hash(title+company+location)
     status = Column(Enum(JobStatus), default=JobStatus.EXTRACTED, nullable=False)
     score = Column(Float, nullable=True)
+    platform = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     extracted_url = relationship("ExtractedURL", back_populates="jobs")
@@ -127,6 +128,7 @@ class Job(Base):
         Index("ix_jobs_apply_url_hash", "apply_url_hash"),
         Index("ix_jobs_signature", "job_signature"),
         Index("ix_jobs_status", "status"),
+        Index("ix_jobs_platform", "platform"),
     )
 
 

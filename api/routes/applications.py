@@ -4,17 +4,31 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from functools import lru_cache
 
+import redis
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from core.config import get_settings
 from db.models import Application, JobStatus, Submission, SubmissionStatus
 from db.session import get_db
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["applications"])
+
+
+@lru_cache
+def _get_redis_client():
+    try:
+        settings = get_settings()
+        client = redis.from_url(settings.redis_url, socket_connect_timeout=0.2, socket_timeout=0.2)
+        client.ping()
+        return client
+    except Exception:
+        return None
 
 
 class ApplicationResponse(BaseModel):
@@ -195,21 +209,49 @@ async def list_submissions(db: Session = Depends(get_db)):
 
 
 @router.post("/applications/{app_id}/retry-submit")
-async def retry_submission(app_id: int, db: Session = Depends(get_db)):
-    """Retry submission for an approved application."""
+async def retry_submission(
+    app_id: int,
+    force: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Retry submission for eligible application states with optional force override."""
     from worker.tasks import submit_application_task
 
     app = db.query(Application).filter(Application.id == app_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    if app.status != JobStatus.APPROVED:
-        raise HTTPException(status_code=400, detail="Only approved applications can be retried")
-
     submission = app.submission
-    if submission and submission.status == SubmissionStatus.PENDING:
-        return {"message": "Submission already pending", "application_id": app_id}
+
+    if not force:
+        if app.status != JobStatus.APPROVED:
+            raise HTTPException(status_code=400, detail="Only approved applications can be retried")
+
+        if submission and submission.status == SubmissionStatus.PENDING:
+            return {"message": "Submission already pending", "application_id": app_id}
+
+        if submission and submission.status not in {
+            SubmissionStatus.FAILED,
+            SubmissionStatus.NEEDS_HUMAN_CONFIRMATION,
+            SubmissionStatus.DRAFT_ONLY,
+        }:
+            raise HTTPException(status_code=400, detail="Submission state is not retry-eligible")
+
+    redis_client = _get_redis_client()
+    cooldown_key = f"submission_retry_cooldown:{app_id}"
+    if redis_client is not None:
+        try:
+            if not force and redis_client.get(cooldown_key):
+                return {"message": "Retry is on cooldown", "application_id": app_id}
+            redis_client.setex(cooldown_key, 30, "1")
+        except Exception:
+            pass
 
     submit_application_task.delay(app_id)
-    logger.info("submission_retry_queued", application_id=app_id)
-    return {"message": "Submission retry queued", "application_id": app_id}
+    logger.info(
+        "submission_retry_queued",
+        application_id=app_id,
+        force=force,
+        previous_submission_status=submission.status.value if submission and submission.status else None,
+    )
+    return {"message": "Submission retry queued", "application_id": app_id, "force": force}

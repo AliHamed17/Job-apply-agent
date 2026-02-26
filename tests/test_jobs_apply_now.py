@@ -120,3 +120,45 @@ def test_apply_now_for_job_is_idempotent_for_approved(monkeypatch):
         assert queued == []
     finally:
         db.close()
+
+
+def test_jobs_list_filters_by_persisted_platform():
+    init_db()
+    db = get_session_factory()()
+    try:
+        msg = Message(
+            whatsapp_message_id=f"msg-jobs-plat-{uuid4().hex[:8]}",
+            sender_phone="15550001111",
+            body="https://example.com/jobs/plat",
+        )
+        db.add(msg)
+        db.flush()
+
+        extracted = ExtractedURL(
+            message_id=msg.id,
+            original_url="https://example.com/jobs/plat",
+            normalized_url="https://example.com/jobs/plat",
+            url_hash=f"hash-jobs-plat-{uuid4().hex[:8]}",
+        )
+        db.add(extracted)
+        db.flush()
+
+        job = Job(
+            extracted_url_id=extracted.id,
+            title="Platform Filter Test",
+            company="Acme",
+            source_url="https://jobs.lever.co/acme/plat",
+            apply_url="https://jobs.lever.co/acme/plat",
+            status=JobStatus.DRAFT,
+            score=70,
+            platform="lever",
+        )
+        db.add(job)
+        db.commit()
+
+        with TestClient(app) as client:
+            resp = client.get("/api/jobs?platform=lever")
+            assert resp.status_code == 200
+            assert any(item["id"] == job.id for item in resp.json())
+    finally:
+        db.close()

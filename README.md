@@ -55,15 +55,20 @@ WhatsApp Cloud API (user forwards job links → business number)
 git clone https://github.com/AliHamed17/Job-apply-agent.git
 cd Job-apply-agent
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Linux/Mac
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+# Linux/Mac
+# source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
 ### 2. Configure environment
 
 ```bash
-copy .env.example .env
+# Linux/Mac
+cp .env.example .env
+# Windows (cmd)
+# copy .env.example .env
 # Edit .env with your API keys
 ```
 
@@ -221,3 +226,23 @@ job-agent/
 ## License
 
 MIT
+
+
+## Operations Runbook
+
+### Redis behavior (required vs optional)
+- API and workers run without Redis, but fall back to local/in-memory behavior.
+- In multi-instance deployments, Redis is strongly recommended for shared rate limits/metrics and consistent operator views.
+
+### Browser fallback semantics
+- `requires_human_confirmation` means the automation filled the form but did not finalize submit.
+- Treat this as an operational queue state requiring manual confirmation.
+
+### Submission retry workflow
+- Use `POST /api/applications/{id}/retry-submit` for retry-eligible submission states.
+- Use `force=true` only for operator override workflows (cooldown protected + audit log event emitted).
+
+### Suggested alerts
+- High rate of `rate_limited` events.
+- Rising `fetch_blocked_redirect_target` / auth-wall fetch errors.
+- Growing `needs_human_confirmation` submission states without follow-up completion.

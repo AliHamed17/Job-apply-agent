@@ -13,7 +13,7 @@ import hmac
 import re
 from functools import lru_cache
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -54,6 +54,8 @@ WEBHOOK_METRICS_HASH_KEY = "webhook:metrics"
 WEBHOOK_DOMAINS_ZSET_KEY = "webhook:domains"
 WEBHOOK_METRICS_TTL_SECONDS = 60 * 60 * 24 * 30
 WEBHOOK_MAX_DOMAIN_CARDINALITY = 1000
+WEBHOOK_HOURLY_PREFIX = "webhook:metrics:hour"
+WEBHOOK_DAILY_PREFIX = "webhook:metrics:day"
 
 
 def _inc_metric(name: str, amount: int = 1) -> None:
@@ -64,6 +66,12 @@ def _inc_metric(name: str, amount: int = 1) -> None:
         try:
             redis_client.hincrby(WEBHOOK_METRICS_HASH_KEY, name, amount)
             redis_client.expire(WEBHOOK_METRICS_HASH_KEY, WEBHOOK_METRICS_TTL_SECONDS)
+
+            hour_key, day_key = _metrics_bucket_keys()
+            redis_client.hincrby(hour_key, name, amount)
+            redis_client.hincrby(day_key, name, amount)
+            redis_client.expire(hour_key, 60 * 60 * 24 * 7)
+            redis_client.expire(day_key, 60 * 60 * 24 * 90)
         except Exception:
             pass
 
@@ -85,6 +93,13 @@ def _track_url_domain(url: str) -> None:
             redis_client.zremrangebyrank(WEBHOOK_DOMAINS_ZSET_KEY, 0, -WEBHOOK_MAX_DOMAIN_CARDINALITY - 1)
         except Exception:
             pass
+
+
+def _metrics_bucket_keys() -> tuple[str, str]:
+    now = datetime.now(timezone.utc)
+    hour_key = f"{WEBHOOK_HOURLY_PREFIX}:{now:%Y%m%d%H}"
+    day_key = f"{WEBHOOK_DAILY_PREFIX}:{now:%Y%m%d}"
+    return hour_key, day_key
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float:
@@ -149,11 +164,26 @@ def get_webhook_metrics_payload(top_n_domains: int = 10) -> dict[str, Any]:
         "message_dedup_rate": _safe_ratio(duplicate_messages, messages_received),
     }
 
+    recent_buckets: dict[str, dict[str, int]] = {}
+    redis_client = _get_redis_client()
+    if redis_client is not None:
+        try:
+            hour_key, day_key = _metrics_bucket_keys()
+            for key in (hour_key, day_key):
+                raw = redis_client.hgetall(key)
+                recent_buckets[key] = {
+                    (k.decode() if isinstance(k, bytes) else str(k)): int(v)
+                    for k, v in raw.items()
+                }
+        except Exception:
+            pass
+
     return {
         "counters": counters,
         "top_url_domains": top_domains,
         "platform_breakdown": platform_counts,
         "quality": quality,
+        "recent_buckets": recent_buckets,
     }
 
 
@@ -167,6 +197,11 @@ def reset_webhook_metrics() -> None:
         try:
             redis_client.delete(WEBHOOK_METRICS_HASH_KEY)
             redis_client.delete(WEBHOOK_DOMAINS_ZSET_KEY)
+            hourly = list(redis_client.scan_iter(match=f"{WEBHOOK_HOURLY_PREFIX}:*"))
+            daily = list(redis_client.scan_iter(match=f"{WEBHOOK_DAILY_PREFIX}:*"))
+            keys = hourly + daily
+            if keys:
+                redis_client.delete(*keys)
         except Exception:
             pass
 

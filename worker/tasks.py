@@ -24,7 +24,7 @@ from db.models import (
     URLStatus,
 )
 from db.session import get_session_factory
-from ingestion.url_utils import job_signature, normalize_url, url_hash
+from ingestion.url_utils import identify_job_platform, job_signature, normalize_url, url_hash
 from ingestion.whatsapp_webhook import extract_urls
 from jobs.extractor import extract_jobs
 from jobs.fetcher import fetch_page
@@ -175,6 +175,7 @@ def process_url_task(self, url_id: int):
                 apply_url_hash=apply_hash,
                 job_signature=sig,
                 status=JobStatus.EXTRACTED,
+                platform=identify_job_platform(job_data.apply_url or job_data.source_url),
             )
             db.add(db_job)
             db.flush()
