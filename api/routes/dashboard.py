@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from core.config import get_settings
 from db.models import Application, ExtractedURL, Job, JobStatus, Message, Submission, URLStatus
 from db.session import get_db
 from ingestion.url_utils import normalize_url, url_hash
@@ -281,6 +282,7 @@ async def auto_apply_for_url(url_id: int, db: Session = Depends(get_db)):
             message="No jobs found for this URL",
         )
 
+    settings = get_settings()
     approved_count = 0
     queued_count = 0
     skipped = 0
@@ -295,7 +297,10 @@ async def auto_apply_for_url(url_id: int, db: Session = Depends(get_db)):
             skipped += 1
             continue
 
-        if job.score is None or job.score < AUTO_APPLY_THRESHOLD:
+        if (
+            not settings.auto_apply_all_jobs
+            and (job.score is None or job.score < AUTO_APPLY_THRESHOLD)
+        ):
             skipped += 1
             continue
 

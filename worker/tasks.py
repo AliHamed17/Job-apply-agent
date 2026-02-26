@@ -238,6 +238,7 @@ def score_job_task(self, job_id: int):
             auto_apply_enabled=settings.auto_apply,
             draft_only=settings.draft_only,
             skip_reason=breakdown.skip_reason,
+            auto_apply_all_jobs=settings.auto_apply_all_jobs,
         )
 
         db_job.score = breakdown.total
@@ -330,8 +331,10 @@ def generate_application_task(self, job_id: int):
         if (
             settings.auto_apply
             and not settings.draft_only
-            and db_job.score is not None
-            and db_job.score >= AUTO_APPLY_THRESHOLD
+            and (
+                settings.auto_apply_all_jobs
+                or (db_job.score is not None and db_job.score >= AUTO_APPLY_THRESHOLD)
+            )
         ):
             app.status = JobStatus.APPROVED
             app.approved_at = datetime.utcnow()

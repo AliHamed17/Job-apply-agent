@@ -230,3 +230,14 @@ class TestScoreBreakdown:
         )
         total = b.compute_total()
         assert total == 0
+
+
+class TestAutoApplyAllJobs:
+    def test_auto_apply_all_jobs_overrides_threshold(self):
+        action = decide_action(
+            score=10,
+            auto_apply_enabled=True,
+            draft_only=False,
+            auto_apply_all_jobs=True,
+        )
+        assert action == Action.AUTO_APPLY

@@ -116,11 +116,13 @@ def test_generation_task_auto_apply(monkeypatch):
     runtime_settings = get_settings()
     original_auto_apply = runtime_settings.auto_apply
     original_draft_only = runtime_settings.draft_only
+    original_auto_apply_all_jobs = runtime_settings.auto_apply_all_jobs
     try:
         settings.auto_apply = True
         settings.draft_only = False
         runtime_settings.auto_apply = True
         runtime_settings.draft_only = False
+        runtime_settings.auto_apply_all_jobs = True
 
         msg = Message(
             whatsapp_message_id=f"msg-auto-1-{uuid4().hex[:8]}",
@@ -148,7 +150,7 @@ def test_generation_task_auto_apply(monkeypatch):
             seniority="senior",
             source_url="https://example.com/jobs/3",
             apply_url="https://example.com/jobs/3/apply",
-            score=92,
+            score=10,
             status=JobStatus.DRAFT,
             description="python fastapi",
             requirements="python",
@@ -193,6 +195,7 @@ def test_generation_task_auto_apply(monkeypatch):
         settings.draft_only = original_draft_only
         runtime_settings.auto_apply = original_auto_apply
         runtime_settings.draft_only = original_draft_only
+        runtime_settings.auto_apply_all_jobs = original_auto_apply_all_jobs
         db.close()
 
 
@@ -349,4 +352,58 @@ def test_resolve_auth_rejects_credential_url(monkeypatch):
         assert resp.status_code == 400
         assert "credentials" in resp.json()["detail"].lower()
     finally:
+        db.close()
+
+
+def test_url_auto_apply_all_jobs_ignores_threshold(monkeypatch):
+    init_db()
+    db = get_session_factory()()
+    runtime_settings = get_settings()
+    original = runtime_settings.auto_apply_all_jobs
+    try:
+        runtime_settings.auto_apply_all_jobs = True
+        msg = Message(
+            whatsapp_message_id=f"msg-auto-all-{uuid4().hex[:8]}",
+            sender_phone="15550001111",
+            body="https://example.com/jobs/5",
+        )
+        db.add(msg)
+        db.flush()
+
+        extracted = ExtractedURL(
+            message_id=msg.id,
+            original_url="https://example.com/jobs/5",
+            normalized_url="https://example.com/jobs/5",
+            url_hash=f"hash-5-{uuid4().hex[:8]}",
+        )
+        db.add(extracted)
+        db.flush()
+
+        job = Job(
+            extracted_url_id=extracted.id,
+            title="Junior Engineer",
+            company="Acme",
+            source_url="https://example.com/jobs/5",
+            score=1,
+            status=JobStatus.DRAFT,
+        )
+        db.add(job)
+        db.flush()
+
+        app_row = Application(job_id=job.id, status=JobStatus.DRAFT)
+        db.add(app_row)
+        db.commit()
+
+        from worker.tasks import submit_application_task
+        queued = []
+        monkeypatch.setattr(submit_application_task, "delay", lambda app_id: queued.append(app_id))
+
+        with TestClient(app) as client:
+            resp = client.post(f"/api/urls/{extracted.id}/auto-apply")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["approved_count"] == 1
+        assert len(queued) == 1
+    finally:
+        runtime_settings.auto_apply_all_jobs = original
         db.close()

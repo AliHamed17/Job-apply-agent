@@ -135,6 +135,12 @@ curl -X POST http://localhost:8000/api/ingest \
 pytest tests/ -v
 ```
 
+For a quick local smoke check before opening a PR, run:
+
+```bash
+pytest -q
+```
+
 ## Project Structure
 
 ```

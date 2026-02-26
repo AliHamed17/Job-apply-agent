@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # ── Application Modes ───────────────────────────────
     draft_only: bool = True
     auto_apply: bool = False
+    auto_apply_all_jobs: bool = False
 
     # ── Rate Limiting ───────────────────────────────────
     rate_limit_requests_per_minute: int = 10

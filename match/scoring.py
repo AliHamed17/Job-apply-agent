@@ -212,6 +212,7 @@ def decide_action(
     auto_apply_enabled: bool = False,
     draft_only: bool = True,
     skip_reason: str | None = None,
+    auto_apply_all_jobs: bool = False,
 ) -> Action:
     """Decide what to do with a scored job.
 
@@ -223,6 +224,9 @@ def decide_action(
     """
     if skip_reason:
         return Action.SKIP
+
+    if auto_apply_enabled and auto_apply_all_jobs and not draft_only:
+        return Action.AUTO_APPLY
 
     if score < SKIP_THRESHOLD:
         return Action.SKIP
