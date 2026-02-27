@@ -3,7 +3,8 @@
     "allow": [
       "Bash(.venv/Scripts/python.exe -m pytest tests/ -v --tb=short)",
       "Bash(.venv/Scripts/python.exe -c \":*)",
-      "Bash(.venv/Scripts/python.exe -c \"from ingestion.url_utils import extract_urls, extract_urls_from_whatsapp_message, normalize_url, is_likely_job_url, is_short_url, expand_short_url; print\\(''url_utils OK''\\)\")"
+      "Bash(.venv/Scripts/python.exe -c \"from ingestion.url_utils import extract_urls, extract_urls_from_whatsapp_message, normalize_url, is_likely_job_url, is_short_url, expand_short_url; print\\(''url_utils OK''\\)\")",
+      "Bash(git add api/main.py api/routes/applications.py api/routes/dashboard.py api/routes/jobs.py api/routes/webhook.py api/static/css/style.css api/static/js/app.js api/templates/index.html core/config.py jobs/extractor.py jobs/fetcher.py jobs/models.py llm/client.py match/scoring.py submitters/ashby.py submitters/greenhouse.py submitters/indeed.py submitters/jobvite.py submitters/lever.py submitters/linkedin.py submitters/smartrecruiters.py submitters/workable.py worker/celery_app.py worker/tasks.py bridge/ core/utils.py jobs/parsers/comeet.py jobs/parsers/linkedin.py submitters/comeet.py submitters/icims.py)"
     ]
   }
 }

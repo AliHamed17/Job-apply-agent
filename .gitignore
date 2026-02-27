@@ -54,3 +54,8 @@ db/migrations/versions/*.pyc
 
 # Uploaded files
 uploads/
+
+# Bridge
+bridge/.wwebjs_auth/
+bridge/.wwebjs_cache/
+bridge/session/
