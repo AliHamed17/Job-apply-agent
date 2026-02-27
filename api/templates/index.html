@@ -34,6 +34,9 @@
             <div class="stat-item" data-tab="jobs">
                 <i data-lucide="briefcase"></i> Job Pipeline
             </div>
+            <div class="stat-item" data-tab="urls">
+                <i data-lucide="link-2"></i> URL Queue
+            </div>
 
             <div class="nav-label">Integrations</div>
             <div class="stat-item wa-item" data-tab="whatsapp">
@@ -119,6 +122,7 @@
                     <div class="filter-group">
                         <button class="filter-btn active" data-status="draft">Drafts</button>
                         <button class="filter-btn" data-status="approved">Approved</button>
+                        <button class="filter-btn" data-status="submitted">Submitted</button>
                         <button class="filter-btn" data-status="skipped">Skipped</button>
                     </div>
                 </div>
@@ -158,6 +162,34 @@
                             </tr>
                         </thead>
                         <tbody id="jobs-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ── URL Queue View ──────────────────────── -->
+            <section id="view-urls" class="view">
+                <div class="list-header">
+                    <h2>URL Queue</h2>
+                    <div class="filter-group">
+                        <button class="filter-btn active" data-url-status="">All</button>
+                        <button class="filter-btn" data-url-status="pending">Pending</button>
+                        <button class="filter-btn" data-url-status="fetched">Fetched</button>
+                        <button class="filter-btn" data-url-status="failed">Failed</button>
+                        <button class="filter-btn" data-url-status="blocked">Blocked</button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>URL</th>
+                                <th style="text-align:center;">Jobs Found</th>
+                                <th>Status</th>
+                                <th>Received</th>
+                                <th style="text-align:center;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="urls-table-body"></tbody>
                     </table>
                 </div>
             </section>
@@ -266,6 +298,7 @@
             <button class="close-btn"><i data-lucide="x"></i></button>
         </div>
         <div class="modal-body">
+            <div id="modal-submission-banner" class="submission-banner" style="display:none;margin-bottom:16px;padding:12px 16px;border-radius:8px;align-items:flex-start;gap:12px;"></div>
             <div class="review-grid">
                 <div class="review-col">
                     <div class="info-card">
@@ -308,6 +341,9 @@
         </div>
         <div class="modal-footer flex-end gap-1">
             <button class="btn btn-secondary" id="btn-reject-app">Skip / Reject</button>
+            <button class="btn btn-retry" id="btn-retry-app" style="display:none;">
+                <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Retry Submission
+            </button>
             <button class="btn btn-primary" id="btn-approve-app">Approve &amp; Submit</button>
         </div>
     </div>

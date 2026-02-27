@@ -10,7 +10,7 @@ const JOB_HOSTS = [
     'weworkremotely.com', 'jobvite.com', 'icims.com', 'smartrecruiters.com',
     'ashbyhq.com', 'rippling.com', 'bamboohr.com', 'workable.com',
     'recruitee.com', 'teamtailor.com', 'amazon.jobs', 'careers.google.com',
-    'careers.microsoft.com',
+    'careers.microsoft.com', 'comeet.com', 'comeet.co',
 ];
 
 const SHORT_HOSTS = [
@@ -25,11 +25,13 @@ const state = {
     dashboardData: null,
     applications: [],
     jobs: [],
+    urls: [],
     messages: [],
     jobSearch: '',
     filters: {
         applications: 'draft',
         jobs: '',
+        urls: '',
     },
     autoRefresh: false,
     autoRefreshTimer: null,
@@ -41,6 +43,7 @@ const tabs = () => document.querySelectorAll('.stat-item[data-tab]');
 const views = () => document.querySelectorAll('.view');
 const appFilters = () => document.querySelectorAll('#view-applications .filter-btn');
 const jobFilters = () => document.querySelectorAll('#view-jobs .filter-btn');
+const urlFilters = () => document.querySelectorAll('#view-urls .filter-btn');
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -78,6 +81,14 @@ function setupListeners() {
         e.currentTarget.classList.add('active');
         state.filters.jobs = e.currentTarget.dataset.status;
         fetchJobs();
+    }));
+
+    // URL Queue filters
+    urlFilters().forEach(btn => btn.addEventListener('click', e => {
+        urlFilters().forEach(b => b.classList.remove('active'));
+        e.currentTarget.classList.add('active');
+        state.filters.urls = e.currentTarget.dataset.urlStatus;
+        renderUrls();
     }));
 
     // Job search
@@ -156,6 +167,7 @@ const TAB_TITLES = {
     dashboard: 'Dashboard',
     applications: 'Approvals',
     jobs: 'Job Pipeline',
+    urls: 'URL Queue',
     whatsapp: 'WhatsApp',
 };
 
@@ -169,6 +181,7 @@ function switchTab(tabId) {
 
     if (tabId === 'applications' && state.applications.length === 0) fetchApplications();
     if (tabId === 'jobs' && state.jobs.length === 0) fetchJobs();
+    if (tabId === 'urls') fetchUrls();
     if (tabId === 'whatsapp') fetchMessages();
 }
 
@@ -204,6 +217,7 @@ async function refreshAllData() {
     // Always keep jobs current (used by dashboard histogram + CSV export)
     await fetchJobs();
     if (state.currentTab === 'applications') await fetchApplications();
+    if (state.currentTab === 'urls') await fetchUrls();
     if (state.currentTab === 'whatsapp') await fetchMessages();
 }
 
@@ -321,7 +335,7 @@ function renderPipelineFunnel(d) {
 
     const max = Math.max(...steps.map(s => s.value), 1);
 
-    container.innerHTML = steps.map((step, i) => {
+    container.innerHTML = steps.map(step => {
         const pct = Math.round((step.value / max) * 100);
         return `
         <div class="funnel-step">
@@ -513,6 +527,21 @@ function renderApplications() {
 
     container.innerHTML = filtered.map(app => {
         const isPending = app.status === 'draft';
+        const canRetry = app.submission_status === 'failed' || app.submission_status === 'draft_only';
+
+        // Submission badge
+        let subBadge = '';
+        if (app.submission_status) {
+            const badgeMap = {
+                success:    ['sub-badge-success', '✅ Submitted'],
+                draft_only: ['sub-badge-draft',   '⚠️ Draft Only'],
+                failed:     ['sub-badge-failed',  '❌ Failed'],
+            };
+            const [cls, label] = badgeMap[app.submission_status] || ['sub-badge-draft', app.submission_status];
+            const platform = app.submission_platform ? ` · ${app.submission_platform.replace(/_/g, ' ')}` : '';
+            subBadge = `<div class="sub-badge ${cls}">${label}${esc(platform)}</div>`;
+        }
+
         return `
         <div class="app-card">
             <div>
@@ -529,17 +558,24 @@ function renderApplications() {
                         <div class="score-bar-fill" style="width:${app.job_score}%"></div>
                     </div>
                 </div>
+                ${subBadge}
                 <div class="app-excerpt">${esc(app.cover_letter || '—')}</div>
             </div>
-            <div style="border-top:1px solid var(--border-light);padding-top:14px;margin-top:auto;">
+            <div style="border-top:1px solid var(--border-light);padding-top:14px;margin-top:auto;display:flex;flex-direction:column;gap:8px;">
                 ${isPending
                 ? `<button class="btn btn-primary full-width" onclick="openReviewModal(${app.id})">
                          <i data-lucide="eye" style="width:14px;height:14px;"></i> Review &amp; Approve
                        </button>`
                 : `<button class="btn btn-secondary full-width" onclick="openReviewModal(${app.id})">
-                         <i data-lucide="eye" style="width:14px;height:14px;"></i> View Details
+                         <i data-lucide="send" style="width:14px;height:14px;"></i> View Submission
                        </button>`
-            }
+                }
+                ${canRetry
+                ? `<button class="btn btn-retry full-width" onclick="handleRetry(${app.id})">
+                         <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Retry Submission
+                       </button>`
+                : ''
+                }
             </div>
         </div>`;
     }).join('');
@@ -715,7 +751,7 @@ async function submitIngest() {
 }
 
 // ── Review Modal ──────────────────────────────────────────────────────────────
-window.openReviewModal = appId => {
+window.openReviewModal = async appId => {
     const app = state.applications.find(a => a.id === appId);
     if (!app) return;
 
@@ -741,13 +777,39 @@ window.openReviewModal = appId => {
     }
     $('modal-qa-list').innerHTML = qaHtml;
 
+    // Submission result (if exists)
+    if (app.submission_status) {
+        const isSuccess = app.submission_status === 'success';
+        const isDraft   = app.submission_status === 'draft_only';
+        const banner    = $('modal-submission-banner');
+        if (banner) {
+            const icon      = isSuccess ? '✅' : isDraft ? '⚠️' : '❌';
+            const headline  = isSuccess ? 'Submitted successfully' : isDraft ? 'Saved as draft — not submitted' : 'Submission failed';
+            const platform  = (app.submission_platform || '').replace(/_/g, ' ');
+            banner.className = `submission-banner ${isSuccess ? 'status-success' : isDraft ? 'status-draft' : 'status-failed'}`;
+            banner.style.display = 'flex';
+            banner.innerHTML = `<span style="font-size:1.2rem;">${icon}</span>
+                <div>
+                    <div style="font-weight:600;">${headline}</div>
+                    <div style="font-size:0.82rem;opacity:0.8;">${platform ? 'Platform: ' + esc(platform) : ''}${app.submission_error ? ' — ' + esc(app.submission_error.slice(0,120)) : ''}</div>
+                </div>`;
+        }
+    } else {
+        const banner = $('modal-submission-banner');
+        if (banner) banner.style.display = 'none';
+    }
+
     const isPending = app.status === 'draft';
+    const canRetry  = app.submission_status === 'failed' || app.submission_status === 'draft_only';
     $('btn-approve-app').style.display = isPending ? 'inline-flex' : 'none';
-    $('btn-reject-app').style.display = isPending ? 'inline-flex' : 'none';
+    $('btn-reject-app').style.display  = isPending ? 'inline-flex' : 'none';
+    const retryBtn = $('btn-retry-app');
+    if (retryBtn) retryBtn.style.display = canRetry ? 'inline-flex' : 'none';
     $('modal-cover-letter').readOnly = !isPending;
 
     $('btn-approve-app').onclick = () => handleApprove(app.id);
-    $('btn-reject-app').onclick = () => handleReject(app.id);
+    $('btn-reject-app').onclick  = () => handleReject(app.id);
+    if (retryBtn) retryBtn.onclick = () => handleRetry(app.id);
 
     $('review-modal').classList.add('visible');
     lucide.createIcons();
@@ -789,6 +851,82 @@ async function handleReject(appId) {
         $('review-modal').classList.remove('visible');
         refreshAllData();
     }
+}
+
+window.handleRetry = async appId => {
+    const res = await apiCall(`/api/applications/${appId}/retry`, 'POST');
+    if (res) {
+        showToast('Re-queued for submission — check back in a moment', 'success');
+        $('review-modal').classList.remove('visible');
+        setTimeout(refreshAllData, 3000);
+    }
+};
+
+// ── URL Queue ──────────────────────────────────────────────────────────────────
+async function fetchUrls() {
+    const data = await apiCall('/api/urls?limit=200');
+    if (!data) return;
+    state.urls = data;
+    renderUrls();
+}
+
+window.retryUrl = async urlId => {
+    const btn = document.getElementById(`url-retry-${urlId}`);
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    const res = await apiCall(`/api/urls/${urlId}/retry`, 'POST');
+    if (res) {
+        showToast('URL re-queued for processing', 'success');
+        setTimeout(fetchUrls, 2000);
+    }
+    if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+};
+
+function renderUrls() {
+    const tbody = $('urls-table-body');
+    const f = state.filters.urls;
+    const rows = f ? state.urls.filter(u => u.status === f) : state.urls;
+
+    if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text-muted);">
+            ${f ? `No ${f} URLs` : 'No URLs yet — send a job link via WhatsApp or use Add Job URL.'}
+        </td></tr>`;
+        return;
+    }
+
+    const statusColors = {
+        fetched: 'var(--success)', pending: 'var(--warning)',
+        failed: 'var(--danger)', blocked: '#f59e0b',
+    };
+
+    tbody.innerHTML = rows.map(u => {
+        const shortUrl = u.url.length > 60 ? u.url.slice(0, 58) + '…' : u.url;
+        const color = statusColors[u.status] || 'var(--text-muted)';
+        const canRetry = u.status === 'failed' || u.status === 'blocked' || (u.status === 'fetched' && u.jobs_found === 0);
+        return `
+        <tr>
+            <td>
+                <a href="${esc(u.url)}" target="_blank" class="job-link" title="${esc(u.url)}">
+                    ${esc(shortUrl)} <i data-lucide="external-link" style="width:11px;height:11px;opacity:0.5;"></i>
+                </a>
+                ${u.error ? `<div style="color:var(--danger);font-size:0.75rem;margin-top:2px;">${esc(u.error.slice(0,80))}</div>` : ''}
+            </td>
+            <td style="text-align:center;">
+                <span style="font-weight:600;color:${u.jobs_found > 0 ? 'var(--success)' : 'var(--text-muted)'};">${u.jobs_found}</span>
+            </td>
+            <td><span class="status" style="background:${color}22;color:${color};border:1px solid ${color}44;">${u.status}</span></td>
+            <td style="color:var(--text-muted);white-space:nowrap;">${fmtDate(u.created_at)}</td>
+            <td style="text-align:center;">
+                ${canRetry
+                    ? `<button id="url-retry-${u.id}" class="btn btn-retry" style="padding:4px 12px;font-size:0.78rem;" onclick="retryUrl(${u.id})">
+                        Retry
+                       </button>`
+                    : '—'
+                }
+            </td>
+        </tr>`;
+    }).join('');
+
+    lucide.createIcons();
 }
 
 // ── Utilities: WhatsApp ────────────────────────────────────────────────────────
