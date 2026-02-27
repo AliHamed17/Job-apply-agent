@@ -13,6 +13,7 @@ import redis
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -64,6 +65,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=settings.trusted_host_list,
 )
 
 
@@ -175,6 +180,23 @@ async def auth_middleware(request: Request, call_next):
         )
 
     return await call_next(request)
+
+
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Attach baseline HTTP security headers to every response."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
+    )
+    return response
 
 
 # ── Correlation ID Middleware ────────────────────────────

@@ -45,3 +45,26 @@ def test_non_exact_docs_path_is_not_auth_exempt():
     finally:
         settings.app_env = original_env
         settings.secret_key = original_secret
+
+
+def test_security_headers_present_on_health():
+    with TestClient(app) as client:
+        resp = client.get("/health")
+
+    assert resp.status_code == 200
+    assert resp.headers.get("x-content-type-options") == "nosniff"
+    assert resp.headers.get("x-frame-options") == "DENY"
+    assert "default-src 'self'" in resp.headers.get("content-security-policy", "")
+
+
+def test_untrusted_host_is_blocked():
+    with TestClient(app) as client:
+        resp = client.get("/health", headers={"host": "evil.example.com"})
+
+    assert resp.status_code == 400
+
+
+def test_prod_wildcard_trusted_host_fails_runtime_validation():
+    conf = Settings(app_env="prod", secret_key="abc", trusted_hosts="*")
+    errors = conf.validate_runtime_config()
+    assert any("TRUSTED_HOSTS" in e for e in errors)

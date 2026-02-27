@@ -140,6 +140,8 @@ curl -X POST http://localhost:8000/api/ingest \
 
 For local-only development, `ALLOW_INSECURE_AUTH_BYPASS=true` can temporarily allow requests without a token when `SECRET_KEY=change-me` and `APP_ENV!=prod`.
 
+Set `TRUSTED_HOSTS` to the hostnames allowed to serve this API (comma-separated). In production, do not use `*`.
+
 ## Running Tests
 
 ```bash
@@ -213,6 +215,7 @@ job-agent/
 | PII in logs | ⚠️ | Avoid logging full message bodies in production |
 | Data encryption at rest | ⚠️ | Use disk-level encryption for SQLite/Postgres |
 | CORS restricted | ⚠️ | Currently localhost only; configure for production |
+| Host header allowlist | ✅ | Enforced via `TRUSTED_HOSTS` middleware |
 
 ## Edge Cases Handled
 

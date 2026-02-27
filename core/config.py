@@ -50,8 +50,9 @@ class Settings(BaseSettings):
     rate_limit_requests_per_minute: int = 10
     polite_crawl_delay_seconds: float = 2.0
 
-    # ── CORS ─────────────────────────────────────────────
+    # ── CORS / Host Hardening ───────────────────────────
     cors_allowed_origins: str = "http://localhost:3000,http://localhost:5173"
+    trusted_hosts: str = "localhost,127.0.0.1,testserver"
 
     # ── Security ────────────────────────────────────────
     secret_key: str = "change-me"
@@ -86,6 +87,13 @@ class Settings(BaseSettings):
 
 
     @property
+    def trusted_host_list(self) -> list[str]:
+        if not self.trusted_hosts:
+            return ["localhost", "127.0.0.1", "testserver"]
+        return [h.strip() for h in self.trusted_hosts.split(",") if h.strip()]
+
+
+    @property
     def fetch_allowed_domain_list(self) -> list[str]:
         if not self.fetch_allowed_domains:
             return []
@@ -114,6 +122,12 @@ class Settings(BaseSettings):
 
         if self.is_production and "*" in self.cors_allowed_origin_list:
             errors.append("CORS_ALLOWED_ORIGINS cannot contain wildcard '*' in production")
+
+        if self.is_production and "*" in self.trusted_host_list:
+            errors.append("TRUSTED_HOSTS cannot contain wildcard '*' in production")
+
+        if self.is_production and not self.trusted_host_list:
+            errors.append("TRUSTED_HOSTS must include at least one host in production")
 
         return errors
 
