@@ -274,9 +274,10 @@ class IndeedSubmitter(BaseSubmitter):
 
     async def _fill_indeed_fields(self, page, application: GeneratedApplication,
                                   user_profile: dict, resume_path: str | None) -> None:
-        """Fill visible Indeed form fields."""
+        """Fill visible Indeed form fields using profile data and Q&A answers."""
         personal = user_profile.get("personal", {})
         links    = user_profile.get("links", {})
+        name_parts = (personal.get("name", "") or "").split()
 
         field_map = {
             "name":        personal.get("name", ""),
@@ -301,7 +302,7 @@ class IndeedSubmitter(BaseSubmitter):
                 await file_input.set_input_files(resume_path)
                 await page.wait_for_timeout(1000)
 
-        # Cover letter (if a textarea is visible)
+        # Cover letter
         cl_field = page.locator(
             'textarea[name="coverletter"], '
             'textarea[data-testid="cover-letter-textarea"], '
@@ -311,14 +312,14 @@ class IndeedSubmitter(BaseSubmitter):
             if await cl_field.is_editable():
                 await cl_field.fill(application.cover_letter or "")
 
-        # Work authorization — try to select "Yes"
+        # Work authorization radios
         auth_radios = page.locator('input[type="radio"][value="YES"], input[type="radio"][value="yes"]')
         for i in range(await auth_radios.count()):
             r = auth_radios.nth(i)
             if await r.is_visible():
                 await r.check()
 
-        # Numeric fields (years of experience) — fill safely
+        # Numeric inputs — years of experience
         num_inputs = page.locator('input[type="number"]')
         for i in range(await num_inputs.count()):
             el = num_inputs.nth(i)
@@ -326,3 +327,42 @@ class IndeedSubmitter(BaseSubmitter):
                 val = await el.input_value()
                 if not val:
                     await el.fill("0")
+
+        # Custom text questions — match to qa_answers
+        if application.qa_answers:
+            text_inputs = page.locator('input[type="text"]:visible, textarea:visible')
+            count = await text_inputs.count()
+            for i in range(count):
+                el = text_inputs.nth(i)
+                if not await el.is_editable():
+                    continue
+                current = await el.input_value()
+                if current:
+                    continue
+                el_id = await el.get_attribute("id") or ""
+                label_el = page.locator(f'label[for="{el_id}"]').first
+                label_text = ""
+                if el_id and await label_el.count() > 0:
+                    label_text = (await label_el.inner_text()).strip().lower()
+                if not label_text:
+                    label_text = (await el.get_attribute("aria-label") or "").lower()
+                if not label_text:
+                    continue
+                best_answer = ""
+                for q_key, q_val in application.qa_answers.items():
+                    if any(kw in label_text for kw in q_key.lower().split("_")):
+                        best_answer = str(q_val)
+                        break
+                if not best_answer:
+                    best_answer = next((str(v) for v in application.qa_answers.values() if v), "")
+                if best_answer:
+                    await el.fill(best_answer[:500])
+
+        # Select dropdowns — pick "Yes" for yes/no questions
+        selects = page.locator('select:visible')
+        for i in range(await selects.count()):
+            sel = selects.nth(i)
+            options = await sel.locator('option').all_text_contents()
+            options_lower = [o.lower() for o in options]
+            if "yes" in options_lower and "no" in options_lower:
+                await sel.select_option(label=next(o for o in options if o.lower() == "yes"))

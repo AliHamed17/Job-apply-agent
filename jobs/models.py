@@ -22,5 +22,13 @@ class JobData(BaseModel):
 
     @property
     def is_complete(self) -> bool:
-        """Minimum viable job: must have title."""
-        return bool(self.title.strip())
+        """Minimum viable job: must have title and not be a placeholder."""
+        t = self.title.strip()
+        if not t or len(t) < 3:
+            return False
+        # Reject placeholders like {{position.name}}, %JOB_TITLE%, or very short generic ones
+        forbidden = ["{{", "}}", "position.name", "company.name", "loading...", "template"]
+        lower_t = t.lower()
+        if any(f in lower_t for f in forbidden):
+            return False
+        return True

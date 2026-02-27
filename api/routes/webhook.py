@@ -340,7 +340,10 @@ async def receive_message(
 
             # Enqueue URL processing
             from worker.tasks import process_url_task
-            process_url_task.delay(db_url.id)
+            if settings.tasks_always_eager:
+                process_url_task.apply(args=[db_url.id])
+            else:
+                process_url_task.delay(db_url.id)
 
         if urls:
             await _send_whatsapp_message(

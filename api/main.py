@@ -56,6 +56,8 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
 
     client_ip = request.client.host if request.client else "unknown"
+    if client_ip == "127.0.0.1":
+        return await call_next(request)
     now = time.time()
     window = 60.0  # 1 minute window
     max_requests = settings.rate_limit_requests_per_minute
@@ -83,8 +85,8 @@ async def auth_middleware(request: Request, call_next):
 
     Exempt: /webhook (uses its own verification), /health, /docs, /openapi.json
     """
-    exempt_paths = {"/webhook/whatsapp", "/health", "/docs", "/openapi.json", "/redoc"}
-    if any(request.url.path.startswith(p) for p in exempt_paths):
+    exempt_paths = {"/webhook/whatsapp", "/health", "/docs", "/openapi.json", "/redoc", "/static", "/favicon.ico"}
+    if request.url.path == "/" or any(request.url.path.startswith(p) for p in exempt_paths):
         return await call_next(request)
 
     # If no secret_key is configured (dev mode), skip auth
@@ -146,7 +148,7 @@ async def health():
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request, "api_key": settings.secret_key})
 
 @app.get("/metrics")
 async def metrics():

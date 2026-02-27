@@ -11,10 +11,17 @@ def create_celery_app() -> Celery:
     """Create and configure the Celery application."""
     settings = get_settings()
 
+    broker = settings.redis_url
+    backend = settings.redis_url
+
+    if settings.tasks_always_eager:
+        broker = "memory://"
+        backend = "cache+memory://"
+
     app = Celery(
         "job_apply_agent",
-        broker=settings.redis_url,
-        backend=settings.redis_url,
+        broker=broker,
+        backend=backend,
     )
 
     app.conf.update(
@@ -23,6 +30,7 @@ def create_celery_app() -> Celery:
         result_serializer="json",
         timezone="UTC",
         enable_utc=True,
+        task_always_eager=settings.tasks_always_eager,
         # Rate limiting
         task_default_rate_limit=f"{settings.rate_limit_requests_per_minute}/m",
         # Retry policy

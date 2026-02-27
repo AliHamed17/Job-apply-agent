@@ -299,28 +299,27 @@ class LinkedInSubmitter(BaseSubmitter):
 
     async def _fill_form_fields(self, page, application: GeneratedApplication,
                                 user_profile: dict, resume_path: str | None) -> None:
-        """Fill all visible form inputs with profile data."""
+        """Fill all visible form inputs with profile data and Q&A answers."""
         personal = user_profile.get("personal", {})
         links    = user_profile.get("links", {})
+        name_parts = (personal.get("name", "") or "").split()
 
         field_map = {
-            # LinkedIn field labels / name attributes → values
-            "phone":                personal.get("phone", ""),
-            "phoneNumber":          personal.get("phone", ""),
-            "city":                 personal.get("location", "").split(",")[0].strip(),
-            "email":                personal.get("email", ""),
-            "firstName":            (personal.get("name", "") or "").split()[0],
-            "lastName":             " ".join((personal.get("name", "") or "").split()[1:]),
-            "linkedin":             links.get("linkedin", ""),
-            "website":              links.get("portfolio") or links.get("website", ""),
-            "coverLetter":          application.cover_letter or "",
-            "summary":              application.cover_letter or "",
+            "phone":       personal.get("phone", ""),
+            "phoneNumber": personal.get("phone", ""),
+            "city":        personal.get("location", "").split(",")[0].strip(),
+            "email":       personal.get("email", ""),
+            "firstName":   name_parts[0] if name_parts else "",
+            "lastName":    " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
+            "linkedin":    links.get("linkedin", ""),
+            "website":     links.get("portfolio") or links.get("website", ""),
+            "coverLetter": application.cover_letter or "",
+            "summary":     application.cover_letter or "",
         }
 
         for name, value in field_map.items():
             if not value:
                 continue
-            # Try by name attribute
             locator = page.locator(f'input[name="{name}"], textarea[name="{name}"]')
             if await locator.count() > 0:
                 el = locator.first
@@ -334,7 +333,7 @@ class LinkedInSubmitter(BaseSubmitter):
                 await file_input.set_input_files(resume_path)
                 await page.wait_for_timeout(1000)
 
-        # Cover letter textarea — common LinkedIn pattern
+        # Cover letter textarea
         cover_letter_textarea = page.locator(
             'textarea[name="coverLetter"], '
             'textarea[aria-label*="cover letter"], '
@@ -344,14 +343,15 @@ class LinkedInSubmitter(BaseSubmitter):
             if await cover_letter_textarea.is_visible() and await cover_letter_textarea.is_editable():
                 await cover_letter_textarea.fill(application.cover_letter or "")
 
-        # Work authorization radio — select "Yes" automatically
-        auth_yes = page.locator(
-            'label:has-text("Yes"):near(label:has-text("authorized"))'
-        ).first
-        if await auth_yes.count() > 0 and await auth_yes.is_visible():
-            await auth_yes.click()
+        # Work authorization — select "Yes" on any auth-related radio group
+        for auth_label in ["authorized to work", "legally authorized", "work authorization", "sponsorship"]:
+            yes_radio = page.locator(
+                f'label:has-text("Yes"):near(label:has-text("{auth_label}"))'
+            ).first
+            if await yes_radio.count() > 0 and await yes_radio.is_visible():
+                await yes_radio.click()
 
-        # For numeric "years of experience" inputs — fill 0 as safe default
+        # Numeric inputs (years of experience) — fill with value from qa_answers or 0
         exp_inputs = page.locator('input[type="number"]')
         for i in range(await exp_inputs.count()):
             el = exp_inputs.nth(i)
@@ -359,3 +359,53 @@ class LinkedInSubmitter(BaseSubmitter):
                 current = await el.input_value()
                 if not current:
                     await el.fill("0")
+
+        # Custom open-text questions — match labels to qa_answers
+        if application.qa_answers:
+            text_inputs = page.locator(
+                '.jobs-easy-apply-form-element input[type="text"], '
+                '.jobs-easy-apply-form-element textarea'
+            )
+            count = await text_inputs.count()
+            for i in range(count):
+                el = text_inputs.nth(i)
+                if not await el.is_visible():
+                    continue
+                if not await el.is_editable():
+                    continue
+                current = await el.input_value()
+                if current:
+                    continue
+                # Try to find the label text near this element
+                label_el = page.locator(f'label[for="{await el.get_attribute("id") or ""}"]').first
+                label_text = ""
+                if await label_el.count() > 0:
+                    label_text = (await label_el.inner_text()).strip().lower()
+                if not label_text:
+                    # Try aria-label
+                    label_text = (await el.get_attribute("aria-label") or "").lower()
+                if not label_text:
+                    continue
+                # Find the best matching answer from qa_answers
+                best_answer = ""
+                for q_key, q_val in application.qa_answers.items():
+                    if any(kw in label_text for kw in q_key.lower().split("_")):
+                        best_answer = str(q_val)
+                        break
+                if not best_answer:
+                    # Fallback: use the first non-empty answer
+                    best_answer = next((str(v) for v in application.qa_answers.values() if v), "")
+                if best_answer:
+                    await el.fill(best_answer[:500])
+
+        # Select dropdowns — handle common yes/no questions
+        selects = page.locator('select')
+        for i in range(await selects.count()):
+            sel = selects.nth(i)
+            if not await sel.is_visible():
+                continue
+            options = await sel.locator('option').all_text_contents()
+            options_lower = [o.lower() for o in options]
+            # For "Yes/No" dropdowns on authorization questions, pick "Yes"
+            if "yes" in options_lower and "no" in options_lower:
+                await sel.select_option(label=next(o for o in options if o.lower() == "yes"))

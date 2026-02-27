@@ -1,14 +1,15 @@
-"""Jobs API routes — list, view, and filter extracted jobs."""
+"""Jobs API routes — list, view, filter, and ingest job URLs."""
 
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.models import Job, JobStatus
+from db.models import ExtractedURL, Job, JobStatus, Message, URLStatus
 from db.session import get_db
+from ingestion.url_utils import normalize_url, url_hash
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["jobs"])
@@ -72,6 +73,62 @@ async def list_jobs(
         )
         for j in jobs
     ]
+
+
+class IngestRequest(BaseModel):
+    url: str
+    sender: str = "api"
+    source: str = "manual"
+
+
+@router.post("/ingest")
+async def ingest_url(body: IngestRequest, db: Session = Depends(get_db)):
+    """Accept a job URL from the WhatsApp bridge or the dashboard.
+
+    Returns {"added": 1, "skipped": 0} or {"added": 0, "skipped": 1}.
+    """
+    from core.config import get_settings
+    from worker.tasks import process_url_task
+
+    raw = (body.url or "").strip()
+    if not raw:
+        raise HTTPException(status_code=422, detail="url is required")
+
+    normalized = normalize_url(raw)
+    uhash = url_hash(normalized)
+
+    # Dedup — already seen this exact URL
+    if db.query(ExtractedURL).filter(ExtractedURL.url_hash == uhash).first():
+        return {"added": 0, "skipped": 1}
+
+    # Create a synthetic message record for traceability
+    db_msg = Message(
+        whatsapp_message_id=f"ingest-{uhash[:16]}",
+        sender_phone=body.sender,
+        body=raw,
+    )
+    db.add(db_msg)
+    db.flush()
+
+    db_url = ExtractedURL(
+        message_id=db_msg.id,
+        original_url=raw,
+        normalized_url=normalized,
+        url_hash=uhash,
+        status=URLStatus.PENDING,
+    )
+    db.add(db_url)
+    db.flush()
+    db.commit()
+
+    settings = get_settings()
+    if settings.tasks_always_eager:
+        process_url_task.apply(args=[db_url.id])
+    else:
+        process_url_task.delay(db_url.id)
+
+    logger.info("url_ingested", url=normalized, source=body.source)
+    return {"added": 1, "skipped": 0}
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)

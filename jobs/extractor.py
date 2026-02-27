@@ -5,10 +5,12 @@ from __future__ import annotations
 import structlog
 
 from jobs.models import JobData
+from jobs.parsers.comeet import parse_comeet
 from jobs.parsers.greenhouse import parse_greenhouse
 from jobs.parsers.html_heuristic import parse_html_heuristic
 from jobs.parsers.jsonld import parse_jsonld
 from jobs.parsers.lever import parse_lever
+from jobs.parsers.linkedin import parse_linkedin
 from jobs.parsers.workday import is_workday_url, parse_workday
 
 logger = structlog.get_logger(__name__)
@@ -98,7 +100,24 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
                 jobs=lever_jobs, page_type=page_type, parser_used="lever"
             )
 
-    # 4) Workday
+    # 4) LinkedIn
+    if "linkedin.com" in url_lower:
+        li_jobs = parse_linkedin(html, url)
+        if li_jobs:
+            logger.info("extracted_via_linkedin", url=url, count=len(li_jobs))
+            return ExtractionResult(jobs=li_jobs, page_type="single_job", parser_used="linkedin")
+
+    # 5) Comeet
+    if "comeet.com" in url_lower or "comeet.co" in url_lower:
+        comeet_jobs = parse_comeet(html, url)
+        if comeet_jobs:
+            logger.info("extracted_via_comeet", url=url, count=len(comeet_jobs))
+            page_type = "single_job" if len(comeet_jobs) == 1 else "listing"
+            return ExtractionResult(
+                jobs=comeet_jobs, page_type=page_type, parser_used="comeet"
+            )
+
+    # 6) Workday
     if is_workday_url(url):
         workday_jobs = parse_workday(html, url)
         if workday_jobs:
@@ -108,7 +127,7 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
                 jobs=workday_jobs, page_type=page_type, parser_used="workday"
             )
 
-    # 5) Generic HTML heuristic
+    # 7) Generic HTML heuristic
     heuristic_jobs = parse_html_heuristic(html, url)
     if heuristic_jobs:
         logger.info("extracted_via_heuristic", url=url, count=len(heuristic_jobs))

@@ -32,6 +32,9 @@ class ApplicationResponse(BaseModel):
     created_at: str
     submission_status: str | None = None
     submission_platform: str | None = None
+    submission_confirmation_url: str | None = None
+    submission_error: str | None = None
+    submitted_at: str | None = None
 
     class Config:
         from_attributes = True
@@ -79,6 +82,9 @@ async def list_applications(
             created_at=app.created_at.isoformat() if app.created_at else "",
             submission_status=submission.status.value if submission else None,
             submission_platform=submission.submitter_name if submission else None,
+            submission_confirmation_url=submission.confirmation_url if submission else None,
+            submission_error=submission.error_message if submission else None,
+            submitted_at=submission.created_at.isoformat() if submission else None,
         ))
 
     return results
@@ -108,7 +114,35 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         created_at=app.created_at.isoformat() if app.created_at else "",
         submission_status=submission.status.value if submission else None,
         submission_platform=submission.submitter_name if submission else None,
+        submission_confirmation_url=submission.confirmation_url if submission else None,
+        submission_error=submission.error_message if submission else None,
+        submitted_at=submission.created_at.isoformat() if submission else None,
     )
+
+
+@router.get("/profile")
+async def get_profile_summary():
+    """Return the user profile fields used when filling application forms."""
+    from profile.loader import get_profile
+    try:
+        profile = get_profile()
+        p = profile.model_dump()
+        personal = p.get("personal", {})
+        links = p.get("links", {})
+        resume = p.get("resume", {})
+        return {
+            "name":      personal.get("name", ""),
+            "email":     personal.get("email", ""),
+            "phone":     personal.get("phone", ""),
+            "location":  personal.get("location", ""),
+            "linkedin":  links.get("linkedin", ""),
+            "github":    links.get("github", ""),
+            "portfolio": links.get("portfolio", "") or links.get("website", ""),
+            "resume_pdf": resume.get("pdf_path", "") if resume else "",
+            "skills":    p.get("skills", [])[:20],
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 @router.post("/applications/{app_id}/approve", response_model=ApproveResponse)
@@ -135,8 +169,13 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     # Enqueue submission task
+    from core.config import get_settings
     from worker.tasks import submit_application_task
-    submit_application_task.delay(app.id)
+    settings = get_settings()
+    if settings.tasks_always_eager:
+        submit_application_task.apply(args=[app.id])
+    else:
+        submit_application_task.delay(app.id)
 
     logger.info("application_approved_via_api", app_id=app.id)
     return ApproveResponse(
@@ -144,6 +183,38 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
         application_id=app.id,
         status="approved",
     )
+
+
+@router.post("/applications/{app_id}/retry")
+async def retry_application(app_id: int, db: Session = Depends(get_db)):
+    """Re-queue a failed or draft application for submission."""
+    app = db.query(Application).filter(Application.id == app_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if app.status not in (JobStatus.DRAFT, JobStatus.APPROVED):
+        # Force back to approved so submission gate passes
+        app.status = JobStatus.APPROVED
+        app.approved_at = datetime.utcnow()
+        if app.job:
+            app.job.status = JobStatus.APPROVED
+        db.commit()
+
+    # Delete existing failed submission record so a new one is created
+    if app.submission:
+        db.delete(app.submission)
+        db.commit()
+
+    from core.config import get_settings
+    from worker.tasks import submit_application_task
+    settings = get_settings()
+    if settings.tasks_always_eager:
+        submit_application_task.apply(args=[app.id])
+    else:
+        submit_application_task.delay(app.id)
+
+    logger.info("application_retry_queued", app_id=app.id)
+    return {"message": "Re-queued for submission", "application_id": app.id}
 
 
 @router.post("/applications/{app_id}/reject")

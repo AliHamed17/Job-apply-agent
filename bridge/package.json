@@ -1,0 +1,21 @@
+{
+  "name": "job-agent-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "Personal WhatsApp bridge — monitors your groups for job URLs and forwards them to the Job Agent API",
+  "main": "whatsapp_bridge.js",
+  "scripts": {
+    "start": "node whatsapp_bridge.js",
+    "dev": "node --watch whatsapp_bridge.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-fetch": "^2.7.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.23.0"
+  },
+  "keywords": ["whatsapp", "job-agent", "automation"],
+  "license": "MIT"
+}

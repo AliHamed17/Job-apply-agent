@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from core.config import get_settings
 from db.models import (
     Application,
     CoverLetterFeedback,
@@ -185,7 +186,86 @@ async def manual_ingest(req: ManualIngestRequest, db: Session = Depends(get_db))
 
     # Enqueue processing
     from worker.tasks import process_url_task
-    process_url_task.delay(db_url.id)
+    
+    settings = get_settings()
+    if settings.tasks_always_eager:
+        # Use .apply() for synchronous execution without broker
+        process_url_task.apply(args=[db_url.id])
+    else:
+        process_url_task.delay(db_url.id)
 
     logger.info("manual_ingest", url=req.url)
     return {"message": "URL queued for processing", "url_id": db_url.id}
+
+
+@router.get("/urls")
+async def list_urls(
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """List extracted URLs with their status and job counts."""
+    from sqlalchemy import func
+    rows = (
+        db.query(
+            ExtractedURL,
+            func.count(Job.id).label("job_count"),
+        )
+        .outerjoin(Job, Job.extracted_url_id == ExtractedURL.id)
+        .group_by(ExtractedURL.id)
+        .order_by(ExtractedURL.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": u.id,
+            "url": u.normalized_url,
+            "status": u.status.value if u.status else "unknown",
+            "jobs_found": cnt,
+            "error": u.fetch_error,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        }
+        for u, cnt in rows
+    ]
+
+
+@router.post("/urls/{url_id}/retry")
+async def retry_url(url_id: int, db: Session = Depends(get_db)):
+    """Re-queue a URL for re-processing (useful when no jobs were extracted)."""
+    db_url = db.query(ExtractedURL).filter(ExtractedURL.id == url_id).first()
+    if not db_url:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="URL not found")
+
+    # Reset status so the task re-processes it
+    db_url.status = URLStatus.PENDING
+    db_url.fetch_error = None
+    db.commit()
+
+    from worker.tasks import process_url_task
+    settings = get_settings()
+    if settings.tasks_always_eager:
+        process_url_task.apply(args=[db_url.id])
+    else:
+        process_url_task.delay(db_url.id)
+
+    logger.info("url_retry_queued", url_id=url_id, url=db_url.normalized_url)
+    return {"message": "URL re-queued for processing", "url_id": url_id}
+
+
+@router.get("/messages")
+async def list_messages(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """List recent WhatsApp messages."""
+    return (
+        db.query(Message)
+        .order_by(Message.received_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )

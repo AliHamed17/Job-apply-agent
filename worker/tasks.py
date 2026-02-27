@@ -8,11 +8,13 @@ Each task enforces proper state transitions and approval checks.
 from __future__ import annotations
 
 import json
+import asyncio
 
 import structlog
 from celery import shared_task
 
 from core.config import get_settings
+from core.utils import run_async
 from db.models import (
     Application,
     ExtractedURL,
@@ -76,8 +78,14 @@ def process_message_task(self, message_id: int):
             db.add(db_url)
             db.flush()
 
+            db.commit()
+
             # Chain to next task
-            process_url_task.delay(db_url.id)
+            settings = get_settings()
+            if settings.tasks_always_eager:
+                process_url_task.apply(args=[db_url.id])
+            else:
+                process_url_task.delay(db_url.id)
             enqueued += 1
 
         db.commit()
@@ -126,6 +134,15 @@ def process_url_task(self, url_id: int):
         # Extract jobs
         extraction = extract_jobs(result.html, db_url.normalized_url)
 
+        # Vision Fallback: If no jobs found, try browser-based vision extraction
+        if not extraction.has_jobs:
+            logger.info("try_vision_fallback", url=db_url.normalized_url)
+            from jobs.extractor import extract_jobs_with_vision
+            try:
+                extraction = run_async(extract_jobs_with_vision(db_url.normalized_url))
+            except Exception as e:
+                logger.error("vision_fallback_failed", error=str(e))
+
         if not extraction.has_jobs:
             db.commit()
             logger.info("no_jobs_at_url", url=db_url.normalized_url)
@@ -171,8 +188,14 @@ def process_url_task(self, url_id: int):
             db.add(db_job)
             db.flush()
 
+            db.commit()
+
             # Chain to scoring
-            score_job_task.delay(db_job.id)
+            settings = get_settings()
+            if settings.tasks_always_eager:
+                score_job_task.apply(args=[db_job.id])
+            else:
+                score_job_task.delay(db_job.id)
 
         db.commit()
         logger.info(
@@ -247,7 +270,10 @@ def score_job_task(self, job_id: int):
         db.commit()
 
         # Chain to LLM generation
-        generate_application_task.delay(job_id)
+        if settings.tasks_always_eager:
+            generate_application_task.apply(args=[job_id])
+        else:
+            generate_application_task.delay(job_id)
 
         logger.info("job_scored_and_queued", title=db_job.title,
                      score=breakdown.total, action=action.value)
@@ -293,30 +319,54 @@ def generate_application_task(self, job_id: int):
         )
 
         # Run async generation in sync context
-        loop = asyncio.new_event_loop()
-        try:
-            generated = loop.run_until_complete(
-                generate_full_application(job_data, profile)
-            )
-        finally:
-            loop.close()
+        generated = run_async(generate_full_application(job_data, profile))
 
-        # Store application
+        settings = get_settings()
+
+        # Decide whether to auto-approve immediately
+        from datetime import datetime
+        from match.scoring import Action, decide_action
+        action = decide_action(
+            score=db_job.score or 0.0,
+            auto_apply_enabled=settings.auto_apply,
+            draft_only=settings.draft_only,
+            threshold=settings.auto_apply_threshold,
+        )
+        auto_approve = action == Action.AUTO_APPLY
+
         app = Application(
             job_id=job_id,
             cover_letter=generated.cover_letter,
             recruiter_message=generated.recruiter_message,
             qa_answers=json.dumps(generated.qa_answers),
-            status=JobStatus.DRAFT,
+            status=JobStatus.APPROVED if auto_approve else JobStatus.DRAFT,
+            approved_at=datetime.utcnow() if auto_approve else None,
         )
         db.add(app)
+        db.flush()
+
+        if auto_approve:
+            db_job.status = JobStatus.APPROVED
+
         db.commit()
 
         logger.info(
             "application_generated",
             job=db_job.title,
+            score=db_job.score,
+            threshold=settings.auto_apply_threshold,
             has_placeholders=generated.has_placeholders,
+            auto_approved=auto_approve,
+            reason="Score above threshold" if auto_approve else "Score below threshold or draft_only enabled",
         )
+
+        # Immediately chain to submission when auto-approved
+        if auto_approve:
+            logger.info("auto_apply_queued", job=db_job.title, app_id=app.id)
+            if settings.tasks_always_eager:
+                submit_application_task.apply(args=[app.id])
+            else:
+                submit_application_task.delay(app.id)
 
     except Exception as exc:
         db.rollback()
@@ -341,7 +391,8 @@ def submit_application_task(self, application_id: int):
 
     from jobs.models import JobData
     from submitters.ashby import AshbySubmitter
-    from submitters.base import SubmitterRegistry
+    from submitters.base import DraftOnlySubmitter, SubmitterRegistry
+    from submitters.comeet import ComeetSubmitter
     from submitters.greenhouse import GreenhouseSubmitter
     from submitters.indeed import IndeedSubmitter
     from submitters.jobvite import JobviteSubmitter
@@ -375,78 +426,103 @@ def submit_application_task(self, application_id: int):
 
         profile = get_profile()
 
-        # Build submitter registry — ordered: API-based first, browser last
-        registry = SubmitterRegistry()
+        from submitters.icims import IcimsSubmitter
+        from llm.generation import GeneratedApplication
 
-        # Tier 1: Official public APIs (most reliable)
-        registry.register(GreenhouseSubmitter(api_key=settings.greenhouse_api_key))
-        registry.register(LeverSubmitter(api_key=settings.lever_api_key))
-        registry.register(AshbySubmitter())
-        registry.register(WorkableSubmitter())
-        registry.register(SmartRecruitersSubmitter(api_key=settings.smartrecruiters_api_key))
-        registry.register(JobviteSubmitter())
+        # Build ordered submitter list — Tier 1 (API), Tier 2 (browser), Tier 3 (draft)
+        all_submitters = [
+            # Tier 1: Official public APIs (most reliable, no credentials needed for many)
+            GreenhouseSubmitter(api_key=settings.greenhouse_api_key),
+            LeverSubmitter(api_key=settings.lever_api_key),
+            AshbySubmitter(),
+            WorkableSubmitter(),
+            SmartRecruitersSubmitter(api_key=settings.smartrecruiters_api_key),
+            JobviteSubmitter(),
+            # Tier 2: Browser automation (Playwright)
+            LinkedInSubmitter(
+                cookies_file=settings.linkedin_cookies_file,
+                email=settings.linkedin_email,
+                password=settings.linkedin_password,
+            ),
+            IndeedSubmitter(
+                cookies_file=settings.indeed_cookies_file,
+                email=settings.indeed_email,
+                password=settings.indeed_password,
+            ),
+            IcimsSubmitter(),
+            ComeetSubmitter(),
+            # Tier 3: Draft-only — Workday SSO wall, never auto-submit
+            WorkdaySubmitter(),
+        ]
 
-        # Tier 2: Browser automation (Playwright, requires credentials)
-        registry.register(LinkedInSubmitter(
-            cookies_file=settings.linkedin_cookies_file,
-            email=settings.linkedin_email,
-            password=settings.linkedin_password,
-        ))
-        registry.register(IndeedSubmitter(
-            cookies_file=settings.indeed_cookies_file,
-            email=settings.indeed_email,
-            password=settings.indeed_password,
-        ))
-
-        # Tier 3: Draft-only — Workday SSO wall, never auto-submit
-        registry.register(WorkdaySubmitter())
-
-        submitter = registry.get_submitter(
-            JobData(title=db_job.title, apply_url=db_job.apply_url,
-                    source_url=db_job.source_url),
-            draft_only=settings.draft_only,
+        job_ref = JobData(
+            title=db_job.title, company=db_job.company,
+            location=db_job.location, apply_url=db_job.apply_url,
+            source_url=db_job.source_url,
         )
 
-        from llm.generation import GeneratedApplication
         generated = GeneratedApplication(
             cover_letter=app.cover_letter or "",
             recruiter_message=app.recruiter_message or "",
             qa_answers=json.loads(app.qa_answers) if app.qa_answers else {},
         )
 
-        # Run async submit
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(
-                submitter.submit(
-                    job=JobData(
-                        title=db_job.title, company=db_job.company,
-                        location=db_job.location, apply_url=db_job.apply_url,
-                        source_url=db_job.source_url,
-                    ),
-                    application=generated,
-                    user_profile=profile.model_dump(),
-                    resume_path=profile.resume.pdf_path or None,
+        profile_dict = profile.model_dump()
+        resume_path  = profile.resume.pdf_path or None
+
+        # Cascade: try each matching submitter, stop on first success
+        result = None
+        if settings.draft_only:
+            result = run_async(DraftOnlySubmitter().submit(job_ref, generated, profile_dict, resume_path))
+        else:
+            for sub in all_submitters:
+                if not sub.can_submit(job_ref):
+                    continue
+                attempt = run_async(sub.submit(job_ref, generated, profile_dict, resume_path))
+                logger.info(
+                    "submitter_attempt",
+                    platform=sub.platform_name,
+                    status=attempt.status,
+                    success=attempt.success,
                 )
-            )
-        finally:
-            loop.close()
+                if attempt.success and attempt.status == "submitted":
+                    result = attempt
+                    break
+                if result is None or attempt.status != "failed":
+                    # Keep best result seen (prefer draft_only over failed)
+                    result = attempt
+
+        # Always fall back to draft_only if no real submission succeeded
+        if result is None or result.status == "failed":
+            result = run_async(DraftOnlySubmitter().submit(job_ref, generated, profile_dict, resume_path))
 
         # Record submission
+        from datetime import datetime as _dt
+        if result.status == "submitted" and result.success:
+            sub_status = SubmissionStatus.SUCCESS
+        elif result.status == "draft_only":
+            sub_status = SubmissionStatus.DRAFT_ONLY
+        else:
+            sub_status = SubmissionStatus.FAILED
+
         submission = Submission(
             application_id=application_id,
-            submitter_name=submitter.platform_name,
-            status=(SubmissionStatus.SUCCESS if result.success
-                    else SubmissionStatus.DRAFT_ONLY if result.status == "draft_only"
-                    else SubmissionStatus.FAILED),
+            submitter_name=result.platform,
+            status=sub_status,
             confirmation_url=result.confirmation_url,
             confirmation_id=result.confirmation_id,
             error_message=result.error,
+            submitted_at=_dt.utcnow() if result.success and result.status == "submitted" else None,
         )
         db.add(submission)
 
-        db_job.status = (JobStatus.SUBMITTED if result.success
-                         else JobStatus.FAILED)
+        # Job status mirrors submission outcome
+        if result.status == "submitted" and result.success:
+            db_job.status = JobStatus.SUBMITTED
+        elif result.status in ("draft_only", "captcha_blocked"):
+            db_job.status = JobStatus.DRAFT
+        else:
+            db_job.status = JobStatus.FAILED
         db.commit()
 
         logger.info(

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # ── LLM ─────────────────────────────────────────────
-    llm_provider: Literal["openai", "anthropic"] = "openai"
+    llm_provider: Literal["openai", "anthropic", "mock"] = "openai"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     llm_model: str = "gpt-4o"
@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # ── Application Modes ───────────────────────────────
     draft_only: bool = True
     auto_apply: bool = False
+    auto_apply_threshold: float = 80.0
+    tasks_always_eager: bool = True  # If True, runs tasks synchronously (no Redis needed)
 
     # ── Rate Limiting ───────────────────────────────────
     rate_limit_requests_per_minute: int = 10

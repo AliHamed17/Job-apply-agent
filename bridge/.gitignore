@@ -1,0 +1,9 @@
+# WhatsApp Web session — contains browser profile, do not commit
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Node dependencies
+node_modules/
+
+# Local env (contains secrets)
+.env
