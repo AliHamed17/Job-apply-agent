@@ -224,6 +224,53 @@ job-agent/
 - **Non-English postings**: Passed through (LLM handles multilingual content)
 - **Pages with no jobs**: Classified and skipped
 
+## Current Foundation and Missing Capabilities
+
+### What you already have (solid foundation)
+
+- URL/job/application/submission pipeline with operational APIs and dashboard controls (approve/retry/interview-prep/manual ingest).
+- Safety-oriented submission behavior (including no CAPTCHA bypass policy and human-confirmation states).
+- Auth-wall and bot-protection detection in fetching, with blocked-state handling.
+- A single-profile flow and one-tenant auth model (`Bearer` secret + `user_profile.yaml`).
+
+### What you’re still missing (highest-value items)
+
+1. **Proactive top-of-funnel sourcing (priority #1)**
+   - Ingestion is still mostly reactive (“link comes in → process”).
+   - There is no native scheduled sourcing pipeline that runs daily role/location searches from configured search profiles.
+   - Why highest ROI: more qualified opportunities per day generally improves outcomes more than downstream micro-optimizations.
+
+2. **Outcome tracking after submit (priority #2)**
+   - Current submission tracking captures submission state and confirmation metadata, but not full recruiter response lifecycle events.
+   - Missing inbox-driven updates like `rejected`, `assessment_received`, `interview_scheduled`, etc.
+   - Why it matters: without post-submit outcomes, funnel quality and follow-up automation remain limited.
+
+3. **Dynamic ATS-targeted resume generation (priority #3)**
+   - The pipeline generates tailored text artifacts (cover letter/recruiter/Q&A/interview prep), but resume generation is still external/static.
+   - Missing per-job resume artifact generation + persistence in the application workflow.
+   - Why it matters: resume relevance often drives response rate more than cover-letter polish alone.
+
+4. **Multi-user / multi-tenant architecture (priority #4)**
+   - Current architecture is single-user by design (global profile path + shared bearer token auth).
+   - Missing tenant/user-scoped profiles, resume storage, and session/account boundaries.
+   - Why it matters: required for SaaS-readiness and secure multi-user isolation.
+
+5. **CAPTCHA-solving integration (intentional policy gap)**
+   - The current design intentionally avoids bypassing CAPTCHA and safely falls back to draft/manual flow.
+   - Recommendation: if ever introduced, keep this as an explicit opt-in enterprise module with legal/compliance review and auditable controls.
+
+### Recommended build order (pragmatic)
+
+1. Automated sourcing scheduler + source adapters (job boards/search APIs + dedup + quality scoring)
+2. Inbox outcome ingestion (Gmail/IMAP webhook/polling + parser + status timeline)
+3. Per-job resume tailoring service (template + ATS keyword control + PDF output + artifact storage)
+4. Tenant model/auth overhaul (users, orgs, profile versions, storage isolation)
+5. Optional advanced automation modules (CAPTCHA vendor integrations behind feature flags + audit logs)
+
+### Short answer: what we miss most
+
+If there is one missing direction to prioritize, it is **autonomous job discovery**. It unlocks the rest of the funnel by feeding fresh opportunities daily with near-zero manual effort.
+
 ## License
 
 MIT
