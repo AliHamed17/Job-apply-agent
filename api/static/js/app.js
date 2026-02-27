@@ -18,7 +18,10 @@ const state = {
         applicationsSearch: '',
         submissionsSearch: '',
         submissionsStatus: ''
-    }
+    },
+    autoRefreshEnabled: false,
+    autoRefreshHandle: null,
+    pendingGoTo: false
 };
 
 // ── DOM Elements ────────────────────────────────────────
@@ -27,6 +30,9 @@ const els = {
     views: document.querySelectorAll('.view'),
     apiTokenInput: document.getElementById('api-secret'),
     btnRefresh: document.getElementById('btn-refresh'),
+    btnShortcuts: document.getElementById('btn-shortcuts'),
+    autoRefreshToggle: document.getElementById('auto-refresh-toggle'),
+    shortcutsModal: document.getElementById('shortcuts-modal'),
     navPendingCount: document.getElementById('nav-pending-count'),
     
     // Dashboard Stats
@@ -83,9 +89,49 @@ document.addEventListener('DOMContentLoaded', () => {
         els.apiTokenInput.value = savedToken;
     }
     
+    const autoRefresh = localStorage.getItem('job_agent_auto_refresh') === '1';
+    state.autoRefreshEnabled = autoRefresh;
+    if (els.autoRefreshToggle) els.autoRefreshToggle.checked = autoRefresh;
+
     setupEventListeners();
+    setAutoRefresh(autoRefresh);
     refreshAllData();
 });
+
+function setAutoRefresh(enabled) {
+    state.autoRefreshEnabled = Boolean(enabled);
+    if (state.autoRefreshHandle) {
+        clearInterval(state.autoRefreshHandle);
+        state.autoRefreshHandle = null;
+    }
+
+    if (state.autoRefreshEnabled) {
+        state.autoRefreshHandle = setInterval(() => {
+            refreshAllData();
+        }, 30000);
+    }
+
+    localStorage.setItem('job_agent_auto_refresh', state.autoRefreshEnabled ? '1' : '0');
+}
+
+function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = (target.tagName || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || target.isContentEditable;
+}
+
+function focusCurrentSearch() {
+    const map = {
+        applications: els.applicationsSearch,
+        jobs: els.jobsSearch,
+        submissions: els.submissionsSearch,
+    };
+    const el = map[state.currentTab];
+    if (el) {
+        el.focus();
+        el.select?.();
+    }
+}
 
 function setupEventListeners() {
     // Tab switching
@@ -165,11 +211,66 @@ function setupEventListeners() {
     
     // Refresh button
     els.btnRefresh.addEventListener('click', () => {
-        const icon = els.btnRefresh.querySelector('i');
         els.btnRefresh.classList.add('spinning');
         refreshAllData().finally(() => {
             setTimeout(() => els.btnRefresh.classList.remove('spinning'), 500);
         });
+    });
+
+    if (els.btnShortcuts && els.shortcutsModal) {
+        els.btnShortcuts.addEventListener('click', () => {
+            els.shortcutsModal.classList.add('visible');
+            lucide.createIcons();
+        });
+    }
+
+    if (els.autoRefreshToggle) {
+        els.autoRefreshToggle.addEventListener('change', (e) => {
+            setAutoRefresh(Boolean(e.target.checked));
+            showToast(`Auto refresh ${e.target.checked ? 'enabled' : 'disabled'}`, 'info');
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (isTypingTarget(e.target)) {
+            if (e.key === 'Escape') e.target.blur();
+            return;
+        }
+
+        const key = e.key.toLowerCase();
+        if (key === '?') {
+            e.preventDefault();
+            els.shortcutsModal?.classList.toggle('visible');
+            return;
+        }
+
+        if (key === '/') {
+            e.preventDefault();
+            focusCurrentSearch();
+            return;
+        }
+
+        if (key === 'r') {
+            e.preventDefault();
+            els.btnRefresh.click();
+            return;
+        }
+
+        if (state.pendingGoTo) {
+            const tabMap = { d: 'dashboard', a: 'applications', j: 'jobs', s: 'submissions' };
+            const nextTab = tabMap[key];
+            state.pendingGoTo = false;
+            if (nextTab) {
+                e.preventDefault();
+                switchTab(nextTab);
+            }
+            return;
+        }
+
+        if (key === 'g') {
+            state.pendingGoTo = true;
+            setTimeout(() => { state.pendingGoTo = false; }, 1500);
+        }
     });
     
     // Modals
@@ -222,6 +323,10 @@ function switchTab(tabId) {
     if (tabId === 'applications' && state.applications.length === 0) fetchApplications();
     if (tabId === 'jobs' && state.jobs.length === 0) fetchJobs();
     if (tabId === 'submissions' && state.submissions.length === 0) fetchSubmissions();
+
+    if (tabId === 'applications' && els.applicationsSearch) els.applicationsSearch.value = state.filters.applicationsSearch || '';
+    if (tabId === 'jobs' && els.jobsSearch) els.jobsSearch.value = state.filters.jobsSearch || '';
+    if (tabId === 'submissions' && els.submissionsSearch) els.submissionsSearch.value = state.filters.submissionsSearch || '';
 }
 
 // ── API Layer ───────────────────────────────────────────

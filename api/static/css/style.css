@@ -833,3 +833,45 @@ h1, h2, h3, h4, h5 {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+
+.toggle-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+}
+
+.toggle-inline input {
+    accent-color: var(--primary);
+}
+
+.shortcut-list {
+    display: grid;
+    gap: 10px;
+}
+
+.shortcut-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-base);
+}
+
+.shortcut-item kbd {
+    background: #0b1220;
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 0.75rem;
+}

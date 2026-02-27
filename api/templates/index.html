@@ -55,10 +55,17 @@
             <header class="topbar">
                 <h1 id="page-title">Dashboard</h1>
                 <div class="topbar-actions">
-                    <button class="icon-btn" id="btn-refresh" title="Refresh Data">
+                    <label class="toggle-inline" title="Auto refresh every 30s">
+                        <input type="checkbox" id="auto-refresh-toggle">
+                        <span>Auto Refresh</span>
+                    </label>
+                    <button class="icon-btn" id="btn-shortcuts" title="Keyboard Shortcuts (?)">
+                        <i data-lucide="keyboard"></i>
+                    </button>
+                    <button class="icon-btn" id="btn-refresh" title="Refresh Data (R)">
                         <i data-lucide="refresh-cw"></i>
                     </button>
-                    <div class="status-indicator">
+                    <div class="status-indicator" id="mode-indicator">
                         <span class="dot pulse"></span> Default: Draft Mode
                     </div>
                 </div>
@@ -239,6 +246,29 @@
             </div>
             <div class="modal-footer">
                 <button class="btn btn-primary full-width" id="btn-submit-url">Process URL</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <!-- Keyboard Shortcuts Modal -->
+    <div class="modal" id="shortcuts-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Keyboard Shortcuts</h3>
+                <button class="close-btn"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="shortcut-list">
+                    <div class="shortcut-item"><span>Open Dashboard</span><kbd>G then D</kbd></div>
+                    <div class="shortcut-item"><span>Open Approvals</span><kbd>G then A</kbd></div>
+                    <div class="shortcut-item"><span>Open Jobs</span><kbd>G then J</kbd></div>
+                    <div class="shortcut-item"><span>Open Submissions</span><kbd>G then S</kbd></div>
+                    <div class="shortcut-item"><span>Refresh Data</span><kbd>R</kbd></div>
+                    <div class="shortcut-item"><span>Focus Search (tab-aware)</span><kbd>/</kbd></div>
+                    <div class="shortcut-item"><span>Show/Hide this help</span><kbd>?</kbd></div>
+                </div>
             </div>
         </div>
     </div>
