@@ -246,6 +246,7 @@ h1, h2, h3, h4, h5 {
 }
 .icon-btn:hover { background: var(--bg-surface); color: var(--text-main); }
 .icon-btn.spinning i { animation: spin 1s linear infinite; }
+.icon-btn.active { background: var(--primary-glow); color: var(--primary); border-color: var(--primary); }
 
 .status-indicator {
     display: flex;
@@ -289,6 +290,9 @@ h1, h2, h3, h4, h5 {
     cursor: default;
 }
 .stat-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2); border-color: var(--border); }
+.stat-card.clickable { cursor: pointer; }
+.stat-card.clickable:hover { border-color: var(--primary); }
+.stat-card.clickable:active { transform: scale(0.98) translateY(0); }
 .stat-card::before {
     content: '';
     position: absolute;
@@ -323,6 +327,87 @@ h1, h2, h3, h4, h5 {
     margin-bottom: 6px;
 }
 .stat-sub { font-size: 0.8rem; color: var(--text-muted); }
+
+/* ── URL Health Banner ─────────────────────────────── */
+.health-banner {
+    background: var(--warning-bg);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    margin-bottom: 20px;
+    color: var(--warning);
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ── Dashboard Lower Grid ──────────────────────────── */
+.dashboard-lower-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 32px;
+}
+
+/* ── Pipeline Funnel ───────────────────────────────── */
+.funnel-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.funnel-step {
+    display: grid;
+    grid-template-columns: 110px 1fr 48px;
+    align-items: center;
+    gap: 12px;
+}
+.funnel-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    font-weight: 500;
+    white-space: nowrap;
+}
+.funnel-bar-wrap {
+    background: var(--bg-base);
+    border-radius: 4px;
+    height: 20px;
+    overflow: hidden;
+}
+.funnel-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary), #8b5cf6);
+    border-radius: 4px;
+    min-width: 4px;
+    transition: width 0.5s ease;
+}
+.funnel-bar.approved { background: linear-gradient(90deg, var(--success), #0d9488); }
+.funnel-bar.submitted { background: linear-gradient(90deg, #10b981, #6ee7b7); }
+.funnel-value {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text-main);
+    text-align: right;
+}
+
+/* ── Score Histogram ───────────────────────────────── */
+.score-histogram { display: flex; flex-direction: column; gap: 9px; }
+.hist-empty { color: var(--text-muted); font-size: 0.85rem; padding: 12px 0; }
+.hist-row {
+    display: grid;
+    grid-template-columns: 46px 1fr 56px;
+    align-items: center;
+    gap: 10px;
+}
+.hist-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; font-family: var(--font-heading); }
+.hist-bar-wrap { background: var(--bg-base); border-radius: 3px; height: 16px; overflow: hidden; }
+.hist-bar { height: 100%; border-radius: 3px; min-width: 4px; transition: width 0.45s ease; }
+.hist-count { font-size: 0.8rem; font-weight: 600; color: var(--text-main); text-align: right; }
+.hist-pct { font-size: 0.7rem; color: var(--text-muted); margin-left: 4px; }
 
 /* ── Activity Feed ─────────────────────────────────── */
 .activity-section { margin-top: 8px; }
@@ -973,4 +1058,5 @@ h1, h2, h3, h4, h5 {
     .topbar { padding: 0 20px; }
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .cards-list { grid-template-columns: 1fr; }
+    .dashboard-lower-grid { grid-template-columns: 1fr; }
 }

@@ -57,7 +57,10 @@
         <header class="topbar">
             <h1 id="page-title">Dashboard</h1>
             <div class="topbar-actions">
-                <button class="icon-btn" id="btn-refresh" title="Refresh">
+                <button class="icon-btn" id="btn-auto-refresh" title="Toggle auto-refresh (30s)">
+                    <i data-lucide="timer"></i>
+                </button>
+                <button class="icon-btn" id="btn-refresh" title="Refresh (r)">
                     <i data-lucide="refresh-cw"></i>
                 </button>
                 <div class="status-indicator">
@@ -70,8 +73,30 @@
 
             <!-- ── Dashboard View ──────────────────────── -->
             <section id="view-dashboard" class="view active">
+                <div id="url-health-banner" class="health-banner" style="display:none"></div>
+
                 <div class="stats-grid" id="dashboard-stats">
                     <!-- Populated via JS -->
+                </div>
+
+                <div class="dashboard-lower-grid">
+                    <div class="activity-section">
+                        <div class="section-title">
+                            <i data-lucide="git-merge"></i> Pipeline Funnel
+                        </div>
+                        <div class="funnel-container" id="pipeline-funnel">
+                            <!-- Populated via JS -->
+                        </div>
+                    </div>
+
+                    <div class="activity-section">
+                        <div class="section-title">
+                            <i data-lucide="bar-chart-2"></i> Score Distribution
+                        </div>
+                        <div class="score-histogram" id="score-histogram">
+                            <!-- Populated via JS -->
+                        </div>
+                    </div>
                 </div>
 
                 <div class="activity-section">
@@ -116,6 +141,9 @@
                             <button class="filter-btn" data-status="scored">Scored</button>
                             <button class="filter-btn" data-status="skipped">Skipped</button>
                         </div>
+                        <button class="btn btn-sm btn-glass" id="btn-export-csv" title="Export jobs as CSV">
+                            <i data-lucide="download" style="width:13px;height:13px;"></i> Export CSV
+                        </button>
                     </div>
                 </div>
                 <div class="table-container">

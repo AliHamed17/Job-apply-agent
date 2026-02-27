@@ -31,12 +31,14 @@ const state = {
         applications: 'draft',
         jobs: '',
     },
+    autoRefresh: false,
+    autoRefreshTimer: null,
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const tabs       = () => document.querySelectorAll('.stat-item[data-tab]');
-const views      = () => document.querySelectorAll('.view');
+const tabs = () => document.querySelectorAll('.stat-item[data-tab]');
+const views = () => document.querySelectorAll('.view');
 const appFilters = () => document.querySelectorAll('#view-applications .filter-btn');
 const jobFilters = () => document.querySelectorAll('#view-jobs .filter-btn');
 
@@ -97,6 +99,12 @@ function setupListeners() {
         icon.classList.add('spinning');
         refreshAllData().finally(() => setTimeout(() => icon.classList.remove('spinning'), 600));
     });
+
+    // Auto-refresh toggle
+    $('btn-auto-refresh').addEventListener('click', toggleAutoRefresh);
+
+    // Export CSV
+    $('btn-export-csv').addEventListener('click', exportJobsCSV);
 
     // Close modals
     document.querySelectorAll('.close-btn').forEach(btn => {
@@ -173,7 +181,11 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     try {
         const res = await fetch(endpoint, config);
         if (res.status === 401 || res.status === 403) {
-            showToast('Authentication failed. Check API Secret.', 'error');
+            if (state.authToken) {
+                showToast('Authentication failed. Check API Secret.', 'error');
+            } else {
+                console.warn("Backend requires auth, but no token provided.");
+            }
             return null;
         }
         if (!res.ok) {
@@ -189,8 +201,9 @@ async function apiCall(endpoint, method = 'GET', body = null) {
 
 async function refreshAllData() {
     await fetchDashboard();
+    // Always keep jobs current (used by dashboard histogram + CSV export)
+    await fetchJobs();
     if (state.currentTab === 'applications') await fetchApplications();
-    if (state.currentTab === 'jobs') await fetchJobs();
     if (state.currentTab === 'whatsapp') await fetchMessages();
 }
 
@@ -236,18 +249,25 @@ function renderDashboard() {
     if (!state.dashboardData) return;
     const d = state.dashboardData;
 
+    const successRate = d.submissions_total > 0
+        ? Math.round((d.submissions_success / d.submissions_total) * 100)
+        : null;
+    const skipRate = d.total_jobs > 0
+        ? Math.round((d.jobs_skipped / d.total_jobs) * 100)
+        : null;
+
     $('dashboard-stats').innerHTML = `
         <div class="stat-card">
             <div class="stat-header"><i data-lucide="inbox"></i> Messages Received</div>
             <div class="stat-value count-anim">${d.total_messages ?? 0}</div>
             <div class="stat-sub">${d.total_urls ?? 0} URLs extracted</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card clickable" onclick="switchTab('jobs')" title="View all jobs">
             <div class="stat-header"><i data-lucide="briefcase"></i> Jobs Found</div>
             <div class="stat-value count-anim">${d.total_jobs ?? 0}</div>
-            <div class="stat-sub">Valid job postings</div>
+            <div class="stat-sub">+${d.jobs_last_7d ?? 0} this week</div>
         </div>
-        <div class="stat-card warning-card">
+        <div class="stat-card warning-card clickable" onclick="switchTab('applications')" title="Review drafts">
             <div class="stat-header"><i data-lucide="file-check-2" style="color:var(--warning)"></i> Awaiting Review</div>
             <div class="stat-value count-anim text-warning">${d.applications_pending ?? 0}</div>
             <div class="stat-sub">Draft applications</div>
@@ -257,9 +277,164 @@ function renderDashboard() {
             <div class="stat-value count-anim text-success">${d.submissions_success ?? 0}</div>
             <div class="stat-sub">of ${d.submissions_total ?? 0} attempts</div>
         </div>
+
+        <div class="stat-card">
+            <div class="stat-header"><i data-lucide="target"></i> Avg Match Score</div>
+            <div class="stat-value count-anim">${d.avg_job_score ?? '—'}</div>
+            <div class="stat-sub">Best: ${d.top_job_score ?? '—'} / 100</div>
+        </div>
+        <div class="stat-card clickable" onclick="switchTab('jobs'); applyJobFilter('skipped');" title="View skipped jobs">
+            <div class="stat-header"><i data-lucide="skip-forward"></i> Jobs Skipped</div>
+            <div class="stat-value count-anim">${d.jobs_skipped ?? 0}</div>
+            <div class="stat-sub">${skipRate !== null ? skipRate + '% skip rate' : 'No jobs yet'}</div>
+        </div>
+        <div class="stat-card ${successRate !== null && successRate < 50 ? 'warning-card' : ''}">
+            <div class="stat-header"><i data-lucide="percent"></i> Submit Success Rate</div>
+            <div class="stat-value count-anim ${successRate !== null && successRate < 50 ? 'text-warning' : 'text-success'}">${successRate !== null ? successRate + '%' : '—'}</div>
+            <div class="stat-sub">${d.submission_failures ?? 0} failure${d.submission_failures !== 1 ? 's' : ''}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-header"><i data-lucide="message-square-text"></i> Cover Letter Edits</div>
+            <div class="stat-value count-anim">${d.feedback_count ?? 0}</div>
+            <div class="stat-sub">Corrections saved for training</div>
+        </div>
     `;
+
     lucide.createIcons();
+    renderUrlHealthBanner(d);
+    renderPipelineFunnel(d);
+    renderScoreHistogram(d);
     renderActivityFeed();
+}
+
+function renderPipelineFunnel(d) {
+    const container = $('pipeline-funnel');
+    if (!container) return;
+
+    const steps = [
+        { label: 'URLs', value: d.total_urls ?? 0, icon: 'link', cls: '' },
+        { label: 'Jobs', value: d.total_jobs ?? 0, icon: 'briefcase', cls: '' },
+        { label: 'Applications', value: (d.applications_pending ?? 0) + (d.applications_approved ?? 0) + (d.applications_skipped ?? 0), icon: 'file-text', cls: '' },
+        { label: 'Approved', value: d.applications_approved ?? 0, icon: 'check-circle-2', cls: 'approved' },
+        { label: 'Submitted', value: d.submissions_success ?? 0, icon: 'send', cls: 'submitted' },
+    ];
+
+    const max = Math.max(...steps.map(s => s.value), 1);
+
+    container.innerHTML = steps.map((step, i) => {
+        const pct = Math.round((step.value / max) * 100);
+        return `
+        <div class="funnel-step">
+            <div class="funnel-label">
+                <i data-lucide="${step.icon}" style="width:13px;height:13px;"></i>
+                ${step.label}
+            </div>
+            <div class="funnel-bar-wrap">
+                <div class="funnel-bar ${step.cls}" style="width:${pct}%"></div>
+            </div>
+            <div class="funnel-value">${step.value}</div>
+        </div>`;
+    }).join('');
+
+    lucide.createIcons();
+}
+
+function renderUrlHealthBanner(d) {
+    const banner = $('url-health-banner');
+    if (!banner) return;
+    const issues = [];
+    if (d.urls_failed > 0) issues.push(`${d.urls_failed} URL fetch failure${d.urls_failed !== 1 ? 's' : ''}`);
+    if (d.urls_blocked > 0) issues.push(`${d.urls_blocked} blocked by bot protection`);
+    if (issues.length) {
+        banner.innerHTML = `<i data-lucide="alert-triangle" style="width:14px;height:14px;flex-shrink:0;"></i> ${issues.join(' &bull; ')} — check worker logs for details`;
+        banner.style.display = 'flex';
+        lucide.createIcons();
+    } else {
+        banner.style.display = 'none';
+    }
+}
+
+function renderScoreHistogram(d) {
+    const container = $('score-histogram');
+    if (!container) return;
+    const dist = d.score_distribution || {};
+    const buckets = ['0-20', '20-40', '40-60', '60-80', '80-100'];
+    const colors = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981', '#06d6a0'];
+    const labels = ['Very Low', 'Low', 'Medium', 'Good', 'Excellent'];
+    const values = buckets.map(b => dist[b] || 0);
+    const total = values.reduce((a, b) => a + b, 0);
+    const max = Math.max(...values, 1);
+
+    if (total === 0) {
+        container.innerHTML = '<div class="hist-empty">No scored jobs yet</div>';
+        return;
+    }
+
+    container.innerHTML = buckets.map((bucket, i) => {
+        const pct = Math.round((values[i] / max) * 100);
+        const share = total > 0 ? Math.round((values[i] / total) * 100) : 0;
+        return `
+        <div class="hist-row">
+            <div class="hist-label" title="${labels[i]}">${bucket}</div>
+            <div class="hist-bar-wrap">
+                <div class="hist-bar" style="width:${pct}%;background:${colors[i]}"></div>
+            </div>
+            <div class="hist-count">${values[i]}<span class="hist-pct">${share}%</span></div>
+        </div>`;
+    }).join('');
+}
+
+function toggleAutoRefresh() {
+    state.autoRefresh = !state.autoRefresh;
+    const btn = $('btn-auto-refresh');
+    if (state.autoRefresh) {
+        btn.classList.add('active');
+        btn.title = 'Auto-refresh ON — click to disable';
+        state.autoRefreshTimer = setInterval(() => {
+            refreshAllData();
+        }, 30000);
+        showToast('Auto-refresh enabled (every 30s)', 'info');
+    } else {
+        btn.classList.remove('active');
+        btn.title = 'Toggle auto-refresh (30s)';
+        clearInterval(state.autoRefreshTimer);
+        state.autoRefreshTimer = null;
+        showToast('Auto-refresh disabled', 'info');
+    }
+}
+
+function applyJobFilter(status) {
+    const btns = document.querySelectorAll('#view-jobs .filter-btn');
+    btns.forEach(b => {
+        b.classList.toggle('active', b.dataset.status === status);
+    });
+    state.filters.jobs = status;
+    fetchJobs();
+}
+
+function exportJobsCSV() {
+    if (!state.jobs.length) { showToast('No jobs to export', 'info'); return; }
+    const headers = ['Title', 'Company', 'Location', 'Employment Type', 'Score', 'Status', 'Date'];
+    const rows = state.jobs.map(j => [
+        j.title || '',
+        j.company || '',
+        j.location || '',
+        j.employment_type || '',
+        j.score ?? '',
+        j.status || '',
+        j.created_at ? new Date(j.created_at).toLocaleDateString() : '',
+    ]);
+    const csv = [headers, ...rows]
+        .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `jobs-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${state.jobs.length} jobs`, 'success');
 }
 
 function renderActivityFeed() {
@@ -292,12 +467,12 @@ function renderActivityFeed() {
     }
 
     const iconMap = {
-        ingested:  { icon: 'globe', cls: 'ingested',  label: 'Discovered' },
-        scored:    { icon: 'target', cls: 'scored',   label: 'Scored' },
-        draft:     { icon: 'file-edit', cls: 'drafted', label: 'Draft ready' },
-        approved:  { icon: 'check-circle-2', cls: 'approved', label: 'Approved' },
-        skipped:   { icon: 'skip-forward', cls: 'skipped', label: 'Skipped' },
-        submitted: { icon: 'send', cls: 'submitted',  label: 'Submitted' },
+        ingested: { icon: 'globe', cls: 'ingested', label: 'Discovered' },
+        scored: { icon: 'target', cls: 'scored', label: 'Scored' },
+        draft: { icon: 'file-edit', cls: 'drafted', label: 'Draft ready' },
+        approved: { icon: 'check-circle-2', cls: 'approved', label: 'Approved' },
+        skipped: { icon: 'skip-forward', cls: 'skipped', label: 'Skipped' },
+        submitted: { icon: 'send', cls: 'submitted', label: 'Submitted' },
     };
 
     container.innerHTML = events.map(ev => {
@@ -358,13 +533,13 @@ function renderApplications() {
             </div>
             <div style="border-top:1px solid var(--border-light);padding-top:14px;margin-top:auto;">
                 ${isPending
-                    ? `<button class="btn btn-primary full-width" onclick="openReviewModal(${app.id})">
+                ? `<button class="btn btn-primary full-width" onclick="openReviewModal(${app.id})">
                          <i data-lucide="eye" style="width:14px;height:14px;"></i> Review &amp; Approve
                        </button>`
-                    : `<button class="btn btn-secondary full-width" onclick="openReviewModal(${app.id})">
+                : `<button class="btn btn-secondary full-width" onclick="openReviewModal(${app.id})">
                          <i data-lucide="eye" style="width:14px;height:14px;"></i> View Details
                        </button>`
-                }
+            }
             </div>
         </div>`;
     }).join('');
@@ -406,11 +581,11 @@ function renderJobs() {
             <td style="color:var(--text-dim)">${esc(job.company || '—')}</td>
             <td>
                 ${score !== null
-                    ? `<div class="score-bar">
+                ? `<div class="score-bar">
                         <span>${score}</span>
                         <div class="score-bar-track"><div class="score-bar-fill" style="width:${barWidth}%"></div></div>
                        </div>`
-                    : '<span class="text-muted">—</span>'}
+                : '<span class="text-muted">—</span>'}
             </td>
             <td><span class="status ${job.status}">${(job.status || 'pending').replace('_', ' ')}</span></td>
             <td style="color:var(--text-muted);white-space:nowrap;">${fmtDate(job.created_at)}</td>
@@ -545,10 +720,10 @@ window.openReviewModal = appId => {
     if (!app) return;
 
     $('modal-job-title').textContent = app.job_title;
-    $('modal-company').textContent   = app.job_company;
-    $('modal-score').textContent     = app.job_score;
-    $('modal-apply-url').href        = app.apply_url || '#';
-    $('modal-cover-letter').value    = app.cover_letter || '';
+    $('modal-company').textContent = app.job_company;
+    $('modal-score').textContent = app.job_score;
+    $('modal-apply-url').href = app.apply_url || '#';
+    $('modal-cover-letter').value = app.cover_letter || '';
     $('modal-recruiter-msg').textContent = app.recruiter_message || 'N/A';
 
     // Q&A
@@ -568,11 +743,11 @@ window.openReviewModal = appId => {
 
     const isPending = app.status === 'draft';
     $('btn-approve-app').style.display = isPending ? 'inline-flex' : 'none';
-    $('btn-reject-app').style.display  = isPending ? 'inline-flex' : 'none';
-    $('modal-cover-letter').readOnly   = !isPending;
+    $('btn-reject-app').style.display = isPending ? 'inline-flex' : 'none';
+    $('modal-cover-letter').readOnly = !isPending;
 
     $('btn-approve-app').onclick = () => handleApprove(app.id);
-    $('btn-reject-app').onclick  = () => handleReject(app.id);
+    $('btn-reject-app').onclick = () => handleReject(app.id);
 
     $('review-modal').classList.add('visible');
     lucide.createIcons();
@@ -683,7 +858,7 @@ function fmtDate(iso) {
 
 function timeAgo(date) {
     const secs = Math.floor((Date.now() - date) / 1000);
-    if (secs < 60)  return 'just now';
+    if (secs < 60) return 'just now';
     if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
     if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
     return `${Math.floor(secs / 86400)}d ago`;
