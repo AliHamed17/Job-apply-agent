@@ -810,3 +810,26 @@ h1, h2, h3, h4, h5 {
     outline: none;
     border-color: var(--primary);
 }
+
+
+#view-submissions .jobs-toolbar,
+#view-applications .jobs-toolbar {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+#view-submissions .jobs-search,
+#view-applications .jobs-search {
+    min-width: 280px;
+}
+
+.data-table td .status {
+    text-transform: capitalize;
+}
+
+.data-table td.text-dim[title] {
+    max-width: 280px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

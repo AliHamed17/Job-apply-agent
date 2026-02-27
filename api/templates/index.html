@@ -87,11 +87,14 @@
                 <section id="view-applications" class="view">
                     <div class="list-header">
                         <h2>Pending Approvals</h2>
+                        <div class="jobs-toolbar">
+                            <input id="applications-search" class="jobs-search" placeholder="Search title/company/cover letter..." />
                         <div class="filter-group">
                             <button class="filter-btn active" data-status="draft">Drafts</button>
                             <button class="filter-btn" data-status="approved">Approved</button>
                             <button class="filter-btn" data-status="skipped">Skipped</button>
                             <button class="filter-btn" id="btn-open-draft-links">Open Draft Apply Links</button>
+                        </div>
                         </div>
                     </div>
                     <div class="cards-list" id="applications-list">
@@ -133,6 +136,16 @@
                 <section id="view-submissions" class="view">
                     <div class="list-header">
                         <h2>Submission Queue</h2>
+                        <div class="jobs-toolbar">
+                            <input id="submissions-search" class="jobs-search" placeholder="Search job/platform/error..." />
+                            <div class="filter-group">
+                                <button class="filter-btn active" data-submission-status="">All</button>
+                                <button class="filter-btn" data-submission-status="pending">Pending</button>
+                                <button class="filter-btn" data-submission-status="success">Success</button>
+                                <button class="filter-btn" data-submission-status="failed">Failed</button>
+                                <button class="filter-btn" data-submission-status="needs_human_confirmation">Needs Human</button>
+                            </div>
+                        </div>
                     </div>
                     <div class="table-container">
                         <table class="data-table">

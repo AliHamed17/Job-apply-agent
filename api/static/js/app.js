@@ -14,7 +14,10 @@ const state = {
     filters: {
         applications: 'draft',
         jobs: '', // empty means all
-        jobsSearch: ''
+        jobsSearch: '',
+        applicationsSearch: '',
+        submissionsSearch: '',
+        submissionsStatus: ''
     }
 };
 
@@ -41,6 +44,9 @@ const els = {
     btnApproveVisibleDrafts: document.getElementById('btn-approve-visible-drafts'),
     btnOpenDraftLinks: document.getElementById('btn-open-draft-links'),
     jobsSearch: document.getElementById('jobs-search'),
+    applicationsSearch: document.getElementById('applications-search'),
+    submissionsSearch: document.getElementById('submissions-search'),
+    submissionFilters: document.querySelectorAll('#view-submissions .filter-btn[data-submission-status]'),
     submissionsTableBody: document.getElementById('submissions-table-body'),
     applySessionModal: document.getElementById('apply-session-modal'),
     applySessionList: document.getElementById('apply-session-list'),
@@ -122,6 +128,31 @@ function setupEventListeners() {
         els.jobsSearch.addEventListener('input', (e) => {
             state.filters.jobsSearch = (e.target.value || '').trim().toLowerCase();
             renderJobs();
+        });
+    }
+
+    if (els.applicationsSearch) {
+        els.applicationsSearch.addEventListener('input', (e) => {
+            state.filters.applicationsSearch = (e.target.value || '').trim().toLowerCase();
+            renderApplications();
+        });
+    }
+
+    if (els.submissionsSearch) {
+        els.submissionsSearch.addEventListener('input', (e) => {
+            state.filters.submissionsSearch = (e.target.value || '').trim().toLowerCase();
+            renderSubmissions();
+        });
+    }
+
+    if (els.submissionFilters) {
+        els.submissionFilters.forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                els.submissionFilters.forEach((b) => b.classList.remove('active'));
+                e.currentTarget.classList.add('active');
+                state.filters.submissionsStatus = e.currentTarget.dataset.submissionStatus || '';
+                renderSubmissions();
+            });
         });
     }
     
@@ -311,12 +342,18 @@ function renderDashboard() {
 }
 
 function renderApplications() {
-    const filtered = state.applications.filter(a => a.status === state.filters.applications);
-    
+    const query = state.filters.applicationsSearch || '';
+    const filtered = state.applications.filter((a) => {
+        if (a.status !== state.filters.applications) return false;
+        if (!query) return true;
+        const haystack = `${a.job_title} ${a.job_company} ${a.cover_letter}`.toLowerCase();
+        return haystack.includes(query);
+    });
+
     if (filtered.length === 0) {
         els.applicationsList.innerHTML = `
             <div class="col-span-full py-8 text-center text-dim w-full" style="grid-column: 1/-1;">
-                No applications found with status '${state.filters.applications}'.
+                No applications found for current filters.
             </div>
         `;
         return;
@@ -418,18 +455,28 @@ function renderUrlPipeline() {
 function renderSubmissions() {
     if (!els.submissionsTableBody) return;
 
-    if (!state.submissions.length) {
-        els.submissionsTableBody.innerHTML = `<tr><td colspan="6" class="text-center text-dim py-4">No submissions yet.</td></tr>`;
+    const query = state.filters.submissionsSearch || '';
+    const statusFilter = state.filters.submissionsStatus || '';
+
+    const filtered = state.submissions.filter((s) => {
+        if (statusFilter && s.status !== statusFilter) return false;
+        if (!query) return true;
+        const haystack = `${s.job_title || ''} ${s.submitter_name || ''} ${s.error_message || ''}`.toLowerCase();
+        return haystack.includes(query);
+    });
+
+    if (!filtered.length) {
+        els.submissionsTableBody.innerHTML = `<tr><td colspan="6" class="text-center text-dim py-4">No submissions found for current filters.</td></tr>`;
         return;
     }
 
-    els.submissionsTableBody.innerHTML = state.submissions.map((s) => `
+    els.submissionsTableBody.innerHTML = filtered.map((s) => `
         <tr>
             <td>${s.job_title || '-'}</td>
             <td>${s.submitter_name || '-'}</td>
-            <td><span class="status ${s.status}">${s.status}</span></td>
-            <td class="text-dim">${s.error_message || '-'}</td>
-            <td class="text-dim">${new Date(s.created_at).toLocaleString()}</td>
+            <td><span class="status ${s.status}">${(s.status || '-').replaceAll('_', ' ')}</span></td>
+            <td class="text-dim" title="${s.error_message || ''}">${s.error_message || '-'}</td>
+            <td class="text-dim">${s.created_at ? new Date(s.created_at).toLocaleString() : '-'}</td>
             <td>
                 ${s.application_id ? `<button class="btn btn-secondary btn-sm" onclick="retrySubmission(${s.application_id})">Retry</button>` : ''}
                 ${s.confirmation_url ? `<a class="btn btn-glass btn-sm" href="${s.confirmation_url}" target="_blank" rel="noopener">Open</a>` : ''}
