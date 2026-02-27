@@ -137,12 +137,12 @@ async def rate_limit_middleware(request: Request, call_next):
 
 def _is_auth_exempt_path(path: str) -> bool:
     """Return True only for explicitly exempt endpoints."""
-    exact_exempt = {"/webhook/whatsapp", "/health", "/openapi.json", "/docs", "/redoc"}
+    exact_exempt = {"/", "/webhook/whatsapp", "/health", "/openapi.json", "/docs", "/redoc"}
     if path in exact_exempt:
         return True
 
-    docs_prefixes = ("/docs/", "/redoc/")
-    return path.startswith(docs_prefixes)
+    exempt_prefixes = ("/docs/", "/redoc/", "/static/")
+    return path.startswith(exempt_prefixes)
 
 
 
@@ -236,7 +236,7 @@ async def health():
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 @app.get("/metrics")
 async def metrics():

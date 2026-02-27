@@ -68,3 +68,17 @@ def test_prod_wildcard_trusted_host_fails_runtime_validation():
     conf = Settings(app_env="prod", secret_key="abc", trusted_hosts="*")
     errors = conf.validate_runtime_config()
     assert any("TRUSTED_HOSTS" in e for e in errors)
+
+
+def test_dashboard_root_is_auth_exempt():
+    with TestClient(app) as client:
+        resp = client.get("/", headers={"Authorization": ""})
+
+    assert resp.status_code == 200
+
+
+def test_static_assets_are_auth_exempt():
+    with TestClient(app) as client:
+        resp = client.get("/static/js/app.js", headers={"Authorization": ""})
+
+    assert resp.status_code == 200
