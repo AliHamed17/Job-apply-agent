@@ -197,82 +197,174 @@
             <!-- ── WhatsApp View ───────────────────────── -->
             <section id="view-whatsapp" class="view">
 
-                <div class="wa-setup-grid">
-                    <div class="wa-card">
-                        <div class="wa-card-header">
-                            <div class="wa-card-icon"><i data-lucide="settings"></i></div>
-                            <div>
-                                <h3>Webhook Setup</h3>
-                                <p class="text-sm text-dim">Connect WhatsApp Business API</p>
+                <!-- Bridge status banner -->
+                <div id="wa-bridge-status" class="health-banner" style="display:none;margin-bottom:16px;"></div>
+
+                <!-- Method tabs -->
+                <div class="wa-method-tabs" style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid var(--border-light);padding-bottom:0;">
+                    <button class="wa-method-tab active" data-method="bridge" onclick="switchWaMethod('bridge')">
+                        <i data-lucide="smartphone"></i> Personal Bridge (QR)
+                    </button>
+                    <button class="wa-method-tab" data-method="cloud" onclick="switchWaMethod('cloud')">
+                        <i data-lucide="cloud"></i> Cloud API (Meta Business)
+                    </button>
+                </div>
+
+                <!-- ── Personal Bridge panel ── -->
+                <div id="wa-panel-bridge">
+                    <div class="wa-setup-grid">
+                        <div class="wa-card">
+                            <div class="wa-card-header">
+                                <div class="wa-card-icon"><i data-lucide="smartphone"></i></div>
+                                <div>
+                                    <h3>Personal WhatsApp Bridge</h3>
+                                    <p class="text-sm text-dim">Use your own WhatsApp account — no Meta approval needed</p>
+                                </div>
                             </div>
+
+                            <div class="config-item">
+                                <div class="config-label">Agent URL (bridge/.env)</div>
+                                <div class="config-value">
+                                    <span id="wa-bridge-agent-url">http://localhost:8000</span>
+                                    <button class="copy-inline" onclick="copyText('wa-bridge-agent-url')" title="Copy">
+                                        <i data-lucide="copy" style="width:14px;height:14px;"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="config-item">
+                                <div class="config-label">API Token (bridge/.env)</div>
+                                <div class="config-value">
+                                    <code>JOB_AGENT_TOKEN=&lt;same as SECRET_KEY in .env&gt;</code>
+                                </div>
+                            </div>
+
+                            <ol class="steps-list mt-1">
+                                <li>Make sure Node.js ≥ 18 is installed</li>
+                                <li>Run: <code>cd bridge &amp;&amp; npm install</code></li>
+                                <li>Edit <code>bridge/.env</code> — set <code>JOB_AGENT_URL</code> and <code>JOB_AGENT_TOKEN</code></li>
+                                <li>Run: <code>node whatsapp_bridge.js</code> — a QR code appears</li>
+                                <li>Open WhatsApp on your phone → <strong>Linked Devices → Link a Device</strong></li>
+                                <li>Scan the QR code — session is saved, no re-scan needed next time</li>
+                                <li>The bridge watches your groups automatically. The status dot above turns green.</li>
+                            </ol>
                         </div>
 
-                        <div class="config-item">
-                            <div class="config-label">Callback URL</div>
-                            <div class="config-value">
-                                <span id="wa-webhook-url">/webhook/whatsapp</span>
-                                <button class="copy-inline" onclick="copyText('wa-webhook-url')" title="Copy">
-                                    <i data-lucide="copy" style="width:14px;height:14px;"></i>
-                                </button>
+                        <div class="wa-card">
+                            <div class="wa-card-header">
+                                <div class="wa-card-icon"><i data-lucide="settings-2"></i></div>
+                                <div>
+                                    <h3>Bridge Configuration</h3>
+                                    <p class="text-sm text-dim">bridge/.env options</p>
+                                </div>
                             </div>
-                        </div>
-                        <div class="config-item">
-                            <div class="config-label">Verify Token</div>
-                            <div class="config-value">
-                                <span>Set <code>WHATSAPP_VERIFY_TOKEN</code> in .env</span>
+
+                            <div class="config-item">
+                                <div class="config-label">WATCH_ALL_GROUPS</div>
+                                <div class="config-value"><code>true</code> = watch every group (default)</div>
                             </div>
-                        </div>
-                        <div class="config-item">
-                            <div class="config-label">App Secret (signature validation)</div>
-                            <div class="config-value">
-                                <span>Set <code>WHATSAPP_APP_SECRET</code> in .env</span>
+                            <div class="config-item">
+                                <div class="config-label">WATCH_ARCHIVED_ONLY</div>
+                                <div class="config-value"><code>true</code> = only archived groups (recommended for job groups)</div>
                             </div>
-                        </div>
-
-                        <ol class="steps-list mt-1">
-                            <li>Go to Meta for Developers and open your WhatsApp App</li>
-                            <li>Under <em>WhatsApp &rarr; Configuration</em>, paste the Callback URL and Verify Token</li>
-                            <li>Subscribe to the <strong>messages</strong> webhook field</li>
-                            <li>Add your phone number to <code>ALLOWED_SENDER_LIST</code> in .env</li>
-                            <li>Forward any job link via WhatsApp — it appears in Recent Messages below</li>
-                        </ol>
-                    </div>
-
-                    <div class="wa-card">
-                        <div class="wa-card-header">
-                            <div class="wa-card-icon"><i data-lucide="zap"></i></div>
-                            <div>
-                                <h3>Supported URL Sources</h3>
-                                <p class="text-sm text-dim">URLs are extracted from all of these</p>
+                            <div class="config-item">
+                                <div class="config-label">GROUP_KEYWORDS</div>
+                                <div class="config-value"><code>jobs,hiring,careers,referally,mid,senior</code></div>
                             </div>
-                        </div>
-
-                        <div class="supported-types">
-                            <div class="type-chip"><i data-lucide="message-square"></i> Text messages</div>
-                            <div class="type-chip"><i data-lucide="image"></i> Image captions</div>
-                            <div class="type-chip"><i data-lucide="video"></i> Video captions</div>
-                            <div class="type-chip"><i data-lucide="file"></i> Document captions</div>
-                            <div class="type-chip"><i data-lucide="mouse-pointer-click"></i> Button replies</div>
-                            <div class="type-chip"><i data-lucide="list"></i> Interactive lists</div>
-                            <div class="type-chip"><i data-lucide="link"></i> Short URLs (30+)</div>
-                            <div class="type-chip"><i data-lucide="forward"></i> Forwarded messages</div>
-                        </div>
-
-                        <div class="mt-2">
-                            <div class="config-label">Recognised Job Boards</div>
-                            <p class="text-sm text-dim" style="margin-top:6px;line-height:1.7;">
-                                Greenhouse &bull; Lever &bull; Workday &bull; LinkedIn &bull; Indeed &bull;
-                                Glassdoor &bull; ZipRecruiter &bull; Wellfound &bull; Ashby &bull;
-                                SmartRecruiters &bull; Workable &bull; iCIMS &bull; Jobvite &bull;
-                                TeamTailor &bull; Amazon Jobs &bull; Google Careers &bull;
-                                Microsoft Careers &bull; and more
-                            </p>
+                            <div class="config-item">
+                                <div class="config-label">JOB_URL_ONLY</div>
+                                <div class="config-value"><code>false</code> = forward all URLs (catches short links)</div>
+                            </div>
+                            <div class="config-item">
+                                <div class="config-label">LOG_LEVEL</div>
+                                <div class="config-value"><code>info</code> | <code>verbose</code> | <code>silent</code></div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="section-title">
-                    <i data-lucide="message-circle"></i> Recent WhatsApp Messages
+                <!-- ── Cloud API panel ── -->
+                <div id="wa-panel-cloud" style="display:none;">
+                    <div class="wa-setup-grid">
+                        <div class="wa-card">
+                            <div class="wa-card-header">
+                                <div class="wa-card-icon"><i data-lucide="cloud"></i></div>
+                                <div>
+                                    <h3>WhatsApp Cloud API Setup</h3>
+                                    <p class="text-sm text-dim">Official Meta Business API — requires app approval</p>
+                                </div>
+                            </div>
+
+                            <div class="config-item">
+                                <div class="config-label">Callback URL</div>
+                                <div class="config-value">
+                                    <span id="wa-webhook-url">/webhook/whatsapp</span>
+                                    <button class="copy-inline" onclick="copyText('wa-webhook-url')" title="Copy">
+                                        <i data-lucide="copy" style="width:14px;height:14px;"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="config-item">
+                                <div class="config-label">Verify Token</div>
+                                <div class="config-value"><span>Set <code>WHATSAPP_VERIFY_TOKEN</code> in .env</span></div>
+                            </div>
+                            <div class="config-item">
+                                <div class="config-label">App Secret</div>
+                                <div class="config-value"><span>Set <code>WHATSAPP_APP_SECRET</code> in .env</span></div>
+                            </div>
+                            <div class="config-item">
+                                <div class="config-label">API Token (send messages back)</div>
+                                <div class="config-value"><span>Set <code>WHATSAPP_API_TOKEN</code> in .env</span></div>
+                            </div>
+                            <div class="config-item">
+                                <div class="config-label">Phone Number ID</div>
+                                <div class="config-value"><span>Set <code>WHATSAPP_PHONE_NUMBER_ID</code> in .env</span></div>
+                            </div>
+
+                            <ol class="steps-list mt-1">
+                                <li>Go to <strong>Meta for Developers</strong> → create a WhatsApp app</li>
+                                <li>Under <em>WhatsApp → Configuration</em>, paste the Callback URL &amp; Verify Token</li>
+                                <li>Subscribe to the <strong>messages</strong> webhook field</li>
+                                <li>Set <code>WHATSAPP_API_TOKEN</code> + <code>WHATSAPP_PHONE_NUMBER_ID</code> in .env to get approval buttons sent back</li>
+                                <li>Add your phone to <code>ALLOWED_SENDERS</code> in .env</li>
+                            </ol>
+                        </div>
+
+                        <div class="wa-card">
+                            <div class="wa-card-header">
+                                <div class="wa-card-icon"><i data-lucide="zap"></i></div>
+                                <div>
+                                    <h3>Supported URL Sources</h3>
+                                    <p class="text-sm text-dim">URLs extracted from all message types</p>
+                                </div>
+                            </div>
+
+                            <div class="supported-types">
+                                <div class="type-chip"><i data-lucide="message-square"></i> Text messages</div>
+                                <div class="type-chip"><i data-lucide="image"></i> Image captions</div>
+                                <div class="type-chip"><i data-lucide="video"></i> Video captions</div>
+                                <div class="type-chip"><i data-lucide="file"></i> Document captions</div>
+                                <div class="type-chip"><i data-lucide="mouse-pointer-click"></i> Button replies</div>
+                                <div class="type-chip"><i data-lucide="list"></i> Interactive lists</div>
+                                <div class="type-chip"><i data-lucide="link"></i> Short URLs (30+)</div>
+                                <div class="type-chip"><i data-lucide="forward"></i> Forwarded messages</div>
+                            </div>
+
+                            <div class="mt-2">
+                                <div class="config-label">Recognised Job Boards</div>
+                                <p class="text-sm text-dim" style="margin-top:6px;line-height:1.7;">
+                                    Greenhouse &bull; Lever &bull; Workday &bull; LinkedIn &bull; Indeed &bull;
+                                    Glassdoor &bull; Comeet &bull; ZipRecruiter &bull; Wellfound &bull; Ashby &bull;
+                                    SmartRecruiters &bull; Workable &bull; iCIMS &bull; Jobvite &bull;
+                                    TeamTailor &bull; Rippling &bull; Amazon Jobs &bull; Google Careers &bull;
+                                    Microsoft Careers &bull; and more
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-title" style="margin-top:24px;">
+                    <i data-lucide="message-circle"></i> Recent Messages
                     <button class="btn btn-sm btn-glass" style="margin-left:auto" onclick="fetchMessages()">
                         <i data-lucide="refresh-cw" style="width:12px;height:12px;"></i> Refresh
                     </button>

@@ -55,8 +55,9 @@ document.addEventListener('DOMContentLoaded', () => {
         $('api-secret').value = saved;
     }
 
-    // Set full webhook URL in WhatsApp view
+    // Set full webhook URL + bridge agent URL in WhatsApp view
     $('wa-webhook-url').textContent = `${location.origin}/webhook/whatsapp`;
+    $('wa-bridge-agent-url').textContent = location.origin;
 
     setupListeners();
     refreshAllData();
@@ -182,7 +183,7 @@ function switchTab(tabId) {
     if (tabId === 'applications' && state.applications.length === 0) fetchApplications();
     if (tabId === 'jobs' && state.jobs.length === 0) fetchJobs();
     if (tabId === 'urls') fetchUrls();
-    if (tabId === 'whatsapp') fetchMessages();
+    if (tabId === 'whatsapp') { fetchMessages(); fetchBridgeStatus(); }
 }
 
 // ── API Layer ──────────────────────────────────────────────────────────────────
@@ -218,7 +219,7 @@ async function refreshAllData() {
     await fetchJobs();
     if (state.currentTab === 'applications') await fetchApplications();
     if (state.currentTab === 'urls') await fetchUrls();
-    if (state.currentTab === 'whatsapp') await fetchMessages();
+    if (state.currentTab === 'whatsapp') { await fetchMessages(); await fetchBridgeStatus(); }
 }
 
 async function fetchDashboard() {
@@ -928,6 +929,40 @@ function renderUrls() {
 
     lucide.createIcons();
 }
+
+// ── WhatsApp: Bridge Status + Method Switcher ─────────────────────────────────
+
+async function fetchBridgeStatus() {
+    const data = await apiCall('/api/bridge/status');
+    const banner = $('wa-bridge-status');
+    if (!banner) return;
+    if (!data) { banner.style.display = 'none'; return; }
+    const connected = data.connected;
+    const ago = data.last_seen ? timeAgo(new Date(data.last_seen)) : 'never';
+    banner.style.display = 'flex';
+    banner.style.alignItems = 'center';
+    banner.style.gap = '10px';
+    banner.style.padding = '10px 16px';
+    banner.style.borderRadius = '8px';
+    banner.style.fontSize = '0.875rem';
+    banner.style.background = connected ? 'var(--success-bg, #22c55e18)' : 'var(--warning-bg, #f59e0b18)';
+    banner.style.border = `1px solid ${connected ? '#22c55e44' : '#f59e0b44'}`;
+    banner.innerHTML = `
+        <span style="width:10px;height:10px;border-radius:50%;background:${connected ? 'var(--success)' : 'var(--warning)'};flex-shrink:0;${connected ? 'box-shadow:0 0 6px var(--success)' : ''}"></span>
+        <span><strong>Bridge ${connected ? 'connected' : 'disconnected'}</strong>${connected ? '' : ` — last seen ${ago}`}
+        ${connected ? `<span style="color:var(--text-muted);margin-left:8px;">· last ping ${ago}</span>` : ''}
+        </span>
+        ${!connected ? `<span style="color:var(--text-muted);margin-left:auto;font-size:0.8rem;">Run <code>cd bridge &amp;&amp; node whatsapp_bridge.js</code></span>` : ''}
+    `;
+}
+
+window.switchWaMethod = function(method) {
+    document.querySelectorAll('.wa-method-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.method === method);
+    });
+    $('wa-panel-bridge').style.display = method === 'bridge' ? '' : 'none';
+    $('wa-panel-cloud').style.display  = method === 'cloud'  ? '' : 'none';
+};
 
 // ── Utilities: WhatsApp ────────────────────────────────────────────────────────
 window.fetchMessages = fetchMessages;

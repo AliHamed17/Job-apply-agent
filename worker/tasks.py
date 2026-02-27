@@ -360,6 +360,36 @@ def generate_application_task(self, job_id: int):
             reason="Score above threshold" if auto_approve else "Score below threshold or draft_only enabled",
         )
 
+        # ── Notify originating WhatsApp sender (Cloud API) ────────────────
+        # Only when draft (not auto-approved) and Cloud API is configured
+        if not auto_approve and settings.whatsapp_api_token and settings.whatsapp_phone_number_id:
+            try:
+                # Walk: Job → ExtractedURL → Message to get sender
+                url_record = (
+                    db.query(ExtractedURL)
+                    .filter(ExtractedURL.id == db_job.extracted_url_id)
+                    .first()
+                )
+                if url_record and url_record.message:
+                    sender = url_record.message.sender_phone
+                    if sender and sender not in ("manual", "whatsapp-bridge", "dashboard"):
+                        from api.routes.webhook import _send_approval_buttons
+                        run_async(_send_approval_buttons(
+                            sender,
+                            job_id,
+                            db_job.title,
+                            db_job.company,
+                            db_job.score or 0.0,
+                            settings,
+                        ))
+                        logger.info(
+                            "whatsapp_approval_sent",
+                            job=db_job.title,
+                            sender=sender,
+                        )
+            except Exception as notify_err:
+                logger.warning("whatsapp_notify_failed", error=str(notify_err))
+
         # Immediately chain to submission when auto-approved
         if auto_approve:
             logger.info("auto_apply_queued", job=db_job.title, app_id=app.id)

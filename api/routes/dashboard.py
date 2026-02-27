@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,9 @@ from db.session import get_db
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["dashboard"])
+
+# In-memory bridge heartbeat store (resets on server restart, that's fine)
+_bridge_last_seen: dict[str, str] = {}
 
 
 class DashboardSummary(BaseModel):
@@ -261,11 +265,52 @@ async def list_messages(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    """List recent WhatsApp messages."""
-    return (
+    """List recent WhatsApp messages (serialized)."""
+    rows = (
         db.query(Message)
         .order_by(Message.received_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+    return [
+        {
+            "id": m.id,
+            "sender_phone": m.sender_phone,
+            "body": m.body or "",
+            "created_at": m.received_at.isoformat() if m.received_at else None,
+            "url_count": len(m.extracted_urls),
+        }
+        for m in rows
+    ]
+
+
+# ── Bridge Heartbeat ─────────────────────────────────────────────────────────
+
+@router.post("/bridge/heartbeat")
+async def bridge_heartbeat(request: Request):
+    """Receive a heartbeat ping from the WhatsApp bridge process.
+
+    The bridge calls this every 60 s so the dashboard can show
+    whether it is currently connected.
+    """
+    try:
+        data: dict[str, Any] = await request.json()
+    except Exception:
+        data = {}
+    bridge_id = str(data.get("id", "default"))
+    groups = int(data.get("groups_watched", 0))
+    _bridge_last_seen[bridge_id] = datetime.utcnow().isoformat()
+    logger.debug("bridge_heartbeat", bridge_id=bridge_id, groups=groups)
+    return {"status": "ok", "bridge_id": bridge_id}
+
+
+@router.get("/bridge/status")
+async def bridge_status():
+    """Return the connection status of the WhatsApp bridge."""
+    if not _bridge_last_seen:
+        return {"connected": False, "last_seen": None, "groups_watched": 0}
+    last_seen_str = max(_bridge_last_seen.values())
+    last_seen_dt = datetime.fromisoformat(last_seen_str)
+    connected = (datetime.utcnow() - last_seen_dt).total_seconds() < 120
+    return {"connected": connected, "last_seen": last_seen_str}

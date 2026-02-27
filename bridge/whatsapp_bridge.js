@@ -56,6 +56,7 @@ const JOB_HOSTS = [
   'dover.com', 'amazon.jobs', 'careers.google.com', 'careers.microsoft.com',
   'jobs.apple.com', 'efinancialcareers.com', 'totaljobs.com', 'reed.co.uk',
   'cwjobs.co.uk', 'jobsite.co.uk', 'monster.co.uk', 'cityjobs.com',
+  'comeet.com', 'comeet.co', 'rippling.com', 'dover.io',
 ];
 
 const SHORT_HOSTS = [
@@ -145,6 +146,37 @@ async function forwardUrl(url, senderPhone, groupName) {
   }
 }
 
+// ── Heartbeat — lets the dashboard know the bridge is alive ──────────────────
+let _heartbeatTimer = null;
+let _watchedGroupCount = 0;
+
+async function sendHeartbeat() {
+  if (!CONFIG.agentUrl) return;
+  const headers = { 'Content-Type': 'application/json' };
+  if (CONFIG.agentToken) headers['Authorization'] = `Bearer ${CONFIG.agentToken}`;
+  try {
+    await fetch(`${CONFIG.agentUrl}/api/bridge/heartbeat`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: 'whatsapp-web', groups_watched: _watchedGroupCount }),
+      timeout: 5000,
+    });
+    log('verbose', `Heartbeat sent (groups: ${_watchedGroupCount})`);
+  } catch (err) {
+    log('verbose', `Heartbeat failed: ${err.message}`);
+  }
+}
+
+function startHeartbeat() {
+  if (_heartbeatTimer) clearInterval(_heartbeatTimer);
+  sendHeartbeat();  // send immediately on connect
+  _heartbeatTimer = setInterval(sendHeartbeat, 60_000);  // then every 60 s
+}
+
+function stopHeartbeat() {
+  if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+}
+
 // ── Deduplification (in-memory, resets on restart) ────────────────────────────
 const seenUrls = new Set();
 
@@ -197,6 +229,7 @@ client.on('ready', async () => {
     const chats = await client.getChats();
     const groups = chats.filter(c => c.isGroup);
     const watched = groups.filter(g => shouldWatchGroup(g));
+    _watchedGroupCount = watched.length;
     log('info', `Monitoring ${watched.length} / ${groups.length} groups:`);
     for (const g of watched) {
       log('info', `  • ${g.name}`);
@@ -209,10 +242,13 @@ client.on('ready', async () => {
   } catch (err) {
     log('warn', `Could not list groups: ${err.message}`);
   }
+
+  startHeartbeat();
 });
 
 client.on('disconnected', reason => {
   log('warn', `Disconnected: ${reason}`);
+  stopHeartbeat();
   // Attempt reconnect after 10 seconds
   setTimeout(() => {
     log('info', 'Attempting to reconnect…');
@@ -270,8 +306,8 @@ async function processMessage(msg) {
 client.on('message', processMessage);
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
-process.on('SIGINT', () => { log('info', 'Shutting down…'); client.destroy().then(() => process.exit(0)); });
-process.on('SIGTERM', () => { log('info', 'Shutting down…'); client.destroy().then(() => process.exit(0)); });
+process.on('SIGINT', () => { log('info', 'Shutting down…'); stopHeartbeat(); client.destroy().then(() => process.exit(0)); });
+process.on('SIGTERM', () => { log('info', 'Shutting down…'); stopHeartbeat(); client.destroy().then(() => process.exit(0)); });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 log('info', 'Starting WhatsApp bridge…');
