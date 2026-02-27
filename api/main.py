@@ -219,20 +219,72 @@ async def serve_dashboard(request: Request):
 @app.get("/metrics")
 async def metrics():
     """Basic metrics endpoint."""
-    from db.models import Application, ExtractedURL, Job, JobStatus, Submission
+    from db.models import (
+        Application,
+        ExtractedURL,
+        Job,
+        JobStatus,
+        Submission,
+        SubmissionStatus,
+        URLStatus,
+    )
     from db.session import get_session_factory
 
     db = get_session_factory()()
     try:
+        urls_processed = db.query(ExtractedURL).count()
+        urls_pending = db.query(ExtractedURL).filter(ExtractedURL.status == URLStatus.PENDING).count()
+        urls_failed = db.query(ExtractedURL).filter(ExtractedURL.status == URLStatus.FAILED).count()
+        urls_blocked = db.query(ExtractedURL).filter(ExtractedURL.status == URLStatus.BLOCKED).count()
+
+        jobs_extracted = db.query(Job).count()
+        jobs_draft = db.query(Job).filter(Job.status == JobStatus.DRAFT).count()
+        jobs_approved = db.query(Job).filter(Job.status == JobStatus.APPROVED).count()
+        jobs_submitted = db.query(Job).filter(Job.status == JobStatus.SUBMITTED).count()
+        jobs_skipped = db.query(Job).filter(Job.status == JobStatus.SKIPPED).count()
+
+        applications_total = db.query(Application).count()
+        applications_draft = db.query(Application).filter(Application.status == JobStatus.DRAFT).count()
+        applications_approved = db.query(Application).filter(
+            Application.status == JobStatus.APPROVED
+        ).count()
+        applications_skipped = db.query(Application).filter(
+            Application.status == JobStatus.SKIPPED
+        ).count()
+
+        submissions_total = db.query(Submission).count()
+        submissions_pending = db.query(Submission).filter(Submission.status == SubmissionStatus.PENDING).count()
+        submissions_success = db.query(Submission).filter(Submission.status == SubmissionStatus.SUCCESS).count()
+        submissions_failed = db.query(Submission).filter(Submission.status == SubmissionStatus.FAILED).count()
+        submissions_needs_human = db.query(Submission).filter(
+            Submission.status == SubmissionStatus.NEEDS_HUMAN_CONFIRMATION
+        ).count()
+        submissions_draft_only = db.query(Submission).filter(
+            Submission.status == SubmissionStatus.DRAFT_ONLY
+        ).count()
+
         metrics = {
-            "urls_processed": db.query(ExtractedURL).count(),
-            "jobs_extracted": db.query(Job).count(),
-            "jobs_skipped": db.query(Job).filter(Job.status == JobStatus.SKIPPED).count(),
-            "applications_drafted": db.query(Application).count(),
-            "applications_approved": db.query(Application).filter(
-                Application.status == JobStatus.APPROVED
-            ).count(),
-            "submissions_total": db.query(Submission).count(),
+            "urls_processed": urls_processed,
+            "urls_pending": urls_pending,
+            "urls_failed": urls_failed,
+            "urls_blocked": urls_blocked,
+            "jobs_extracted": jobs_extracted,
+            "jobs_draft": jobs_draft,
+            "jobs_approved": jobs_approved,
+            "jobs_submitted": jobs_submitted,
+            "jobs_skipped": jobs_skipped,
+            "applications_drafted": applications_total,
+            "applications_draft": applications_draft,
+            "applications_approved": applications_approved,
+            "applications_skipped": applications_skipped,
+            "submissions_total": submissions_total,
+            "submissions_pending": submissions_pending,
+            "submissions_success": submissions_success,
+            "submissions_failed": submissions_failed,
+            "submissions_needs_human_confirmation": submissions_needs_human,
+            "submissions_draft_only": submissions_draft_only,
+            "application_approval_rate": round(applications_approved / applications_total, 4) if applications_total else 0.0,
+            "submission_success_rate": round(submissions_success / submissions_total, 4) if submissions_total else 0.0,
         }
         webhook_metrics = get_webhook_metrics_snapshot()
         for key, value in webhook_metrics.items():

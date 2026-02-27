@@ -155,3 +155,47 @@ def test_metrics_quality_and_platform_breakdown(monkeypatch):
     assert payload["platform_breakdown"].get("workday", 0) >= 1
     assert payload["quality"]["likely_job_url_rate"] > 0
     assert payload["quality"]["url_enqueue_rate"] > 0
+
+
+def test_metrics_include_pipeline_breakdowns(monkeypatch):
+    reset_webhook_metrics()
+    monkeypatch.setattr(process_url_task, "delay", lambda _job_id: None)
+
+    uid = uuid4().hex[:6]
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/webhook/whatsapp",
+            json=_webhook_payload(
+                "wamid.metrics.6",
+                "15550001111",
+                f"https://example.com/jobs/{uid}",
+            ),
+        )
+        assert resp.status_code == 200
+
+        metrics_resp = client.get("/metrics")
+        assert metrics_resp.status_code == 200
+        metrics = metrics_resp.json()
+
+    for key in [
+        "urls_pending",
+        "urls_failed",
+        "urls_blocked",
+        "jobs_draft",
+        "jobs_approved",
+        "jobs_submitted",
+        "applications_draft",
+        "applications_skipped",
+        "submissions_pending",
+        "submissions_success",
+        "submissions_failed",
+        "submissions_needs_human_confirmation",
+        "submissions_draft_only",
+        "application_approval_rate",
+        "submission_success_rate",
+    ]:
+        assert key in metrics
+
+    assert 0.0 <= metrics["application_approval_rate"] <= 1.0
+    assert 0.0 <= metrics["submission_success_rate"] <= 1.0
