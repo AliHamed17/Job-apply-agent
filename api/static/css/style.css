@@ -473,6 +473,74 @@ h1, h2, h3, h4, h5 {
 }
 .empty-feed i { width: 40px; height: 40px; margin: 0 auto 12px; display: block; opacity: 0.4; }
 
+/* ── Candidate Profile / CV Upload ──────────────────── */
+.profile-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 20px;
+}
+
+.profile-dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 6px;
+    padding: 28px 20px;
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-base);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.profile-dropzone:hover { border-color: var(--primary); background: rgba(59, 130, 246, 0.05); }
+.profile-dropzone.dragover {
+    border-color: var(--primary);
+    background: var(--primary-glow);
+    box-shadow: 0 0 0 3px var(--primary-glow);
+}
+.profile-dropzone i { width: 26px; height: 26px; color: var(--text-muted); margin-bottom: 4px; }
+.profile-dropzone p { font-size: 0.875rem; color: var(--text-dim); }
+.profile-dropzone .dropzone-browse { color: var(--primary); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+
+.profile-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+}
+
+.profile-summary {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 14px;
+    margin-top: 16px;
+}
+@media (max-width: 700px) { .profile-summary { grid-template-columns: 1fr; } }
+
+.profile-roles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    min-height: 38px;
+}
+.profile-role-chip {
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 99px;
+    padding: 3px 10px;
+    font-size: 0.78rem;
+    font-weight: 500;
+}
+
 /* ── Lists & Tables ─────────────────────────────────── */
 .list-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
 .list-header h2 { font-size: 1.2rem; }
@@ -674,6 +742,70 @@ h1, h2, h3, h4, h5 {
 .btn-glass { background: var(--bg-glass); border: 1px solid var(--border); color: var(--text-main); }
 .btn-glass:hover { background: var(--bg-surface-hover); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger { background: var(--danger); color: white; }
+.btn-danger:hover { background: #dc2626; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3); }
+
+/* Automation Control panel (Task 6.2: governor gauge + counts + needs-review) */
+.governor-panel {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 18px 20px;
+}
+.governor-gauge { flex: 1; min-width: 240px; }
+.gauge-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.gauge-label { font-size: 0.8rem; color: var(--text-dim); font-weight: 600; }
+.gauge-track { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.gauge-fill { height: 100%; border-radius: 4px; background: var(--success); transition: width 0.6s ease, background 0.3s ease; }
+.gauge-values { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; font-size: 0.78rem; color: var(--text-muted); }
+.killed-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    padding: 3px 9px;
+    border-radius: 99px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.cooldown-timer { display: inline-flex; align-items: center; gap: 4px; color: var(--warning); font-weight: 600; }
+.governor-actions { display: flex; gap: 10px; flex-shrink: 0; }
+
+.counts-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+}
+.count-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+}
+.count-chip-value { font-size: 1.1rem; font-weight: 700; font-family: var(--font-heading); }
+.count-chip-label { font-size: 0.75rem; color: var(--text-muted); }
+
+.needs-review-wrap { margin-top: 18px; }
+.section-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    font-weight: 600;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
 
 /* ── WhatsApp View ──────────────────────────────────── */
 .wa-method-tabs {

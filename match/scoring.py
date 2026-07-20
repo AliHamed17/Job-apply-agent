@@ -213,25 +213,24 @@ def decide_action(
     draft_only: bool = True,
     skip_reason: str | None = None,
     threshold: float = AUTO_APPLY_THRESHOLD,
+    min_apply_score: float | None = None,
 ) -> Action:
     """Decide what to do with a scored job.
 
     Rules:
     - If blacklisted or score < SKIP_THRESHOLD → SKIP
     - If draft_only=True (default) → always DRAFT
-    - If auto_apply=True AND score >= threshold → AUTO_APPLY
+    - If auto_apply=True AND score >= gate → AUTO_APPLY, where gate is
+      min_apply_score if provided, else threshold
     - Otherwise → DRAFT
     """
     if skip_reason:
         return Action.SKIP
-
     if score < SKIP_THRESHOLD:
         return Action.SKIP
-
     if draft_only:
         return Action.DRAFT
-
-    if auto_apply_enabled and score >= threshold:
+    gate = min_apply_score if min_apply_score is not None else threshold
+    if auto_apply_enabled and score >= gate:
         return Action.AUTO_APPLY
-
     return Action.DRAFT

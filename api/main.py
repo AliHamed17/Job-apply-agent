@@ -14,9 +14,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from api.routes.applications import router as applications_router
+from api.routes.control import router as control_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.feedback import router as feedback_router
 from api.routes.jobs import router as jobs_router
+from api.routes.profile import router as profile_router
+from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
@@ -125,10 +128,13 @@ async def correlation_id_middleware(request: Request, call_next):
 
 # ── Register routes ──────────────────────────────────────
 app.include_router(webhook_router)
+app.include_router(ingest_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
+app.include_router(profile_router)
+app.include_router(control_router)
 
 
 # ── Static and Templates ─────────────────────────────────
@@ -148,7 +154,7 @@ async def health():
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
-    return templates.TemplateResponse("index.html", {"request": request, "api_key": settings.secret_key})
+    return templates.TemplateResponse(request, "index.html", {"api_key": settings.secret_key})
 
 @app.get("/metrics")
 async def metrics():

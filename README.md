@@ -111,6 +111,77 @@ curl -X POST http://localhost:8000/api/ingest \
 | Draft Only | `DRAFT_ONLY=true` | **true** | Generate applications but never auto-submit |
 | Auto Apply | `AUTO_APPLY=true` | **false** | Auto-submit high-score jobs (only if DRAFT_ONLY=false) |
 
+## Full-Auto Mode
+
+The agent can run end-to-end without a human clicking "approve" for every job: discover LinkedIn jobs on a schedule, score them, generate application materials, and submit — all inside governor-enforced safety rails. This is the `FULL_AUTO` preset.
+
+### Enabling the FULL_AUTO preset
+
+Set these in `.env` (see `.env.example`):
+
+```bash
+DRAFT_ONLY=false
+AUTO_APPLY=true
+MIN_APPLY_SCORE=40
+TASKS_ALWAYS_EAGER=false
+```
+
+- `DRAFT_ONLY=false` — allows the submit task to actually submit (instead of only drafting).
+- `AUTO_APPLY=true` — lets the pipeline auto-submit jobs that clear the score bar, instead of always parking them for manual approval.
+- `MIN_APPLY_SCORE=40` — the minimum match score (0–100) a job must reach before auto-apply will submit it; lower-scoring jobs still land in the dashboard for manual review.
+- `TASKS_ALWAYS_EAGER=false` — runs Celery tasks asynchronously through Redis/`celery-worker`/`celery-beat` instead of synchronously in-process. Full-auto discovery and scheduled beat tasks **require** a real broker, so this must be `false` for full-auto (it can stay `true` for local dev without Redis/Docker).
+
+Bring up the full stack (Postgres, Redis, web API, worker, and the scheduler) with:
+
+```bash
+docker-compose up -d
+```
+
+`celery-beat` is the scheduler that periodically triggers LinkedIn discovery (`DISCOVERY_INTERVAL_H`) and digest/outbound jobs; `celery-worker` consumes the `ingestion`, `processing`, `llm`, `submission`, and `discovery` queues.
+
+### One-time LinkedIn login
+
+LinkedIn discovery and Easy Apply drive a real, persistent browser profile rather than the LinkedIn API (there is no public API for this). Before enabling full-auto, log in once interactively so the session cookie is saved to `LINKEDIN_BROWSER_PROFILE_DIR` (default `.linkedin_profile/`):
+
+```bash
+python -m discovery.login
+```
+
+A browser window opens to the LinkedIn login page — complete login and any 2FA challenge manually. The script detects a successful login (redirect to `/feed`) and closes the window, leaving the authenticated profile on disk for the worker to reuse. Re-run this whenever the session expires or LinkedIn forces a re-login.
+
+### Uploading your CV
+
+Full-auto scoring and application generation are driven by your parsed CV/profile. Update it any time via either path:
+
+- **Dashboard**: `POST /api/profile/resume` with a PDF file (multipart `file` field) — rebuilds your profile and re-scores pending jobs.
+- **WhatsApp**: send the CV as a PDF document to the bot number — the webhook detects `document` messages with `mime_type: application/pdf`, rebuilds the profile, and re-scores the queue the same way.
+
+### Governor caps and the kill switch
+
+All LinkedIn actions go through `core/governor.py`'s `RateGovernor`, which enforces, independent of scoring:
+
+- **Daily cap** — `LINKEDIN_DAILY_CAP` applications per day.
+- **Active hours** — `ACTIVE_HOURS` (e.g. `09:00-21:00`); no actions outside this window.
+- **Jittered gaps** — a random delay between `LINKEDIN_MIN_GAP_S` and `LINKEDIN_MAX_GAP_S` between actions, to avoid bot-like bursts.
+- **Cooldown / circuit breaker** — a LinkedIn challenge (CAPTCHA/checkpoint) trips an exponentially increasing cooldown (up to 48h) before any further automated action.
+- **Kill switch** — an operator override that halts all automated LinkedIn actions immediately, independent of the other checks.
+
+Check status or flip the kill switch via the control API:
+
+```bash
+curl -X POST -H "Authorization: Bearer $SECRET_KEY" http://localhost:8000/api/control/kill     # stop everything now
+curl -X POST -H "Authorization: Bearer $SECRET_KEY" http://localhost:8000/api/control/resume   # resume
+curl -H "Authorization: Bearer $SECRET_KEY" http://localhost:8000/api/control/status            # current governor state
+```
+
+### ACCOUNT-RISK WARNING
+
+> **Read before enabling FULL_AUTO.**
+>
+> - **LinkedIn**: automating actions against linkedin.com (including Easy Apply) violates LinkedIn's Terms of Service. LinkedIn actively detects and can permanently ban accounts for automated activity, regardless of rate limiting, jitter, or the governor's caps — those controls reduce detection risk and blast radius, they do not eliminate it. Use a LinkedIn account you are willing to lose, not your primary professional identity. You are solely responsible for compliance with LinkedIn's ToS in your jurisdiction.
+> - **WhatsApp**: the CV-upload-by-WhatsApp path in this document refers to the official WhatsApp Cloud API webhook. If you are instead using an unofficial WhatsApp Web automation bridge (e.g. a `whatsapp-web.js`-style bridge, see `bridge/`) to send or receive messages, be aware this also violates WhatsApp's Terms of Service and can result in the connected phone number being banned. Prefer the official Cloud API webhook wherever possible; treat any unofficial bridge as higher-risk and disposable.
+> - Start with `DRY_RUN=true` and/or `DRAFT_ONLY=true` and watch the dashboard before flipping on full auto-submit.
+
 ## API Endpoints
 
 | Method | Path | Auth | Description |

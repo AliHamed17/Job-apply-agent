@@ -5,6 +5,7 @@ from __future__ import annotations
 import enum
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum,
@@ -42,6 +43,7 @@ class JobStatus(str, enum.Enum):
     APPROVED = "approved"
     SUBMITTED = "submitted"
     FAILED = "failed"
+    NEEDS_REVIEW = "needs_review"
 
 
 class SubmissionStatus(str, enum.Enum):
@@ -101,7 +103,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    extracted_url_id = Column(Integer, ForeignKey("extracted_urls.id"), nullable=False)
+    extracted_url_id = Column(Integer, ForeignKey("extracted_urls.id"), nullable=True)
     title = Column(String(500), nullable=False)
     company = Column(String(300), nullable=True)
     location = Column(String(300), nullable=True)
@@ -118,6 +120,9 @@ class Job(Base):
     status = Column(Enum(JobStatus), default=JobStatus.EXTRACTED, nullable=False)
     score = Column(Float, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
+    discovery_source = Column(String(30), default="manual", nullable=True)
+    easy_apply = Column(Boolean, default=False, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
 
     extracted_url = relationship("ExtractedURL", back_populates="jobs")
     application = relationship("Application", back_populates="job", uselist=False)
@@ -145,6 +150,8 @@ class Application(Base):
     rejection_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    submission_channel = Column(String(30), nullable=True)
+    needs_review_reason = Column(Text, nullable=True)
 
     job = relationship("Job", back_populates="application")
     submission = relationship("Submission", back_populates="application", uselist=False)
@@ -201,3 +208,33 @@ class CoverLetterFeedback(Base):
     __table_args__ = (
         Index("ix_cover_letter_feedback_app_id", "application_id"),
     )
+
+
+class AnswerCache(Base):
+    """Cached answers to recurring application-form questions."""
+
+    __tablename__ = "answer_cache"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    question_hash = Column(String(64), unique=True, nullable=False)
+    question_text = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    source = Column(String(20), nullable=False)  # deterministic | cache | llm
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    __table_args__ = (Index("ix_answer_cache_hash", "question_hash"),)
+
+
+class OutboundContact(Base):
+    """Dedup record for WhatsApp/email recruiter outreach."""
+
+    __tablename__ = "outbound_contacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    contact_hash = Column(String(64), unique=True, nullable=False)
+    channel = Column(String(20), nullable=False)  # whatsapp_dm | email
+    last_contacted_at = Column(DateTime, default=func.now(), nullable=False)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    __table_args__ = (Index("ix_outbound_contact_hash", "contact_hash"),)

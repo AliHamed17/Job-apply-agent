@@ -21,15 +21,20 @@
  *   JOB_URL_ONLY        — "true" to only forward likely job-board URLs
  *   SESSION_DIR         — where to store the WhatsApp session (default: ./.wwebjs_auth)
  *   LOG_LEVEL           — "info" | "verbose" | "silent"
+ *   ENABLE_SEND         — "true" to expose the local POST /send outbound endpoint
+ *   SEND_PORT           — port for the outbound send server (default: 8100)
+ *   FORWARD_TEXT_POSTS  — "true" to forward keyword-matching group text posts
+ *                         (no URL) to the agent's /api/ingest-text endpoint
  */
 
 'use strict';
 
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 
 // ── Load config ──────────────────────────────────────────────────────────────
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -44,6 +49,10 @@ const CONFIG = {
   jobUrlOnly: process.env.JOB_URL_ONLY !== 'false',   // default: job URLs only
   sessionDir: process.env.SESSION_DIR || path.join(__dirname, '.wwebjs_auth'),
   logLevel: process.env.LOG_LEVEL || 'info',     // info | verbose | silent
+  forwardOwnerDocs: process.env.FORWARD_OWNER_DOCS === 'true', // forward CV PDFs sent in 1:1 chat
+  enableSend: process.env.ENABLE_SEND === 'true', // expose local POST /send outbound endpoint
+  sendPort: parseInt(process.env.SEND_PORT || '8100', 10),
+  forwardTextPosts: process.env.FORWARD_TEXT_POSTS === 'true', // forward keyword text posts (no URL)
 };
 
 // ── Known job board hostnames (mirrors ingestion/url_utils.py) ───────────────
@@ -93,6 +102,18 @@ function isShortUrl(url) {
     const host = new URL(url).hostname.replace(/^www\./, '');
     return SHORT_HOSTS.includes(host);
   } catch { return false; }
+}
+
+// ── Text-post keyword check (mirrors ingestion/text_post_parser.py) ──────────
+const TEXT_POST_KEYWORDS = [
+  'hiring', 'vacancy', 'vacancies', 'send cv', 'send resume', 'looking for',
+  'we are recruiting', 'job opening', 'apply', 'position',
+  'مطلوب', 'توظيف', 'وظيفة', 'شاغر', // Arabic: required / hiring / job / vacancy
+];
+
+function looksLikeJobText(text) {
+  const low = (text || '').toLowerCase();
+  return TEXT_POST_KEYWORDS.some(kw => low.includes(kw));
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────
@@ -146,6 +167,65 @@ async function forwardUrl(url, senderPhone, groupName) {
   }
 }
 
+// ── Forward a keyword-matching group TEXT post (no URL) to the Job Agent ─────
+async function forwardTextPost(text, senderPhone, groupName) {
+  const endpoint = `${CONFIG.agentUrl}/api/ingest-text`;
+  const headers = { 'Content-Type': 'application/json' };
+  if (CONFIG.agentToken) headers['Authorization'] = `Bearer ${CONFIG.agentToken}`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        text,
+        sender: senderPhone || 'whatsapp-bridge',
+        source: `group:${groupName}`,
+      }),
+      timeout: 10000,
+    });
+
+    if (res.ok) {
+      log('info', `Forwarded text post → [${groupName}]`);
+      return true;
+    } else {
+      log('warn', `Agent rejected text post — HTTP ${res.status}`);
+      return false;
+    }
+  } catch (err) {
+    log('error', `Failed to forward text post: ${err.message}`);
+    return false;
+  }
+}
+
+// ── Forward a CV PDF sent directly in the owner's 1:1 chat ────────────────────
+async function forwardDocument(msg) {
+  const endpoint = `${CONFIG.agentUrl}/api/profile/resume`;
+  try {
+    const media = await msg.downloadMedia();
+    if (!media || !media.data) return;
+
+    const form = new FormData();
+    const buffer = Buffer.from(media.data, 'base64');
+    form.append('file', new Blob([buffer], { type: media.mimetype || 'application/pdf' }),
+      media.filename || 'resume.pdf');
+
+    const headers = {};
+    if (CONFIG.agentToken) headers['Authorization'] = `Bearer ${CONFIG.agentToken}`;
+
+    // Use Node's built-in fetch (not node-fetch) so the native FormData/Blob
+    // multipart encoding is handled correctly.
+    const res = await globalThis.fetch(endpoint, { method: 'POST', body: form, headers });
+    if (res.ok) {
+      log('info', `Forwarded CV document → ${media.filename || 'resume.pdf'}`);
+    } else {
+      log('warn', `Agent rejected resume upload — HTTP ${res.status}`);
+    }
+  } catch (err) {
+    log('error', `Failed to forward document: ${err.message}`);
+  }
+}
+
 // ── Heartbeat — lets the dashboard know the bridge is alive ──────────────────
 let _heartbeatTimer = null;
 let _watchedGroupCount = 0;
@@ -175,6 +255,82 @@ function startHeartbeat() {
 
 function stopHeartbeat() {
   if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+}
+
+// ── Outbound send server — lets the Python worker request WhatsApp sends ─────
+// POST http://127.0.0.1:<SEND_PORT>/send   { to, text, pdf_base64? }
+// Guarded by ENABLE_SEND=true + an `Authorization: Bearer <JOB_AGENT_TOKEN>` header.
+function toChatId(to) {
+  return String(to).includes('@') ? to : `${String(to).replace(/[^\d]/g, '')}@c.us`;
+}
+
+function sendJson(res, status, obj) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(obj));
+}
+
+async function handleSendRequest(req, res, body) {
+  let payload;
+  try {
+    payload = JSON.parse(body || '{}');
+  } catch {
+    sendJson(res, 400, { error: 'invalid JSON body' });
+    return;
+  }
+
+  const { to, text, pdf_base64: pdfBase64 } = payload;
+  if (!to) {
+    sendJson(res, 400, { error: 'missing "to"' });
+    return;
+  }
+
+  try {
+    const chatId = toChatId(to);
+    if (pdfBase64) {
+      const media = new MessageMedia('application/pdf', pdfBase64, 'CV.pdf');
+      await client.sendMessage(chatId, media, { caption: text || '' });
+    } else {
+      await client.sendMessage(chatId, text || '');
+    }
+    log('info', `Sent WhatsApp message → ${to}${pdfBase64 ? ' (+pdf)' : ''}`);
+    sendJson(res, 200, { ok: true });
+  } catch (err) {
+    log('error', `Send failed for ${to}: ${err.message}`);
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+function startSendServer() {
+  if (!CONFIG.enableSend) {
+    log('verbose', 'Send endpoint disabled (ENABLE_SEND != true)');
+    return;
+  }
+
+  const server = http.createServer((req, res) => {
+    if (req.method !== 'POST' || req.url !== '/send') {
+      sendJson(res, 404, { error: 'not found' });
+      return;
+    }
+
+    const auth = req.headers['authorization'] || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    if (!CONFIG.agentToken || token !== CONFIG.agentToken) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => { handleSendRequest(req, res, body).catch(err => {
+      log('error', `Send handler error: ${err.message}`);
+      sendJson(res, 500, { error: err.message });
+    }); });
+  });
+
+  server.on('error', err => log('error', `Send server error: ${err.message}`));
+  server.listen(CONFIG.sendPort, '127.0.0.1', () => {
+    log('info', `Send endpoint listening on 127.0.0.1:${CONFIG.sendPort}/send`);
+  });
 }
 
 // ── Deduplification (in-memory, resets on restart) ────────────────────────────
@@ -259,8 +415,16 @@ client.on('disconnected', reason => {
 // ── Main message handler ──────────────────────────────────────────────────────
 async function processMessage(msg) {
   try {
-    // Only process group messages
     const chat = await msg.getChat();
+
+    // ── Forward CV PDFs sent directly in the owner's 1:1 chat ──────────────
+    if (CONFIG.forwardOwnerDocs && !chat.isGroup && msg.hasMedia && msg.type === 'document'
+        && msg.mimetype === 'application/pdf') {
+      await forwardDocument(msg);
+      return;
+    }
+
+    // Only process group messages
     if (!chat.isGroup) return;
 
     // Check if this group is watched
@@ -278,7 +442,21 @@ async function processMessage(msg) {
     const fullText = `${body}\n${quotedBody}`.trim();
     const urls = extractUrls(fullText);
 
-    if (!urls.length) return;
+    if (!urls.length) {
+      // No URL in this message — optionally forward it as a text job-post
+      // candidate (e.g. "Hiring RF Engineer, WhatsApp 05xxxxxxx").
+      if (CONFIG.forwardTextPosts && fullText && looksLikeJobText(fullText)) {
+        const dedupKey = `text:${fullText}`;
+        if (!alreadySeen(dedupKey)) {
+          markSeen(dedupKey);
+          const contact = await msg.getContact();
+          const sender = contact.number || msg.from;
+          log('info', `[${chat.name}] ${sender} → text post`);
+          await forwardTextPost(fullText, sender, chat.name);
+        }
+      }
+      return;
+    }
 
     const contact = await msg.getContact();
     const sender = contact.number || msg.from;
@@ -311,6 +489,7 @@ process.on('SIGTERM', () => { log('info', 'Shutting down…'); stopHeartbeat(); 
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 log('info', 'Starting WhatsApp bridge…');
+startSendServer();
 client.initialize().catch(err => {
   log('error', `Failed to start: ${err.message}`);
   process.exit(1);

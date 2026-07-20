@@ -12,20 +12,69 @@ import hashlib
 import hmac
 import re
 from datetime import datetime
+from profile.builder import build_profile_from_pdf
+from profile.writer import save_profile
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.config import Settings, get_settings
 from db.models import Application, ExtractedURL, Job, JobStatus, Message
 from db.session import get_db
+from ingestion.text_post_parser import looks_like_job
 from ingestion.url_utils import normalize_url, url_hash
+from worker.rescore import rescore_pending_jobs
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
+
+# Registered separately in api/main.py with prefix="/api" (see ingest_router below).
+ingest_router = APIRouter(tags=["ingest"])
+
+
+class IngestTextRequest(BaseModel):
+    text: str
+
+
+def _default_outbound_deps() -> SimpleNamespace:
+    """Bundle the real IO/LLM functions process_text_post needs (production use).
+
+    Built fresh per call so ``now`` reflects the current time; tests inject
+    their own deps with fakes and never hit this function.
+    """
+    from ingestion.text_post_parser import parse_text_post
+    from llm.generation import generate_recruiter_message
+    from submitters.email_sender import send_cv_email
+    from worker.bridge_client import bridge_send
+
+    return SimpleNamespace(
+        parse=parse_text_post,
+        bridge=bridge_send,
+        email=send_cv_email,
+        gen_msg=generate_recruiter_message,
+        now=datetime.utcnow(),
+    )
+
+
+async def _route_text_post(text: str, db: Session, settings: Settings) -> str:
+    """Score + (maybe) reply to a text-only job post via worker.outbound."""
+    from core.governor import get_governor
+    from profile.loader import get_profile
+    from worker.outbound import process_text_post
+
+    return await process_text_post(
+        text,
+        db=db,
+        settings=settings,
+        profile=get_profile(),
+        governor=get_governor(),
+        deps=_default_outbound_deps(),
+    )
 
 # ── URL extraction regex ────────────────────────────────
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')\]},;]+", re.IGNORECASE)
@@ -84,6 +133,56 @@ async def _send_whatsapp_message(
             )
     except Exception as exc:
         logger.error("whatsapp_send_failed", error=str(exc))
+
+
+async def _download_media(media_id: str, settings: Settings) -> bytes:
+    """Fetch a WhatsApp media file by id via the Meta Graph API."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        meta = await client.get(
+            f"https://graph.facebook.com/v18.0/{media_id}",
+            headers={"Authorization": f"Bearer {settings.whatsapp_api_token}"},
+        )
+        url = meta.json().get("url", "")
+        if not url:
+            return b""
+        resp = await client.get(
+            url, headers={"Authorization": f"Bearer {settings.whatsapp_api_token}"}
+        )
+        return resp.content
+
+
+async def _handle_document(msg: dict, db, settings: Settings) -> bool:
+    """If msg is a PDF CV, rebuild the profile. Returns True if handled."""
+    doc = msg.get("document", {})
+    if doc.get("mime_type") != "application/pdf":
+        return False
+    sender = msg.get("from", "")
+
+    try:
+        content = await _download_media(doc.get("id", ""), settings)
+        if not content:
+            await _send_whatsapp_message(sender, "❌ Could not download the CV.", settings)
+            return True
+
+        pdf_path = settings.profile_path.parent / "resume.pdf"
+        pdf_path.write_bytes(content)
+        profile = await build_profile_from_pdf(str(pdf_path))
+        profile.resume.pdf_path = str(pdf_path)
+        version = save_profile(profile, settings.profile_path, db=db)
+        rescored = rescore_pending_jobs(db, profile) if db is not None else 0
+        await _send_whatsapp_message(
+            sender,
+            f"✅ CV received. Profile v{version} rebuilt "
+            f"({len(profile.preferences.roles)} target roles). Re-scored {rescored} jobs.",
+            settings,
+        )
+        return True
+    except Exception as exc:
+        logger.error("cv_rebuild_failed", error=str(exc))
+        await _send_whatsapp_message(
+            sender, "❌ Failed to process the CV. Please try again.", settings
+        )
+        return True
 
 
 async def _send_approval_buttons(
@@ -263,6 +362,12 @@ async def receive_message(
             logger.info("sender_not_allowed", sender=sender)
             continue
 
+        # ── Handle document uploads (CV PDFs) ────────
+        if msg.get("type") == "document":
+            if await _handle_document(msg, db, settings):
+                processed += 1
+                continue
+
         # ── Handle interactive button replies ────────
         if msg.get("type") == "interactive":
             interactive = msg.get("interactive", {})
@@ -351,9 +456,32 @@ async def receive_message(
                 f"📬 Received {len(urls)} job link(s). Processing...",
                 settings,
             )
+        elif looks_like_job(text_body):
+            # No job-board URL, but reads like a recruiter "hiring" broadcast —
+            # route it through the outbound applier (Task 5.5) instead.
+            result = await _route_text_post(text_body, db, settings)
+            logger.info("text_post_routed", sender=sender, result=result)
 
         processed += 1
 
     db.commit()
     logger.info("webhook_processed", messages=processed)
     return {"status": "ok", "processed": processed}
+
+
+# ── Text-post ingestion (Task 5.5) ──────────────────────
+
+@ingest_router.post("/ingest-text")
+async def ingest_text(
+    payload: IngestTextRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Ingest a standalone text job post (e.g. copy-pasted from a group chat).
+
+    Runs the same parse -> score -> outbound-reply pipeline as text messages
+    received directly over the WhatsApp webhook.
+    """
+    result = await _route_text_post(payload.text, db, settings)
+    db.commit()
+    return {"status": "ok", "result": result}

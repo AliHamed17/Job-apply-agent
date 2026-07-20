@@ -1,0 +1,33 @@
+<div class="artdeco-modal jobs-easy-apply-modal" role="dialog" aria-labelledby="easy-apply-modal-title">
+  <div class="jobs-easy-apply-modal__content">
+    <h3 id="easy-apply-modal-title">Contact info</h3>
+    <form>
+      <div class="fb-dash-form-element">
+        <label for="fullName">Full name</label>
+        <input type="text" id="fullName" name="fullName" value="">
+      </div>
+
+      <div class="fb-dash-form-element">
+        <label for="yearsExp">Years of experience with RF engineering</label>
+        <input type="number" id="yearsExp" name="yearsExp" required min="0">
+      </div>
+
+      <fieldset class="fb-dash-form-element">
+        <legend>Are you legally authorized to work in the US?</legend>
+        <div class="radio-option">
+          <input type="radio" id="authYes" name="authorized" value="Yes" required>
+          <label for="authYes">Yes</label>
+        </div>
+        <div class="radio-option">
+          <input type="radio" id="authNo" name="authorized" value="No">
+          <label for="authNo">No</label>
+        </div>
+      </fieldset>
+
+      <div class="fb-dash-form-element">
+        <label for="resumeUpload">Resume</label>
+        <input type="file" id="resumeUpload" name="resume" accept=".pdf,.doc,.docx">
+      </div>
+    </form>
+  </div>
+</div>

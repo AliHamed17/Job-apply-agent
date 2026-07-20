@@ -59,3 +59,7 @@ uploads/
 bridge/.wwebjs_auth/
 bridge/.wwebjs_cache/
 bridge/session/
+
+# Full-auto v2: uploaded CV + persistent LinkedIn browser session (never commit)
+resume.pdf
+.linkedin_profile/

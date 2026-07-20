@@ -230,3 +230,18 @@ class TestScoreBreakdown:
         )
         total = b.compute_total()
         assert total == 0
+
+
+def test_min_apply_score_gates_auto_apply():
+    from match.scoring import decide_action, Action
+    # score 50, threshold 80, but min_apply_score 40 → should AUTO_APPLY
+    a = decide_action(score=50, auto_apply_enabled=True, draft_only=False,
+                      threshold=80, min_apply_score=40)
+    assert a == Action.AUTO_APPLY
+
+
+def test_below_min_apply_score_is_draft():
+    from match.scoring import decide_action, Action
+    a = decide_action(score=30, auto_apply_enabled=True, draft_only=False,
+                      threshold=80, min_apply_score=40)
+    assert a == Action.DRAFT

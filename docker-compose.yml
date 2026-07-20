@@ -85,6 +85,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "worker.celery_app", "worker", "-Q", "ingestion,processing,llm,submission,discovery", "--loglevel=info"]
     depends_on:
       postgres:
         condition: service_healthy
