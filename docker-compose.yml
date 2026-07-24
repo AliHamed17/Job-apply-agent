@@ -64,8 +64,20 @@ services:
       # celery-worker too, not just this container's own filesystem layer.
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
       APPLICATION_DATA_DIR: /app/profile-data
+      # The WhatsApp bridge (bridge/whatsapp_bridge.js) runs on the HOST — it
+      # holds a personal WhatsApp Web session and is intentionally NOT
+      # containerised. From inside this container, "localhost" is the container,
+      # not the host, so the default localhost bridge URL is unreachable here.
+      # Point at the host gateway instead (see extra_hosts below). NOTE: this
+      # only works if you start the bridge listening on a host interface the
+      # container can reach (e.g. HOST=0.0.0.0) rather than its default
+      # 127.0.0.1-only bind — that trade-off is yours to make when enabling
+      # WhatsApp outbound. Leave WhatsApp outbound disabled and this is a no-op.
+      BRIDGE_SEND_URL: http://host.docker.internal:8100/send
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,7 +92,7 @@ services:
       # updating the profile and rescoring jobs.
       - ./profile-data:/app/profile-data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -153,8 +165,8 @@ services:
     image: nginx:1.25-alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro         # mount your TLS certs here
@@ -175,7 +187,7 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     networks:
       - agent-net
 
@@ -191,7 +203,7 @@ services:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3001:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     depends_on:
       - prometheus
     networks:

@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import time
-from collections import defaultdict
 from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from api.routes.applications import router as applications_router
 from api.routes.control import router as control_router
@@ -24,6 +25,8 @@ from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
+from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
+from core.operations import rate_limit_allowed, readiness_report
 from db.session import init_db
 
 # Setup structured logging
@@ -32,6 +35,7 @@ logger = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    settings.validate_runtime()
     init_db()
     logger.info(
         "app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply
@@ -51,44 +55,44 @@ app = FastAPI(
 settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# ── Rate Limiting Middleware ─────────────────────────────
-_rate_limit_store: dict[str, list[float]] = defaultdict(list)
-
-
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """Simple in-memory rate limiter per client IP."""
+    """Redis-backed rate limiting, consistent across API processes."""
     # Skip rate limiting for webhook (Meta sends bursts)
     if request.url.path.startswith("/webhook"):
         return await call_next(request)
 
-    client_ip = request.client.host if request.client else "unknown"
+    peer_ip = request.client.host if request.client else "unknown"
+    client_ip = peer_ip
+    if peer_ip in settings.trusted_proxy_list:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            client_ip = forwarded.split(",", 1)[0].strip()
     if client_ip == "127.0.0.1":
         return await call_next(request)
-    now = time.time()
-    window = 60.0  # 1 minute window
-    max_requests = settings.rate_limit_requests_per_minute
-
-    # Clean old entries
-    _rate_limit_store[client_ip] = [
-        t for t in _rate_limit_store[client_ip] if now - t < window
-    ]
-
-    if len(_rate_limit_store[client_ip]) >= max_requests:
+    try:
+        allowed = rate_limit_allowed(
+            client_ip, settings.rate_limit_requests_per_minute, settings
+        )
+    except Exception:
+        logger.exception("rate_limit_backend_unavailable")
+        if settings.app_env == "production":
+            return JSONResponse(status_code=503, content={"detail": "Service unavailable"})
+        allowed = True
+    if not allowed:
         logger.warning("rate_limited", client=client_ip)
         return JSONResponse(
             status_code=429,
             content={"detail": "Rate limit exceeded. Try again later."},
         )
 
-    _rate_limit_store[client_ip].append(now)
     return await call_next(request)
 
 
@@ -108,11 +112,13 @@ async def no_cache_static_middleware(request: Request, call_next):
 async def auth_middleware(request: Request, call_next):
     """Bearer token authentication for API endpoints.
 
-    Exempt: /webhook (uses its own verification), /health, /docs, /openapi.json
+    Exempt: signed webhook, liveness, metrics, and API documentation.
     """
     exempt_paths = {
         "/webhook/whatsapp",
         "/health",
+        "/health/live",
+        "/metrics",
         "/docs",
         "/openapi.json",
         "/redoc",
@@ -122,8 +128,7 @@ async def auth_middleware(request: Request, call_next):
     if request.url.path == "/" or any(request.url.path.startswith(p) for p in exempt_paths):
         return await call_next(request)
 
-    # If no secret_key is configured (dev mode), skip auth
-    if settings.secret_key == "change-me":
+    if settings.app_env == "development" and settings.secret_key == "change-me":
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization", "")
@@ -134,7 +139,7 @@ async def auth_middleware(request: Request, call_next):
         )
 
     token = auth_header.removeprefix("Bearer ").strip()
-    if token != settings.secret_key:
+    if not hmac.compare_digest(token, settings.secret_key):
         return JSONResponse(
             status_code=403,
             content={"detail": "Invalid API token"},
@@ -153,6 +158,18 @@ async def correlation_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Correlation-ID"] = correlation_id
     structlog.contextvars.unbind_contextvars("correlation_id")
+    return response
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    route = request.scope.get("route")
+    route_label = getattr(route, "path", "unmatched")
+    status_class = f"{response.status_code // 100}xx"
+    HTTP_REQUESTS.labels(route_label, request.method, status_class).inc()
+    HTTP_LATENCY.labels(route_label).observe(time.perf_counter() - started)
     return response
 
 
@@ -181,6 +198,18 @@ templates = Jinja2Templates(directory=templates_dir)
 async def health():
     return {"status": "ok", "version": "0.1.0"}
 
+
+@app.get("/health/live")
+async def health_live():
+    return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    report = readiness_report(settings)
+    return JSONResponse(report, status_code=200 if report["status"] == "ready" else 503)
+
+
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
@@ -188,21 +217,5 @@ async def serve_dashboard(request: Request):
 
 @app.get("/metrics")
 async def metrics():
-    """Basic metrics endpoint."""
-    from db.models import Application, ExtractedURL, Job, JobStatus, Submission
-    from db.session import get_session_factory
-
-    db = get_session_factory()()
-    try:
-        return {
-            "urls_processed": db.query(ExtractedURL).count(),
-            "jobs_extracted": db.query(Job).count(),
-            "jobs_skipped": db.query(Job).filter(Job.status == JobStatus.SKIPPED).count(),
-            "applications_drafted": db.query(Application).count(),
-            "applications_approved": db.query(Application).filter(
-                Application.status == JobStatus.APPROVED
-            ).count(),
-            "submissions_total": db.query(Submission).count(),
-        }
-    finally:
-        db.close()
+    """Prometheus exposition with bounded labels and no personal data."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

@@ -34,15 +34,22 @@ jobs:
       TASKS_ALWAYS_EAGER: "true"
       LLM_PROVIDER: mock
       SECRET_KEY: ci-only-secret
+      APP_ENV: test
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev,pdf,postgres,email]"
+      - run: pip install -e ".[dev,pdf,postgres,email]" pip-audit
       - name: Critical lint
         run: ruff check . --select E9,F63,F7,F82
+      - name: Full lint for v3 operational modules
+        run: ruff check core/config.py core/operations.py core/metrics.py api/main.py api/routes/dashboard.py worker/health.py worker/celery_app.py tests/test_operations.py
       - name: Typed safety-critical modules
         run: mypy --ignore-missing-imports --disable-error-code var-annotated core/config.py profile/cv_intake.py profile/writer.py worker/celery_app.py
       - name: PostgreSQL migrations
@@ -52,6 +59,8 @@ jobs:
           alembic upgrade head
       - name: Tests
         run: pytest -q --cov=api --cov=core --cov=profile --cov=worker --cov-report=term-missing
+      - name: Dependency audit
+        run: pip-audit . --timeout 60
       - name: Compose validation
         run: cp .env.example .env && docker compose config --quiet
 
@@ -61,3 +70,28 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build API image
         run: docker build --target web-api -t job-agent-api:ci .
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure safe dry-run environment
+        run: |
+          cp .env.example .env
+          mkdir -p profile-data
+      - name: Start operational stack
+        run: docker compose up -d --build postgres redis web-api celery-worker celery-beat
+      - name: Require API and worker readiness
+        run: |
+          for attempt in $(seq 1 36); do
+            if curl --fail --silent http://127.0.0.1:8000/health/ready; then
+              exit 0
+            fi
+            sleep 5
+          done
+          docker compose ps
+          docker compose logs web-api celery-worker celery-beat
+          exit 1
+      - name: Stop operational stack
+        if: always()
+        run: docker compose down --volumes

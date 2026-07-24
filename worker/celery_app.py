@@ -32,6 +32,7 @@ def create_celery_app() -> Celery:
             "worker.drainer",
             "worker.discovery_tasks",
             "worker.digest",
+            "worker.health",
         ],
     )
 
@@ -63,11 +64,13 @@ def create_celery_app() -> Celery:
             # command already consumes it — otherwise the daily-digest
             # beat entry below enqueues a task nothing ever picks up.
             "worker.digest.send_daily_digest_task": {"queue": "submission"},
+            "worker.health.beat_heartbeat_task": {"queue": "submission"},
         },
     )
 
     # Beat schedule — priority apply-queue drainer + stale-job TTL expiry
-    # (Task 3.6) + LinkedIn discovery (Task 4.4). Preserve any beat entries already registered elsewhere.
+    # (Task 3.6) + LinkedIn discovery (Task 4.4).
+    # Preserve any beat entries already registered elsewhere.
     app.conf.beat_schedule = getattr(app.conf, "beat_schedule", None) or {}
     app.conf.beat_schedule["drain-apply-queue"] = {
         "task": "worker.drainer.drain_apply_queue_task",
@@ -90,6 +93,10 @@ def create_celery_app() -> Celery:
     app.conf.beat_schedule["daily-digest"] = {
         "task": "worker.digest.send_daily_digest_task",
         "schedule": crontab(hour=20, minute=0),
+    }
+    app.conf.beat_schedule["beat-heartbeat"] = {
+        "task": "worker.health.beat_heartbeat_task",
+        "schedule": 30.0,
     }
 
     app.autodiscover_tasks(["worker"])

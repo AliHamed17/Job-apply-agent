@@ -20,7 +20,7 @@ dependencies = [
     "alembic>=1.13,<2",
     "httpx>=0.26,<1",
     "beautifulsoup4>=4.12,<5",
-    "lxml>=5.0,<6",
+    "lxml>=6.1,<7",
     "celery>=5.3,<6",
     "redis>=5.0,<6",
     "openai>=1.10,<2",
@@ -31,6 +31,7 @@ dependencies = [
     "jinja2>=3.1,<4",
     "tenacity>=8.2,<9",
     "python-dotenv>=1.0,<2",
+    "prometheus-client>=0.20,<1",
 ]
 
 [project.optional-dependencies]
