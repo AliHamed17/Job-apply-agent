@@ -2,11 +2,14 @@
 
 
 def test_new_models_and_columns_import():
-    from db.models import AnswerCache, OutboundContact, Job, Application, JobStatus
+    from db.models import AnswerCache, Application, Job, JobStatus, OutboundContact
+
     assert hasattr(Job, "discovery_source")
     assert hasattr(Job, "easy_apply")
     assert hasattr(Application, "submission_channel")
     assert JobStatus.NEEDS_REVIEW.value == "needs_review"
+    assert AnswerCache.__tablename__ == "answer_cache"
+    assert OutboundContact.__tablename__ == "outbound_contacts"
 
 
 def test_postgres_enum_bind_values_match_migration_labels():
@@ -19,8 +22,6 @@ def test_postgres_enum_bind_values_match_migration_labels():
     submission_processor = Submission.__table__.c.status.type.bind_processor(dialect)
     assert job_processor(JobStatus.NEEDS_REVIEW) == "needs_review"
     assert submission_processor(SubmissionStatus.SUCCESS) == "success"
-    assert AnswerCache.__tablename__ == "answer_cache"
-    assert OutboundContact.__tablename__ == "outbound_contacts"
 
 
 def test_answer_cache_roundtrip(tmp_path):
