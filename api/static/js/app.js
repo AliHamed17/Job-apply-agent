@@ -998,6 +998,12 @@ window.openReviewModal = async appId => {
     $('modal-apply-url').href = app.apply_url || '#';
     $('modal-cover-letter').value = app.cover_letter || '';
     $('modal-recruiter-msg').textContent = app.recruiter_message || 'N/A';
+    const routingEvidence = (app.cv_routing_evidence || []).join(' · ');
+    $('modal-cv-routing').textContent = app.selected_cv_id
+        ? `${app.selected_cv_id} · confidence ${Math.round((app.cv_routing_confidence || 0) * 100)}%${routingEvidence ? ' · ' + routingEvidence : ''}`
+        : `Review required${app.cv_routing_fallback_reason ? ' · ' + app.cv_routing_fallback_reason : ''}`;
+    $('btn-preview-cv').onclick = () => previewCvRoute(app.id);
+    $('btn-override-cv').onclick = () => overrideCvRoute(app.id);
 
     // Q&A
     let qaHtml = '';
@@ -1051,6 +1057,27 @@ window.openReviewModal = async appId => {
     $('review-modal').classList.add('visible');
     lucide.createIcons();
 };
+
+async function previewCvRoute(appId) {
+    const result = await apiCall('/api/cv-routing/preview', 'POST', { application_id: appId });
+    if (!result) return;
+    showToast(result.selected_cv_id ? `Selected CV: ${result.selected_cv_id}` : 'Routing abstained — choose a CV', result.selected_cv_id ? 'success' : 'info');
+    await refreshAllData();
+    $('review-modal').classList.remove('visible');
+}
+
+async function overrideCvRoute(appId) {
+    const cvId = $('modal-cv-override').value.trim();
+    if (!cvId) {
+        showToast('Enter a configured CV id', 'info');
+        return;
+    }
+    const result = await apiCall(`/api/applications/${appId}/cv-override`, 'POST', { cv_id: cvId });
+    if (!result) return;
+    showToast(`CV override saved: ${result.selected_cv_id}`, 'success');
+    await refreshAllData();
+    $('review-modal').classList.remove('visible');
+}
 
 window.copyCoverLetter = () => {
     const ta = $('modal-cover-letter');

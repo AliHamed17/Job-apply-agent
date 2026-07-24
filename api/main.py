@@ -17,6 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from api.routes.applications import router as applications_router
 from api.routes.control import router as control_router
+from api.routes.cv_routing import router as cv_routing_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.feedback import router as feedback_router
 from api.routes.jobs import router as jobs_router
@@ -182,6 +183,7 @@ app.include_router(dashboard_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
 app.include_router(profile_router)
 app.include_router(control_router)
+app.include_router(cv_routing_router, prefix="/api")
 
 
 # ── Static and Templates ─────────────────────────────────

@@ -55,6 +55,9 @@ class DashboardSummary(BaseModel):
     operational_status: str
     degraded_dependencies: list[str]
     last_successful_discovery: datetime | None
+    cv_routing_total: int
+    cv_routing_abstention_rate: float
+    application_outcomes: dict[str, int]
 
 
 class ManualIngestRequest(BaseModel):
@@ -143,6 +146,20 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         name for name, result in operations["checks"].items() if not result["ok"]
     ]
     last_successful_discovery = db.query(func.max(Job.created_at)).scalar()
+    routing_total = db.query(Application).filter(
+        Application.cv_routing_confidence.isnot(None)
+    ).count()
+    routing_abstained = db.query(Application).filter(
+        Application.cv_routing_fallback_reason.in_(
+            ["abstained_low_confidence", "routing_not_configured"]
+        )
+    ).count()
+    outcome_rows = (
+        db.query(Application.outcome, func.count(Application.id))
+        .filter(Application.outcome.isnot(None))
+        .group_by(Application.outcome)
+        .all()
+    )
 
     return DashboardSummary(
         total_messages=total_messages,
@@ -166,6 +183,11 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         operational_status=operations["status"],
         degraded_dependencies=degraded_dependencies,
         last_successful_discovery=last_successful_discovery,
+        cv_routing_total=routing_total,
+        cv_routing_abstention_rate=(
+            routing_abstained / routing_total if routing_total else 0.0
+        ),
+        application_outcomes={outcome: count for outcome, count in outcome_rows},
     )
 
 

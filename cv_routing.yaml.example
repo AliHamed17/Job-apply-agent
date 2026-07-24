@@ -1,0 +1,19 @@
+minimum_confidence: 0.35
+fallback_cv_id: null
+
+cvs:
+  - id: software
+    file: software-engineer.pdf
+    title_terms: [software, backend, fullstack, developer]
+    skills: [python, java, typescript, api, sql]
+    seniority: [junior, mid, senior]
+  - id: data-ai
+    file: data-ai.pdf
+    title_terms: [data, machine, ai, ml]
+    skills: [python, sql, pytorch, machine learning, analytics]
+    seniority: [junior, mid, senior]
+
+# Evaluated in order. Keep overrides narrow and explicit.
+overrides:
+  - cv_id: data-ai
+    title_contains: [machine learning]

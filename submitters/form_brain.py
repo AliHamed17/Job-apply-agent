@@ -13,6 +13,23 @@ from llm.client import LLMClient, get_llm_client
 logger = structlog.get_logger(__name__)
 
 _UNKNOWN = "UNKNOWN"
+_SENSITIVE_TERMS = (
+    "work authorization",
+    "authorized to work",
+    "visa",
+    "sponsorship",
+    "citizen",
+    "citizenship",
+    "security clearance",
+    "certification",
+    "license",
+    "gender",
+    "race",
+    "ethnicity",
+    "veteran",
+    "disability",
+    "demographic",
+)
 
 
 def normalize_question(q: str) -> str:
@@ -53,10 +70,16 @@ class FormBrain:
         table = [
             (("email",), p.personal.email),
             (("first name",), (p.personal.name.split()[0] if p.personal.name else "")),
-            (("last name", "surname"), " ".join(p.personal.name.split()[1:]) if p.personal.name else ""),
+            (
+                ("last name", "surname"),
+                " ".join(p.personal.name.split()[1:]) if p.personal.name else "",
+            ),
             (("full name", "your name"), p.personal.name),
             (("phone", "mobile"), p.personal.phone),
-            (("city", "location"), (p.personal.location.split(",")[0].strip() if p.personal.location else "")),
+            (
+                ("city", "location"),
+                p.personal.location.split(",")[0].strip() if p.personal.location else "",
+            ),
             (("linkedin",), p.links.linkedin),
             (("github",), p.links.github),
             (("portfolio", "website"), p.links.portfolio),
@@ -65,6 +88,17 @@ class FormBrain:
             if any(k in low for k in keys) and val:
                 return val
         return None
+
+    def _confirmed_sensitive(self, label: str) -> AnswerResult | None:
+        normalized = normalize_question(label)
+        if not any(term in normalized for term in _SENSITIVE_TERMS):
+            return None
+        confirmed = self.profile.evidence.user_confirmed
+        for key, value in confirmed.items():
+            normalized_key = normalize_question(key)
+            if normalized_key in normalized or normalized in normalized_key:
+                return AnswerResult(value, "user_confirmed", True)
+        return AnswerResult(None, "confirmed_evidence_required", False)
 
     # ── layer 2: cache ────────────────────────────────
     def _cache_get(self, qh: str) -> str | None:
@@ -88,7 +122,11 @@ class FormBrain:
     async def _llm(self, fspec: FieldSpec, job) -> str:
         client = self.client or get_llm_client()
         opts = f"\nChoose exactly one of: {fspec.options}" if fspec.options else ""
-        job_ctx = f"\nJob: {getattr(job, 'title', '')} at {getattr(job, 'company', '')}" if job else ""
+        job_ctx = (
+            f"\nJob: {getattr(job, 'title', '')} at {getattr(job, 'company', '')}"
+            if job
+            else ""
+        )
         prompt = (
             "Answer this job-application question using ONLY the candidate CV. "
             f"If the CV does not support a confident answer, reply exactly '{_UNKNOWN}'. "
@@ -99,6 +137,10 @@ class FormBrain:
 
     async def answer(self, field: FieldSpec, job) -> AnswerResult:
         qh = question_hash(field.label)
+
+        sensitive = self._confirmed_sensitive(field.label)
+        if sensitive is not None:
+            return sensitive
 
         det = self._deterministic(field.label)
         if det:

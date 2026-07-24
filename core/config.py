@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     user_profile_path: str = "user_profile.yaml"
     application_data_dir: str = "."
     max_resume_bytes: int = 10 * 1024 * 1024
+    cv_routing_path: str = "cv_routing.yaml"
+    cv_directory: str = "cvs"
 
     # ── Full-auto policy ────────────────────────────────
     min_apply_score: float = 40.0

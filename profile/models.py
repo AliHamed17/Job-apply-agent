@@ -46,6 +46,14 @@ class Personal(BaseModel):
     work_authorization: str = ""
 
 
+class ProfileEvidence(BaseModel):
+    """Facts separated by provenance; confirmed facts gate sensitive answers."""
+
+    cv_extracted: dict[str, str] = Field(default_factory=dict)
+    user_confirmed: dict[str, str] = Field(default_factory=dict)
+    inferred_preferences: dict[str, str] = Field(default_factory=dict)
+
+
 class Attachment(BaseModel):
     path: str
     label: str = ""
@@ -60,6 +68,7 @@ class UserProfile(BaseModel):
     cover_letter: CoverLetterConfig = Field(default_factory=CoverLetterConfig)
     preferences: Preferences = Field(default_factory=Preferences)
     attachments: list[Attachment] = Field(default_factory=list)
+    evidence: ProfileEvidence = Field(default_factory=ProfileEvidence)
 
     @property
     def full_name(self) -> str:

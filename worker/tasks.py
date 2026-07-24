@@ -8,7 +8,6 @@ Each task enforces proper state transitions and approval checks.
 from __future__ import annotations
 
 import json
-import asyncio
 
 import structlog
 from celery import shared_task
@@ -325,6 +324,7 @@ def generate_application_task(self, job_id: int):
 
         # Decide whether to auto-approve immediately
         from datetime import datetime
+
         from match.scoring import Action, decide_action
         action = decide_action(
             score=db_job.score or 0.0,
@@ -335,6 +335,39 @@ def generate_application_task(self, job_id: int):
         )
         auto_approve = action == Action.AUTO_APPLY
 
+        from pathlib import Path
+        from profile.cv_routing import (
+            RoutingDecision,
+            RoutingJob,
+            load_routing_config,
+            parse_required_skills,
+            route_cv,
+        )
+
+        routing_path = Path(settings.cv_routing_path)
+        if routing_path.exists():
+            routing = route_cv(
+                RoutingJob(
+                    title=db_job.title or "",
+                    description=" ".join(
+                        filter(None, [db_job.description, db_job.requirements])
+                    ),
+                    seniority=db_job.seniority or "",
+                    required_skills=parse_required_skills(db_job.keywords),
+                ),
+                load_routing_config(routing_path),
+            )
+        else:
+            routing = RoutingDecision(
+                selected_cv_id=None,
+                selected_file=None,
+                confidence=0,
+                matched_evidence=[],
+                fallback_reason="routing_not_configured",
+            )
+        # An application cannot become eligible until routing selected a CV.
+        auto_approve = auto_approve and routing.selected_cv_id is not None
+
         app = Application(
             job_id=job_id,
             cover_letter=generated.cover_letter,
@@ -342,7 +375,22 @@ def generate_application_task(self, job_id: int):
             qa_answers=json.dumps(generated.qa_answers),
             status=JobStatus.APPROVED if auto_approve else JobStatus.DRAFT,
             approved_at=datetime.utcnow() if auto_approve else None,
+            selected_cv_id=routing.selected_cv_id,
+            cv_routing_confidence=routing.confidence,
+            cv_routing_evidence=json.dumps(routing.matched_evidence),
+            cv_routing_fallback_reason=routing.fallback_reason,
+            needs_review_reason=(
+                "CV_ROUTING_REVIEW_REQUIRED" if routing.selected_cv_id is None else None
+            ),
         )
+        from db.models import UserProfileVersion
+
+        latest_profile = (
+            db.query(UserProfileVersion)
+            .order_by(UserProfileVersion.version.desc())
+            .first()
+        )
+        app.profile_version = latest_profile.version if latest_profile else None
         db.add(app)
         db.flush()
 
@@ -358,7 +406,11 @@ def generate_application_task(self, job_id: int):
             threshold=settings.auto_apply_threshold,
             has_placeholders=generated.has_placeholders,
             auto_approved=auto_approve,
-            reason="Score above threshold" if auto_approve else "Score below threshold or draft_only enabled",
+            reason=(
+                "Score above threshold"
+                if auto_approve
+                else "Score below threshold, draft-only, or CV routing review required"
+            ),
         )
 
         # ── Notify originating WhatsApp sender (Cloud API) ────────────────
@@ -424,7 +476,7 @@ def submit_application_task(self, application_id: int):
 
     from jobs.models import JobData
     from submitters.ashby import AshbySubmitter
-    from submitters.base import DraftOnlySubmitter, SubmitterRegistry
+    from submitters.base import DraftOnlySubmitter
     from submitters.comeet import ComeetSubmitter
     from submitters.greenhouse import GreenhouseSubmitter
     from submitters.indeed import IndeedSubmitter
@@ -508,14 +560,55 @@ def submit_application_task(self, application_id: int):
             .order_by(UserProfileVersion.version.desc())
             .first()
         )
-        attempt.selected_cv_id = Path(resume_path).name if resume_path else None
-        attempt.profile_version = latest_profile.version if latest_profile else None
+        if app.selected_cv_id:
+            from profile.cv_routing import load_routing_config
+
+            try:
+                routing_config = load_routing_config(settings.cv_routing_path)
+                cv = next(
+                    (
+                        item
+                        for item in routing_config.cvs
+                        if item.id == app.selected_cv_id
+                    ),
+                    None,
+                )
+                root = Path(settings.cv_directory).resolve()
+                candidate = (root / cv.file).resolve() if cv else None
+            except (FileNotFoundError, ValueError):
+                candidate = None
+                root = Path(settings.cv_directory).resolve()
+            if candidate and candidate.parent == root and candidate.is_file():
+                resume_path = str(candidate)
+            else:
+                from datetime import UTC as _UTC
+                from datetime import datetime as _dt
+
+                attempt.status = SubmissionStatus.FAILED
+                attempt.reason_code = "SELECTED_CV_UNAVAILABLE"
+                attempt.finished_at = _dt.now(_UTC).replace(tzinfo=None)
+                app.status = JobStatus.NEEDS_REVIEW
+                app.needs_review_reason = "SELECTED_CV_UNAVAILABLE"
+                if app.job:
+                    app.job.status = JobStatus.NEEDS_REVIEW
+                db.commit()
+                return
+        attempt.selected_cv_id = app.selected_cv_id or (
+            Path(resume_path).name if resume_path else None
+        )
+        attempt.profile_version = app.profile_version or (
+            latest_profile.version if latest_profile else None
+        )
         db.commit()
 
         # Cascade: try each matching submitter, stop on first success
         result = None
         if settings.draft_only:
-            result = run_async(DraftOnlySubmitter().submit(job_ref, generated, profile_dict, resume_path))
+            result = run_async(
+                DraftOnlySubmitter().submit(
+                    job_ref, generated, profile_dict, resume_path
+                )
+            )
         else:
             for sub in all_submitters:
                 if not sub.can_submit(job_ref):
@@ -558,7 +651,11 @@ def submit_application_task(self, application_id: int):
 
         # Always fall back to draft_only if no real submission succeeded
         if result is None or result.status == "failed":
-            result = run_async(DraftOnlySubmitter().submit(job_ref, generated, profile_dict, resume_path))
+            result = run_async(
+                DraftOnlySubmitter().submit(
+                    job_ref, generated, profile_dict, resume_path
+                )
+            )
 
         # abort-don't-lie: a blocked required field is surfaced as
         # NEEDS_REVIEW rather than silently drafted or failed.
@@ -570,6 +667,7 @@ def submit_application_task(self, application_id: int):
         # this attempt exists, so task redelivery cannot duplicate the action.
         from datetime import UTC as _UTC
         from datetime import datetime as _dt
+
         from worker.submission_attempts import (
             classify_reason,
             redacted_diagnostics,

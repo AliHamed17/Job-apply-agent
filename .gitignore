@@ -68,3 +68,4 @@ resume.pdf
 # Personal role-specific CVs (never commit)
 cvs/
 cv_routing.yaml
+routing-evaluation-report.json

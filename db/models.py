@@ -172,6 +172,14 @@ class Application(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
     submission_channel = Column(String(30), nullable=True)
     needs_review_reason = Column(Text, nullable=True)
+    selected_cv_id = Column(String(255), nullable=True)
+    profile_version = Column(Integer, nullable=True)
+    cv_routing_confidence = Column(Float, nullable=True)
+    cv_routing_evidence = Column(Text, nullable=True)
+    cv_routing_fallback_reason = Column(String(64), nullable=True)
+    cv_override_id = Column(String(255), nullable=True)
+    outcome = Column(String(32), nullable=True)
+    outcome_note = Column(Text, nullable=True)
 
     job = relationship("Job", back_populates="application")
     submissions = relationship(
