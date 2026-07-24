@@ -120,31 +120,6 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/profile")
-async def get_profile_summary():
-    """Return the user profile fields used when filling application forms."""
-    from profile.loader import get_profile
-    try:
-        profile = get_profile()
-        p = profile.model_dump()
-        personal = p.get("personal", {})
-        links = p.get("links", {})
-        resume = p.get("resume", {})
-        return {
-            "name":      personal.get("name", ""),
-            "email":     personal.get("email", ""),
-            "phone":     personal.get("phone", ""),
-            "location":  personal.get("location", ""),
-            "linkedin":  links.get("linkedin", ""),
-            "github":    links.get("github", ""),
-            "portfolio": links.get("portfolio", "") or links.get("website", ""),
-            "resume_pdf": resume.get("pdf_path", "") if resume else "",
-            "skills":    p.get("skills", [])[:20],
-        }
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
 @router.post("/applications/{app_id}/approve", response_model=ApproveResponse)
 async def approve_application(app_id: int, db: Session = Depends(get_db)):
     """Approve an application and enqueue for submission."""

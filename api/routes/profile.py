@@ -46,11 +46,19 @@ async def upload_resume(
 
 @router.get("")
 async def get_profile_summary():
+    """Full profile summary — used by the dashboard and application form-filling."""
     p = get_profile()
     return {
         "name": p.personal.name,
+        "email": p.personal.email,
+        "phone": p.personal.phone,
         "location": p.personal.location,
+        "linkedin": p.links.linkedin,
+        "github": p.links.github,
+        "portfolio": p.links.portfolio,
+        "resume_pdf": p.resume.pdf_path,
         "roles": p.preferences.roles,
         "keywords": p.preferences.keywords,
+        "skills": p.preferences.keywords[:20],
         "has_resume_pdf": bool(p.resume.pdf_path),
     }

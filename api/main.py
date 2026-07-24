@@ -81,6 +81,17 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ── Static Asset Cache Control ────────────────────────────
+@app.middleware("http")
+async def no_cache_static_middleware(request: Request, call_next):
+    """Force revalidation on static assets so dashboard edits show up
+    immediately instead of being served from a stale browser cache."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # ── API Token Auth Middleware ────────────────────────────
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):

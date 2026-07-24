@@ -63,3 +63,7 @@ bridge/session/
 # Full-auto v2: uploaded CV + persistent LinkedIn browser session (never commit)
 resume.pdf
 .linkedin_profile/
+
+# Personal role-specific CVs (never commit)
+cvs/
+cv_routing.yaml

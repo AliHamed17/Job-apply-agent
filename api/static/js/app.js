@@ -49,10 +49,15 @@ const urlFilters = () => document.querySelectorAll('#view-urls .filter-btn');
 document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
 
-    const saved = localStorage.getItem('job_agent_token');
+    // Use a saved token if present; otherwise fall back to the token the
+    // server embedded in the page (same SECRET_KEY it checks requests against),
+    // so a fresh browser/session doesn't start locked out with 401s everywhere.
+    const embedded = document.body.dataset.apiKey || '';
+    const saved = localStorage.getItem('job_agent_token') || embedded;
     if (saved) {
         state.authToken = saved;
         $('api-secret').value = saved;
+        localStorage.setItem('job_agent_token', saved);
     }
 
     // Set full webhook URL + bridge agent URL in WhatsApp view
