@@ -19,6 +19,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # ── Environment ─────────────────────────────────────
+    app_env: Literal["development", "test", "production"] = "development"
+
     # ── WhatsApp Cloud API ──────────────────────────────
     whatsapp_verify_token: str = ""
     whatsapp_api_token: str = ""
@@ -49,6 +52,10 @@ class Settings(BaseSettings):
 
     # ── Security ────────────────────────────────────────
     secret_key: str = "change-me"
+    cors_origins: str = "http://localhost:3000,http://localhost:5173"
+    trusted_proxies: str = ""
+    live_automation_acknowledged: bool = False
+    dependency_heartbeat_ttl_seconds: int = 120
 
     # ── Allowed Senders ─────────────────────────────────
     allowed_senders: str = ""  # comma-separated phone numbers
@@ -105,6 +112,35 @@ class Settings(BaseSettings):
         if not self.allowed_senders:
             return []
         return [s.strip() for s in self.allowed_senders.split(",") if s.strip()]
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def trusted_proxy_list(self) -> list[str]:
+        return [proxy.strip() for proxy in self.trusted_proxies.split(",") if proxy.strip()]
+
+    def validate_runtime(self) -> None:
+        """Reject unsafe production settings before the process accepts traffic."""
+        if self.app_env != "production":
+            return
+        errors: list[str] = []
+        if self.secret_key in {"", "change-me", "change-me-to-a-random-secret"}:
+            errors.append("SECRET_KEY must be a non-default value")
+        if len(self.secret_key) < 32:
+            errors.append("SECRET_KEY must be at least 32 characters")
+        if not self.whatsapp_app_secret:
+            errors.append("WHATSAPP_APP_SECRET is required for webhook signatures")
+        if "*" in self.cors_origin_list:
+            errors.append("CORS_ORIGINS cannot contain '*'")
+        live_requested = self.auto_apply or not self.draft_only or not self.dry_run
+        if live_requested and not self.live_automation_acknowledged:
+            errors.append(
+                "LIVE_AUTOMATION_ACKNOWLEDGED=true is required for non-dry-run automation"
+            )
+        if errors:
+            raise ValueError("Unsafe production configuration: " + "; ".join(errors))
 
     @property
     def db_is_sqlite(self) -> bool:

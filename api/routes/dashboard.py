@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
+from core.operations import readiness_report
 from db.models import (
     Application,
     CoverLetterFeedback,
@@ -51,6 +52,9 @@ class DashboardSummary(BaseModel):
     urls_failed: int
     urls_blocked: int
     score_distribution: dict[str, int]
+    operational_status: str
+    degraded_dependencies: list[str]
+    last_successful_discovery: datetime | None
 
 
 class ManualIngestRequest(BaseModel):
@@ -134,6 +138,11 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         .all()
     )
     score_distribution = {bucket: count for bucket, count in dist_rows}
+    operations = readiness_report(get_settings())
+    degraded_dependencies = [
+        name for name, result in operations["checks"].items() if not result["ok"]
+    ]
+    last_successful_discovery = db.query(func.max(Job.created_at)).scalar()
 
     return DashboardSummary(
         total_messages=total_messages,
@@ -154,6 +163,9 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         urls_failed=urls_failed,
         urls_blocked=urls_blocked,
         score_distribution=score_distribution,
+        operational_status=operations["status"],
+        degraded_dependencies=degraded_dependencies,
+        last_successful_discovery=last_successful_discovery,
     )
 
 
@@ -190,7 +202,7 @@ async def manual_ingest(req: ManualIngestRequest, db: Session = Depends(get_db))
 
     # Enqueue processing
     from worker.tasks import process_url_task
-    
+
     settings = get_settings()
     if settings.tasks_always_eager:
         # Use .apply() for synchronous execution without broker

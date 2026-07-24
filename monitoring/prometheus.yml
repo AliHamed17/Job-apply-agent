@@ -28,9 +28,8 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ['web-api:8000']
-    # The /metrics endpoint is protected; pass bearer token if SECRET_KEY is set
-    # authorization:
-    #   credentials_file: /run/secrets/api_token
+    # Metrics are unauthenticated only on the private container network.
+    # nginx explicitly refuses public /metrics requests.
 
   # Redis metrics (via redis_exporter sidecar — add to docker-compose if needed)
   # - job_name: redis
