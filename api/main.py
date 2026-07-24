@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
@@ -29,11 +30,21 @@ from db.session import init_db
 setup_logging()
 logger = structlog.get_logger(__name__)
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    logger.info(
+        "app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply
+    )
+    yield
+
+
 # ── App creation ─────────────────────────────────────────
 app = FastAPI(
     title="AI Job Apply Agent",
     description="Monitor WhatsApp for job links, extract postings, and draft/submit applications",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # ── CORS (configurable per environment) ──────────────────
@@ -99,7 +110,15 @@ async def auth_middleware(request: Request, call_next):
 
     Exempt: /webhook (uses its own verification), /health, /docs, /openapi.json
     """
-    exempt_paths = {"/webhook/whatsapp", "/health", "/docs", "/openapi.json", "/redoc", "/static", "/favicon.ico"}
+    exempt_paths = {
+        "/webhook/whatsapp",
+        "/health",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/static",
+        "/favicon.ico",
+    }
     if request.url.path == "/" or any(request.url.path.startswith(p) for p in exempt_paths):
         return await call_next(request)
 
@@ -187,11 +206,3 @@ async def metrics():
         }
     finally:
         db.close()
-
-
-# ── Startup ──────────────────────────────────────────────
-@app.on_event("startup")
-async def startup():
-    """Initialize DB tables on startup (MVP mode)."""
-    init_db()
-    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)

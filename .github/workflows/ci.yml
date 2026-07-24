@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jobagent
+          POSTGRES_PASSWORD: jobagent
+          POSTGRES_DB: job_agent_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U jobagent"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://jobagent:jobagent@localhost:5432/job_agent_test
+      REDIS_URL: redis://localhost:6379/0
+      TASKS_ALWAYS_EAGER: "true"
+      LLM_PROVIDER: mock
+      SECRET_KEY: ci-only-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev,pdf,postgres,email]"
+      - name: Critical lint
+        run: ruff check . --select E9,F63,F7,F82
+      - name: Typed safety-critical modules
+        run: mypy --ignore-missing-imports --disable-error-code var-annotated core/config.py profile/cv_intake.py profile/writer.py worker/celery_app.py
+      - name: PostgreSQL migrations
+        run: alembic upgrade head
+      - name: Tests
+        run: pytest -q --cov=api --cov=core --cov=profile --cov=worker --cov-report=term-missing
+      - name: Compose validation
+        run: cp .env.example .env && docker compose config --quiet
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build --target web-api -t job-agent-api:ci .

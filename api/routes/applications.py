@@ -7,7 +7,7 @@ from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from db.models import Application, JobStatus
@@ -18,6 +18,7 @@ router = APIRouter(tags=["applications"])
 
 
 class ApplicationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     job_id: int
     job_title: str
@@ -35,10 +36,6 @@ class ApplicationResponse(BaseModel):
     submission_confirmation_url: str | None = None
     submission_error: str | None = None
     submitted_at: str | None = None
-
-    class Config:
-        from_attributes = True
-
 
 class ApproveResponse(BaseModel):
     message: str

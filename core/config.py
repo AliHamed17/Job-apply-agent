@@ -70,6 +70,8 @@ class Settings(BaseSettings):
 
     # ── Paths ───────────────────────────────────────────
     user_profile_path: str = "user_profile.yaml"
+    application_data_dir: str = "."
+    max_resume_bytes: int = 10 * 1024 * 1024
 
     # ── Full-auto policy ────────────────────────────────
     min_apply_score: float = 40.0
@@ -111,6 +113,14 @@ class Settings(BaseSettings):
     @property
     def profile_path(self) -> Path:
         return Path(self.user_profile_path)
+
+    @property
+    def data_dir(self) -> Path:
+        return Path(self.application_data_dir)
+
+    @property
+    def resume_path(self) -> Path:
+        return self.data_dir / "resume.pdf"
 
     def active_hours_range(self) -> tuple[int, int]:
         """Parse ACTIVE_HOURS 'HH:MM-HH:MM' into (start_hour, end_hour)."""

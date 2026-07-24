@@ -30,13 +30,13 @@ async def status():
 
 @router.get("/overview")
 async def overview(db: Session = Depends(get_db)):
-    from datetime import datetime
+    from datetime import UTC, datetime
 
     from db.models import Application, Job, JobStatus
     from worker.digest import build_digest
 
     gov = get_governor().status()
-    summary = build_digest(db, datetime.utcnow().date())
+    summary = build_digest(db, datetime.now(UTC).date())
     rows = (db.query(Application, Job)
               .join(Job, Application.job_id == Job.id)
               .filter(Application.status == JobStatus.NEEDS_REVIEW)

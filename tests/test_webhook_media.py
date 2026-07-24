@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from core.config import Settings
 
 
@@ -12,13 +14,19 @@ async def test_handle_document_rebuilds_profile(tmp_path):
                         "filename": "cv.pdf"},
            "from": "15550001111"}
 
-    with patch.object(webhook, "_download_media", new=AsyncMock(return_value=b"%PDF fake")), \
-         patch.object(webhook, "build_profile_from_pdf", new=AsyncMock()) as build_mock, \
-         patch.object(webhook, "save_profile", return_value=2), \
-         patch.object(webhook, "rescore_pending_jobs", return_value=0), \
-         patch.object(webhook, "_send_whatsapp_message", new=AsyncMock()) as send_mock:
+    async def fake_ingest(tmp, *, settings, db, max_bytes):
+        return {"version": 2, "roles": [], "rescored": 0}
+
+    with (
+        patch.object(webhook, "_download_media", new=AsyncMock(return_value=b"%PDF fake")),
+        patch("profile.cv_intake.bytes_to_temp", return_value=tmp_path / "x.pdf"),
+        patch(
+            "profile.cv_intake.ingest_cv_from_temp", side_effect=fake_ingest
+        ) as ingest_mock,
+        patch.object(webhook, "_send_whatsapp_message", new=AsyncMock()) as send_mock,
+    ):
         handled = await webhook._handle_document(msg, db=None, settings=settings)
 
     assert handled is True
-    assert build_mock.called
+    assert ingest_mock.called
     assert send_mock.called

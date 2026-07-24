@@ -63,6 +63,7 @@ services:
       # yaml_path.parent — see api/routes/profile.py) is visible to
       # celery-worker too, not just this container's own filesystem layer.
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
+      APPLICATION_DATA_DIR: /app/profile-data
     ports:
       - "8000:8000"
     depends_on:
@@ -95,6 +96,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
+      APPLICATION_DATA_DIR: /app/profile-data
     command: ["celery", "-A", "worker.celery_app", "worker", "-Q", "ingestion,processing,llm,submission,discovery", "--loglevel=info"]
     depends_on:
       postgres:
@@ -133,6 +135,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
+      APPLICATION_DATA_DIR: /app/profile-data
     command: ["celery", "-A", "worker.celery_app", "beat", "--loglevel=info"]
     depends_on:
       - redis

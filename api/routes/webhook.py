@@ -12,8 +12,6 @@ import hashlib
 import hmac
 import re
 from datetime import datetime
-from profile.builder import build_profile_from_pdf
-from profile.writer import save_profile
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,7 +26,6 @@ from db.models import Application, ExtractedURL, Job, JobStatus, Message
 from db.session import get_db
 from ingestion.text_post_parser import looks_like_job
 from ingestion.url_utils import normalize_url, url_hash
-from worker.rescore import rescore_pending_jobs
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -70,8 +67,9 @@ async def _route_text_post(
     text: str, db: Session, settings: Settings, sender: str | None = None
 ) -> str:
     """Score + (maybe) reply to a text-only job post via worker.outbound."""
-    from core.governor import get_governor
     from profile.loader import get_profile
+
+    from core.governor import get_governor
     from worker.outbound import process_text_post
 
     return await process_text_post(
@@ -172,16 +170,17 @@ async def _handle_document(msg: dict, db, settings: Settings) -> bool:
             await _send_whatsapp_message(sender, "❌ Could not download the CV.", settings)
             return True
 
-        pdf_path = settings.profile_path.parent / "resume.pdf"
-        pdf_path.write_bytes(content)
-        profile = await build_profile_from_pdf(str(pdf_path))
-        profile.resume.pdf_path = str(pdf_path)
-        version = save_profile(profile, settings.profile_path, db=db)
-        rescored = rescore_pending_jobs(db, profile) if db is not None else 0
+        from profile.cv_intake import bytes_to_temp, ingest_cv_from_temp
+        tmp = bytes_to_temp(
+            content, settings.profile_path.parent, settings.max_resume_bytes
+        )
+        result = await ingest_cv_from_temp(
+            tmp, settings=settings, db=db, max_bytes=settings.max_resume_bytes
+        )
         await _send_whatsapp_message(
             sender,
-            f"✅ CV received. Profile v{version} rebuilt "
-            f"({len(profile.preferences.roles)} target roles). Re-scored {rescored} jobs.",
+            f"✅ CV received. Profile v{result['version']} rebuilt "
+            f"({len(result['roles'])} target roles). Re-scored {result['rescored']} jobs.",
             settings,
         )
         return True

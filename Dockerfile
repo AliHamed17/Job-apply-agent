@@ -32,7 +32,7 @@ COPY . .
 RUN pip install -e ".[pdf]"
 
 # Run DB migrations then start Uvicorn
-CMD ["sh", "-c", "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "mkdir -p /app/profile-data && if [ ! -f /app/profile-data/user_profile.yaml ]; then cp /app/user_profile.yaml /app/profile-data/user_profile.yaml; fi && alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
 
 # ── Stage 4: celery-worker ─────────────────────────────────────────────────
 # celery-beat (docker-compose) builds from this same stage — it schedules

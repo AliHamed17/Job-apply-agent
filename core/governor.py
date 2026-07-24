@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 
@@ -30,7 +30,7 @@ class RateGovernor:
     def __init__(self, settings, redis_client=None, now_fn=None, sleep_fn=None, rng=None):
         self.s = settings
         self.store = redis_client if redis_client is not None else _MemoryStore()
-        self._now = now_fn or datetime.utcnow
+        self._now = now_fn or (lambda: datetime.now(UTC))
         self._sleep = sleep_fn
         self._rng = rng or random.Random()
 

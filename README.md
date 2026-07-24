@@ -156,6 +156,11 @@ Full-auto scoring and application generation are driven by your parsed CV/profil
 - **Dashboard**: `POST /api/profile/resume` with a PDF file (multipart `file` field) — rebuilds your profile and re-scores pending jobs.
 - **WhatsApp**: send the CV as a PDF document to the bot number — the webhook detects `document` messages with `mime_type: application/pdf`, rebuilds the profile, and re-scores the queue the same way.
 
+Uploads are streamed with a configurable `MAX_RESUME_BYTES` limit (10 MB by
+default), validated as readable non-encrypted PDFs, and parsed before the active
+resume/profile is replaced. Docker stores these files under the shared
+`profile-data/` runtime directory, which is intentionally ignored by Git.
+
 ### Governor caps and the kill switch
 
 All LinkedIn actions go through `core/governor.py`'s `RateGovernor`, which enforces, independent of scoring:
