@@ -49,7 +49,11 @@ const urlFilters = () => document.querySelectorAll('#view-urls .filter-btn');
 document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
 
-    const saved = localStorage.getItem('job_agent_token');
+    // Keep the bearer token only for this browser tab. The server must never
+    // embed SECRET_KEY in HTML, and persistent localStorage unnecessarily
+    // extends the impact of a browser-profile or XSS compromise.
+    localStorage.removeItem('job_agent_token');
+    const saved = sessionStorage.getItem('job_agent_token');
     if (saved) {
         state.authToken = saved;
         $('api-secret').value = saved;
@@ -60,6 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
     $('wa-bridge-agent-url').textContent = location.origin;
 
     setupListeners();
+    setupResumeUpload();
     refreshAllData();
 });
 
@@ -101,9 +106,13 @@ function setupListeners() {
     // Auth token
     $('api-secret').addEventListener('change', e => {
         state.authToken = e.target.value;
-        localStorage.setItem('job_agent_token', state.authToken);
+        sessionStorage.setItem('job_agent_token', state.authToken);
         refreshAllData();
     });
+
+    // Governor kill / resume
+    $('btn-kill').addEventListener('click', handleKill);
+    $('btn-resume').addEventListener('click', handleResume);
 
     // Refresh button
     $('btn-refresh').addEventListener('click', () => {
@@ -215,11 +224,129 @@ async function apiCall(endpoint, method = 'GET', body = null) {
 
 async function refreshAllData() {
     await fetchDashboard();
+    await fetchOverview();
     // Always keep jobs current (used by dashboard histogram + CSV export)
     await fetchJobs();
+    await fetchProfileSummary();
     if (state.currentTab === 'applications') await fetchApplications();
     if (state.currentTab === 'urls') await fetchUrls();
     if (state.currentTab === 'whatsapp') { await fetchMessages(); await fetchBridgeStatus(); }
+}
+
+// ── Rendering: Automation Control (governor / budget / needs-review) ──────────
+async function fetchOverview() {
+    const data = await apiCall('/api/control/overview');
+    if (!data) return;
+    state.overviewData = data;
+    renderOverview(data);
+}
+
+function renderOverview(data) {
+    const gov = data.governor || {};
+    const counts = data.counts || {};
+    const needsReview = data.needs_review || [];
+
+    // Gauge: remaining vs. today's total (remaining + already used)
+    const remaining = gov.remaining ?? 0;
+    const used = gov.applications_today ?? 0;
+    const total = remaining + used;
+    const pct = total > 0 ? Math.round((remaining / total) * 100) : 100;
+
+    const fill = $('governor-gauge-fill');
+    if (fill) {
+        fill.style.width = `${pct}%`;
+        fill.style.background = pct <= 20 ? 'var(--danger)' : pct <= 50 ? 'var(--warning)' : 'var(--success)';
+    }
+
+    const remainingText = $('governor-remaining-text');
+    if (remainingText) {
+        remainingText.textContent = total > 0
+            ? `${remaining} of ${total} remaining today`
+            : `${remaining} remaining today`;
+    }
+
+    const killedBadge = $('governor-killed-badge');
+    if (killedBadge) killedBadge.style.display = gov.killed ? 'inline-flex' : 'none';
+
+    const cooldownEl = $('governor-cooldown');
+    if (cooldownEl) {
+        if (gov.in_cooldown) {
+            cooldownEl.style.display = 'inline-flex';
+            cooldownEl.innerHTML = `<i data-lucide="timer" style="width:12px;height:12px;"></i> Cooldown: ${fmtDuration(gov.cooldown_remaining_s || 0)}`;
+        } else {
+            cooldownEl.style.display = 'none';
+            cooldownEl.innerHTML = '';
+        }
+    }
+
+    const btnKill = $('btn-kill');
+    const btnResume = $('btn-resume');
+    if (btnKill) btnKill.disabled = !!gov.killed;
+    if (btnResume) btnResume.disabled = !gov.killed;
+
+    // Counts row
+    const countsRow = $('overview-counts-row');
+    if (countsRow) {
+        const items = [
+            { label: 'Applied Today', value: counts.applied ?? 0, icon: 'send' },
+            { label: 'Needs Review', value: counts.needs_review ?? 0, icon: 'alert-triangle' },
+            { label: 'Failed', value: counts.failed ?? 0, icon: 'x-circle' },
+            { label: 'Outbound Sent', value: counts.outbound_sent ?? 0, icon: 'message-circle' },
+        ];
+        countsRow.innerHTML = items.map(it => `
+            <div class="count-chip">
+                <i data-lucide="${it.icon}" style="width:14px;height:14px;"></i>
+                <span class="count-chip-value">${it.value}</span>
+                <span class="count-chip-label">${esc(it.label)}</span>
+            </div>`).join('');
+    }
+
+    // Needs-review table
+    const tbody = $('needs-review-table-body');
+    if (tbody) {
+        if (!needsReview.length) {
+            tbody.innerHTML = `<tr><td colspan="2" style="text-align:center;padding:24px;color:var(--text-muted);">No applications need review</td></tr>`;
+        } else {
+            tbody.innerHTML = needsReview.map(r => `
+                <tr>
+                    <td>${esc(r.title || '—')}</td>
+                    <td style="color:var(--text-dim);">${esc(r.reason || '—')}</td>
+                </tr>`).join('');
+        }
+    }
+
+    lucide.createIcons();
+}
+
+function fmtDuration(secs) {
+    secs = Math.max(0, Math.floor(secs));
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+async function handleKill() {
+    const btn = $('btn-kill');
+    btn.disabled = true;
+    const res = await apiCall('/api/control/kill', 'POST');
+    if (res) {
+        showToast('Kill switch activated — automation paused', 'warning');
+        await fetchOverview();
+    } else {
+        btn.disabled = false;
+    }
+}
+
+async function handleResume() {
+    const btn = $('btn-resume');
+    btn.disabled = true;
+    const res = await apiCall('/api/control/resume', 'POST');
+    if (res) {
+        showToast('Automation resumed', 'success');
+        await fetchOverview();
+    } else {
+        btn.disabled = false;
+    }
 }
 
 async function fetchDashboard() {
@@ -397,6 +524,115 @@ function renderScoreHistogram(d) {
             <div class="hist-count">${values[i]}<span class="hist-pct">${share}%</span></div>
         </div>`;
     }).join('');
+}
+
+// ── Candidate Profile / CV Upload ──────────────────────────────────────────
+let selectedResumeFile = null;
+
+function setupResumeUpload() {
+    const dropzone = $('resume-dropzone');
+    const input = $('resumeInput');
+    const uploadBtn = $('btn-upload-resume');
+    if (!dropzone || !input || !uploadBtn) return;
+
+    dropzone.addEventListener('click', () => input.click());
+
+    input.addEventListener('change', () => {
+        if (input.files.length) setSelectedResumeFile(input.files[0]);
+    });
+
+    ['dragenter', 'dragover'].forEach(evt => {
+        dropzone.addEventListener(evt, e => {
+            e.preventDefault();
+            dropzone.classList.add('dragover');
+        });
+    });
+    ['dragleave', 'drop'].forEach(evt => {
+        dropzone.addEventListener(evt, e => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+        });
+    });
+    dropzone.addEventListener('drop', e => {
+        const file = e.dataTransfer?.files?.[0];
+        if (file) setSelectedResumeFile(file);
+    });
+
+    uploadBtn.addEventListener('click', uploadResume);
+}
+
+function setSelectedResumeFile(file) {
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+        showToast('Please select a PDF file', 'warning');
+        return;
+    }
+    selectedResumeFile = file;
+    $('resume-filename').textContent = `Selected: ${file.name}`;
+    $('btn-upload-resume').disabled = false;
+}
+
+async function uploadResume() {
+    if (!selectedResumeFile) return;
+    const btn = $('btn-upload-resume');
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Uploading…';
+    lucide.createIcons();
+
+    const formData = new FormData();
+    formData.append('file', selectedResumeFile);
+    const headers = {};
+    if (state.authToken) headers['Authorization'] = `Bearer ${state.authToken}`;
+
+    try {
+        const res = await fetch('/api/profile/resume', { method: 'POST', headers, body: formData });
+        if (res.status === 401 || res.status === 403) {
+            showToast('Authentication failed. Check API Secret.', 'error');
+            return;
+        }
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        renderProfileSummary(data);
+        showToast(
+            `CV processed — profile v${data.version} rebuilt, ${data.rescored} job${data.rescored !== 1 ? 's' : ''} rescored`,
+            'success'
+        );
+    } catch (err) {
+        showToast(err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalLabel;
+        lucide.createIcons();
+    }
+}
+
+function renderProfileSummary(data) {
+    const summary = $('profile-summary');
+    if (!summary) return;
+    $('profile-summary-name').innerHTML =
+        `<i data-lucide="user" style="width:14px;height:14px;"></i> ${esc(data.name || 'Unknown')}`;
+    const roles = data.roles || [];
+    $('profile-summary-roles').innerHTML = roles.length
+        ? roles.map(r => `<span class="profile-role-chip">${esc(r)}</span>`).join('')
+        : '<span class="text-muted text-sm">No roles detected</span>';
+    summary.style.display = 'grid';
+    lucide.createIcons();
+}
+
+async function fetchProfileSummary() {
+    const data = await apiCall('/api/profile');
+    if (!data) return;
+    const el = $('profile-current-summary');
+    if (el) {
+        el.textContent = data.name
+            ? `Current: ${data.name}${data.roles?.length ? ' · ' + data.roles.slice(0, 2).join(', ') : ''}`
+            : 'No profile on file yet';
+    }
+    if (data.name) renderProfileSummary(data);
 }
 
 function toggleAutoRefresh() {

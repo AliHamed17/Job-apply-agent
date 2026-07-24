@@ -1,8 +1,10 @@
+from core.logging import setup_logging
 from db.session import get_session_factory
 from db.models import ExtractedURL, URLStatus
 from worker.tasks import process_url_task
 
 def retrigger():
+    setup_logging()
     factory = get_session_factory()
     db = factory()
     

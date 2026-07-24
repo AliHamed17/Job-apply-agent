@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from db.models import ExtractedURL, Job, JobStatus, Message, URLStatus
@@ -16,6 +16,7 @@ router = APIRouter(tags=["jobs"])
 
 
 class JobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     title: str
     company: str
@@ -28,10 +29,6 @@ class JobResponse(BaseModel):
     score: float | None
     status: str
     created_at: str
-
-    class Config:
-        from_attributes = True
-
 
 @router.get("/jobs", response_model=list[JobResponse])
 async def list_jobs(

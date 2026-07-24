@@ -13,8 +13,37 @@ This is a production-grade, modular system designed to automate the job applicat
 
 ---
 
-## Current Status (MVP Completed)
-The foundation is solid and verified with **76 unit tests (all passing)**.
+## Current Status (Full-Auto v2 Hardening)
+
+The repository has moved beyond the original MVP. The active v2 branch adds
+CV-driven LinkedIn discovery, governed Easy Apply, CV/profile rebuilding,
+WhatsApp/email outbound, queue draining, daily digests, and operator controls.
+The automated suite contains more than 190 tests; use the current CI result as
+the authoritative count.
+
+Safety remains fail-closed: real submission is disabled by default, unknown
+required answers become `NEEDS_REVIEW`, challenges trip the shared cooldown,
+and a success record requires positive confirmation. Rate limits reduce blast
+radius but do not make browser automation compliant with platform terms.
+
+### Verification boundaries
+
+- Unit and fixture tests do not prove that current LinkedIn selectors work live.
+- A real-browser check must use `DRY_RUN=true` and discard before submission.
+- PostgreSQL migrations, Redis configuration, critical lint, scoped typing,
+  Compose validation, and the API container build are exercised in CI.
+- Uploaded CVs, generated profiles, and browser sessions are runtime data and
+  must never be committed.
+
+### Durable runtime data
+
+Docker Compose shares `profile-data/` between the API and worker. The API writes
+the active profile and resume; workers mount them read-only. The LinkedIn browser
+profile is mounted separately and writable only where Chromium runs.
+
+CV ingestion is streamed and size bounded, validates actual PDF structure,
+parses before activation, uses atomic replacement, and restores the previous
+resume when profile persistence fails.
 
 ### Implemented Modules:
 1.  **Ingestion Layer**: WhatsApp Cloud API webhook handler with interactive button routing (Approve/Skip/Edit).

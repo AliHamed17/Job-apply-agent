@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
@@ -14,9 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from api.routes.applications import router as applications_router
+from api.routes.control import router as control_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.feedback import router as feedback_router
 from api.routes.jobs import router as jobs_router
+from api.routes.profile import router as profile_router
+from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
@@ -26,11 +30,21 @@ from db.session import init_db
 setup_logging()
 logger = structlog.get_logger(__name__)
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    logger.info(
+        "app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply
+    )
+    yield
+
+
 # ── App creation ─────────────────────────────────────────
 app = FastAPI(
     title="AI Job Apply Agent",
     description="Monitor WhatsApp for job links, extract postings, and draft/submit applications",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # ── CORS (configurable per environment) ──────────────────
@@ -78,6 +92,17 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ── Static Asset Cache Control ────────────────────────────
+@app.middleware("http")
+async def no_cache_static_middleware(request: Request, call_next):
+    """Force revalidation on static assets so dashboard edits show up
+    immediately instead of being served from a stale browser cache."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # ── API Token Auth Middleware ────────────────────────────
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -85,7 +110,15 @@ async def auth_middleware(request: Request, call_next):
 
     Exempt: /webhook (uses its own verification), /health, /docs, /openapi.json
     """
-    exempt_paths = {"/webhook/whatsapp", "/health", "/docs", "/openapi.json", "/redoc", "/static", "/favicon.ico"}
+    exempt_paths = {
+        "/webhook/whatsapp",
+        "/health",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/static",
+        "/favicon.ico",
+    }
     if request.url.path == "/" or any(request.url.path.startswith(p) for p in exempt_paths):
         return await call_next(request)
 
@@ -125,10 +158,13 @@ async def correlation_id_middleware(request: Request, call_next):
 
 # ── Register routes ──────────────────────────────────────
 app.include_router(webhook_router)
+app.include_router(ingest_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
+app.include_router(profile_router)
+app.include_router(control_router)
 
 
 # ── Static and Templates ─────────────────────────────────
@@ -148,7 +184,7 @@ async def health():
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
-    return templates.TemplateResponse("index.html", {"request": request, "api_key": settings.secret_key})
+    return templates.TemplateResponse(request, "index.html")
 
 @app.get("/metrics")
 async def metrics():
@@ -170,11 +206,3 @@ async def metrics():
         }
     finally:
         db.close()
-
-
-# ── Startup ──────────────────────────────────────────────
-@app.on_event("startup")
-async def startup():
-    """Initialize DB tables on startup (MVP mode)."""
-    init_db()
-    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)

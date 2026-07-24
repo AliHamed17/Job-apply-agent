@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import uuid
 
 import structlog
@@ -10,6 +11,13 @@ import structlog
 
 def setup_logging(log_level: str = "INFO") -> None:
     """Configure structlog with JSON rendering and correlation IDs."""
+
+    # Windows consoles default to cp1252, which can't encode most non-ASCII
+    # text (smart quotes, em-dashes, non-English job postings). Force UTF-8
+    # so logging a real job posting never crashes the pipeline.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
     structlog.configure(
         processors=[

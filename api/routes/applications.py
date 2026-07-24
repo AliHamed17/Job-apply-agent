@@ -7,7 +7,7 @@ from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from db.models import Application, JobStatus
@@ -18,6 +18,7 @@ router = APIRouter(tags=["applications"])
 
 
 class ApplicationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     job_id: int
     job_title: str
@@ -35,10 +36,6 @@ class ApplicationResponse(BaseModel):
     submission_confirmation_url: str | None = None
     submission_error: str | None = None
     submitted_at: str | None = None
-
-    class Config:
-        from_attributes = True
-
 
 class ApproveResponse(BaseModel):
     message: str
@@ -118,31 +115,6 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         submission_error=submission.error_message if submission else None,
         submitted_at=submission.created_at.isoformat() if submission else None,
     )
-
-
-@router.get("/profile")
-async def get_profile_summary():
-    """Return the user profile fields used when filling application forms."""
-    from profile.loader import get_profile
-    try:
-        profile = get_profile()
-        p = profile.model_dump()
-        personal = p.get("personal", {})
-        links = p.get("links", {})
-        resume = p.get("resume", {})
-        return {
-            "name":      personal.get("name", ""),
-            "email":     personal.get("email", ""),
-            "phone":     personal.get("phone", ""),
-            "location":  personal.get("location", ""),
-            "linkedin":  links.get("linkedin", ""),
-            "github":    links.get("github", ""),
-            "portfolio": links.get("portfolio", "") or links.get("website", ""),
-            "resume_pdf": resume.get("pdf_path", "") if resume else "",
-            "skills":    p.get("skills", [])[:20],
-        }
-    except Exception as exc:
-        return {"error": str(exc)}
 
 
 @router.post("/applications/{app_id}/approve", response_model=ApproveResponse)

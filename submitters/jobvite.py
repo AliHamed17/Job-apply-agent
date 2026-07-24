@@ -64,7 +64,7 @@ class JobviteSubmitter(BaseSubmitter):
 
         # Jobvite API requires auth tokens for most operations;
         # fall back to the public form-based submission which works without auth.
-        return await self._submit_form(url, job_id, application, user_profile)
+        return await self._submit_form(url, job_id, application, user_profile, resume_path)
 
     async def _submit_form(
         self,
@@ -72,6 +72,7 @@ class JobviteSubmitter(BaseSubmitter):
         job_id: str,
         application: GeneratedApplication,
         user_profile: dict,
+        resume_path: str | None = None,
     ) -> SubmissionResult:
         """Submit via Jobvite's public application form endpoint."""
         personal = user_profile.get("personal", {})

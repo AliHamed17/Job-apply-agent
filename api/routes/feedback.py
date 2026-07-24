@@ -16,7 +16,7 @@ from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from db.models import Application, CoverLetterFeedback
@@ -43,16 +43,14 @@ class FeedbackSubmit(BaseModel):
 class FeedbackResponse(BaseModel):
     """Single feedback record."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     application_id: int
     original_text: str
     corrected_text: str
     feedback_note: str | None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
-
 
 class FewShotExample(BaseModel):
     """A single few-shot example for the LLM prompt."""

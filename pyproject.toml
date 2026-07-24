@@ -41,6 +41,7 @@ dev = [
     "httpx",           # for TestClient
     "ruff>=0.2,<1",
     "mypy>=1.8,<2",
+    "types-PyYAML",
 ]
 browser = [
     "playwright>=1.41,<2",
@@ -53,6 +54,10 @@ pdf = [
 # PostgreSQL support (Phase 9)
 postgres = [
     "psycopg2-binary>=2.9,<3",
+]
+# SMTP email support (Phase 5)
+email = [
+    "aiosmtplib>=3.0,<4",
 ]
 
 [tool.setuptools.packages.find]

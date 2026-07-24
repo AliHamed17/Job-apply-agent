@@ -86,3 +86,9 @@ def reload_profile() -> UserProfile:
     global _profile
     _profile = None
     return load_profile()
+
+
+def set_profile(profile: UserProfile) -> None:
+    """Replace the cached profile (used after an in-place rebuild)."""
+    global _profile
+    _profile = profile

@@ -1,0 +1,42 @@
+[
+  {
+    "text": "We are hiring Senior RF Engineers for our Dubai office. 5G experience required. Send CV to careers@telcox.ae or WhatsApp +971501234567",
+    "expect_is_job": true
+  },
+  {
+    "text": "Job Opening: Full Stack Developer needed for fintech startup. Node.js + React. Send resume to hr@techstartup.com",
+    "expect_is_job": true
+  },
+  {
+    "text": "VACANCY - Security Engineer. 3+ years experience. Looking for someone to join our team in Abu Dhabi. Please send CV. Contact: +971505555555",
+    "expect_is_job": true
+  },
+  {
+    "text": "وظيفة: مهندس تطوير تطبيقات موبايل مطلوب فوراً. الراتب: 8-12k AED. أرسل السيرة الذاتية على البريد hr@company.ae أو الواتس +971502222222",
+    "expect_is_job": true
+  },
+  {
+    "text": "توظيف: نحن نبحث عن موظفي خدمة عملاء. العمل في دبي. الراتب من 2000 درهم. تقديم السيرة على +971503333333",
+    "expect_is_job": true
+  },
+  {
+    "text": "Position Available: Project Manager for Oil & Gas. 10+ years in project management. Email: jobs@oilgascompany.com",
+    "expect_is_job": true
+  },
+  {
+    "text": "Good morning everyone! Happy Friday! Let's grab lunch later? 😄",
+    "expect_is_job": false
+  },
+  {
+    "text": "Just had an amazing coffee at the new cafe downtown. Highly recommend! ☕",
+    "expect_is_job": false
+  },
+  {
+    "text": "Hey everyone, check out my new photography portfolio at www.example.com",
+    "expect_is_job": false
+  },
+  {
+    "text": "We are applying new marketing strategies for Q4. Updates coming soon!",
+    "expect_is_job": false
+  }
+]

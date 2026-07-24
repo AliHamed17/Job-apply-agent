@@ -70,6 +70,34 @@ class Settings(BaseSettings):
 
     # ── Paths ───────────────────────────────────────────
     user_profile_path: str = "user_profile.yaml"
+    application_data_dir: str = "."
+    max_resume_bytes: int = 10 * 1024 * 1024
+
+    # ── Full-auto policy ────────────────────────────────
+    min_apply_score: float = 40.0
+    queue_ttl_days: int = 7
+
+    # ── LinkedIn rate governor ──────────────────────────
+    linkedin_daily_cap: int = 45
+    linkedin_min_gap_s: int = 120
+    linkedin_max_gap_s: int = 360
+    active_hours: str = "09:00-21:00"
+    linkedin_browser_profile_dir: str = ".linkedin_profile"
+    dry_run: bool = False
+
+    # ── Discovery ───────────────────────────────────────
+    discovery_interval_h: int = 3
+    discovery_pages_per_query: int = 3
+
+    # ── WhatsApp outbound + email ───────────────────────
+    wa_outbound_daily_cap: int = 15
+    wa_contact_dedup_days: int = 30
+    bridge_send_url: str = "http://localhost:8100/send"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_addr: str = ""
 
     # ── Derived helpers ─────────────────────────────────
     @property
@@ -85,6 +113,22 @@ class Settings(BaseSettings):
     @property
     def profile_path(self) -> Path:
         return Path(self.user_profile_path)
+
+    @property
+    def data_dir(self) -> Path:
+        return Path(self.application_data_dir)
+
+    @property
+    def resume_path(self) -> Path:
+        return self.data_dir / "resume.pdf"
+
+    def active_hours_range(self) -> tuple[int, int]:
+        """Parse ACTIVE_HOURS 'HH:MM-HH:MM' into (start_hour, end_hour)."""
+        try:
+            start, end = self.active_hours.split("-")
+            return int(start.split(":")[0]), int(end.split(":")[0])
+        except Exception:
+            return 9, 21
 
 
 @lru_cache

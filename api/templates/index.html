@@ -78,6 +78,58 @@
             <section id="view-dashboard" class="view active">
                 <div id="url-health-banner" class="health-banner" style="display:none"></div>
 
+                <div class="activity-section" id="governor-section">
+                    <div class="section-title">
+                        <i data-lucide="shield"></i> Automation Control
+                    </div>
+                    <div class="governor-panel">
+                        <div class="governor-gauge">
+                            <div class="gauge-header">
+                                <span class="gauge-label">Daily LinkedIn Budget</span>
+                                <span class="killed-badge" id="governor-killed-badge" style="display:none;">
+                                    <i data-lucide="octagon-x" style="width:12px;height:12px;"></i> Killed
+                                </span>
+                            </div>
+                            <div class="gauge-track">
+                                <div class="gauge-fill" id="governor-gauge-fill" style="width:100%"></div>
+                            </div>
+                            <div class="gauge-values">
+                                <span id="governor-remaining-text">— remaining</span>
+                                <span class="cooldown-timer" id="governor-cooldown" style="display:none;"></span>
+                            </div>
+                        </div>
+                        <div class="governor-actions">
+                            <button class="btn btn-danger" id="btn-kill" title="Immediately pause all LinkedIn automation">
+                                <i data-lucide="octagon-x"></i> Kill Switch
+                            </button>
+                            <button class="btn btn-success" id="btn-resume" title="Resume LinkedIn automation">
+                                <i data-lucide="play"></i> Resume
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="counts-row" id="overview-counts-row">
+                        <!-- Populated via JS -->
+                    </div>
+
+                    <div class="needs-review-wrap">
+                        <div class="section-subtitle">Needs Review</div>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Job Title</th>
+                                        <th>Reason</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="needs-review-table-body">
+                                    <tr><td colspan="2" style="text-align:center;padding:24px;color:var(--text-muted);">Loading…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="stats-grid" id="dashboard-stats">
                     <!-- Populated via JS -->
                 </div>
@@ -98,6 +150,36 @@
                         </div>
                         <div class="score-histogram" id="score-histogram">
                             <!-- Populated via JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="activity-section">
+                    <div class="section-title">
+                        <i data-lucide="user-circle"></i> Candidate Profile
+                    </div>
+                    <div class="profile-card">
+                        <div class="profile-dropzone" id="resume-dropzone">
+                            <input type="file" id="resumeInput" accept=".pdf,application/pdf" hidden>
+                            <i data-lucide="file-up"></i>
+                            <p><strong>Drag &amp; drop your CV</strong> or <span class="dropzone-browse" id="resume-browse">browse files</span></p>
+                            <p class="text-sm text-dim" id="resume-filename">PDF only &bull; used to rebuild your match profile</p>
+                        </div>
+                        <div class="profile-upload-row">
+                            <button class="btn btn-primary" id="btn-upload-resume" disabled>
+                                <i data-lucide="upload"></i> Upload CV
+                            </button>
+                            <span class="text-sm text-dim" id="profile-current-summary"></span>
+                        </div>
+                        <div class="profile-summary" id="profile-summary" style="display:none;">
+                            <div class="config-item" style="margin-bottom:0;">
+                                <div class="config-label">Detected Name</div>
+                                <div class="config-value" id="profile-summary-name" style="justify-content:flex-start;gap:8px;"></div>
+                            </div>
+                            <div class="config-item" style="margin-bottom:0;">
+                                <div class="config-label">Target Roles</div>
+                                <div class="profile-roles" id="profile-summary-roles"></div>
+                            </div>
                         </div>
                     </div>
                 </div>

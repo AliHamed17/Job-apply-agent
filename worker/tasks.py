@@ -253,6 +253,7 @@ def score_job_task(self, job_id: int):
             auto_apply_enabled=settings.auto_apply,
             draft_only=settings.draft_only,
             skip_reason=breakdown.skip_reason,
+            min_apply_score=settings.min_apply_score,
         )
 
         db_job.score = breakdown.total
@@ -292,7 +293,6 @@ def score_job_task(self, job_id: int):
 @shared_task(name="worker.tasks.generate_application_task", bind=True, max_retries=2)
 def generate_application_task(self, job_id: int):
     """Generate cover letter, recruiter message, and Q&A answers via LLM."""
-    import asyncio
     from profile.loader import get_profile
 
     from jobs.models import JobData
@@ -331,6 +331,7 @@ def generate_application_task(self, job_id: int):
             auto_apply_enabled=settings.auto_apply,
             draft_only=settings.draft_only,
             threshold=settings.auto_apply_threshold,
+            min_apply_score=settings.min_apply_score,
         )
         auto_approve = action == Action.AUTO_APPLY
 
@@ -390,13 +391,16 @@ def generate_application_task(self, job_id: int):
             except Exception as notify_err:
                 logger.warning("whatsapp_notify_failed", error=str(notify_err))
 
-        # Immediately chain to submission when auto-approved
+        # Immediately chain to submission only in local/eager dev mode.
+        # With a real broker, the application stays APPROVED and the
+        # priority drainer (Task 3.6, worker.drainer.drain_apply_queue_task)
+        # submits it highest-score-first under governor pacing.
         if auto_approve:
-            logger.info("auto_apply_queued", job=db_job.title, app_id=app.id)
             if settings.tasks_always_eager:
+                logger.info("auto_apply_queued", job=db_job.title, app_id=app.id)
                 submit_application_task.apply(args=[app.id])
             else:
-                submit_application_task.delay(app.id)
+                logger.info("auto_apply_queued_for_drainer", job=db_job.title, app_id=app.id)
 
     except Exception as exc:
         db.rollback()
@@ -416,7 +420,6 @@ def submit_application_task(self, application_id: int):
     CRITICAL: Enforces that the application must be APPROVED before submission.
     Falls back to draft_only for unsupported platforms.
     """
-    import asyncio
     from profile.loader import get_profile
 
     from jobs.models import JobData
@@ -427,7 +430,7 @@ def submit_application_task(self, application_id: int):
     from submitters.indeed import IndeedSubmitter
     from submitters.jobvite import JobviteSubmitter
     from submitters.lever import LeverSubmitter
-    from submitters.linkedin import LinkedInSubmitter
+    from submitters.linkedin_v2 import LinkedInV2Submitter
     from submitters.smartrecruiters import SmartRecruitersSubmitter
     from submitters.workable import WorkableSubmitter
     from submitters.workday import WorkdaySubmitter
@@ -456,8 +459,11 @@ def submit_application_task(self, application_id: int):
 
         profile = get_profile()
 
-        from submitters.icims import IcimsSubmitter
+        from core.governor import get_governor
         from llm.generation import GeneratedApplication
+        from submitters.icims import IcimsSubmitter
+
+        governor = get_governor()
 
         # Build ordered submitter list — Tier 1 (API), Tier 2 (browser), Tier 3 (draft)
         all_submitters = [
@@ -469,11 +475,7 @@ def submit_application_task(self, application_id: int):
             SmartRecruitersSubmitter(api_key=settings.smartrecruiters_api_key),
             JobviteSubmitter(),
             # Tier 2: Browser automation (Playwright)
-            LinkedInSubmitter(
-                cookies_file=settings.linkedin_cookies_file,
-                email=settings.linkedin_email,
-                password=settings.linkedin_password,
-            ),
+            LinkedInV2Submitter(db=db),
             IndeedSubmitter(
                 cookies_file=settings.indeed_cookies_file,
                 email=settings.indeed_email,
@@ -508,6 +510,18 @@ def submit_application_task(self, application_id: int):
             for sub in all_submitters:
                 if not sub.can_submit(job_ref):
                     continue
+                if isinstance(sub, LinkedInV2Submitter):
+                    ok, reason = governor.can_act()
+                    if not ok:
+                        logger.info(
+                            "linkedin_submit_deferred",
+                            application_id=application_id,
+                            job=db_job.title,
+                            reason=reason,
+                        )
+                        # Leave the application APPROVED — the drainer
+                        # (Task 3.6) will retry once the governor allows it.
+                        return
                 attempt = run_async(sub.submit(job_ref, generated, profile_dict, resume_path))
                 logger.info(
                     "submitter_attempt",
@@ -525,6 +539,12 @@ def submit_application_task(self, application_id: int):
         # Always fall back to draft_only if no real submission succeeded
         if result is None or result.status == "failed":
             result = run_async(DraftOnlySubmitter().submit(job_ref, generated, profile_dict, resume_path))
+
+        # abort-don't-lie: a blocked required field is surfaced as
+        # NEEDS_REVIEW rather than silently drafted or failed.
+        needs_review_reason = None
+        if result.error and result.error.startswith("NEEDS_REVIEW:"):
+            needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
         # Record submission
         from datetime import datetime as _dt
@@ -546,13 +566,31 @@ def submit_application_task(self, application_id: int):
         )
         db.add(submission)
 
-        # Job status mirrors submission outcome
+        # Job/application status mirrors submission outcome.
+        #
+        # CRITICAL: app.status must leave APPROVED on every one of these
+        # branches. The drainer (worker.drainer.select_next_application)
+        # re-selects any Application still APPROVED, so if a completed
+        # attempt left it APPROVED the same app would be re-submitted
+        # every drain tick — re-driving a live LinkedIn apply and hitting
+        # the Submission.application_id UNIQUE constraint (IntegrityError
+        # retry loop), starving every other approved job behind it.
         if result.status == "submitted" and result.success:
             db_job.status = JobStatus.SUBMITTED
+            app.status = JobStatus.SUBMITTED
+            if result.platform == "linkedin":
+                governor.record_application()
+                app.submission_channel = "linkedin_easy"
+        elif needs_review_reason is not None:
+            app.needs_review_reason = needs_review_reason
+            app.status = JobStatus.NEEDS_REVIEW
+            db_job.status = JobStatus.NEEDS_REVIEW
         elif result.status in ("draft_only", "captcha_blocked"):
             db_job.status = JobStatus.DRAFT
+            app.status = JobStatus.DRAFT
         else:
             db_job.status = JobStatus.FAILED
+            app.status = JobStatus.FAILED
         db.commit()
 
         logger.info(

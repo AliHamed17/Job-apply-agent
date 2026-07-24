@@ -1,0 +1,57 @@
+ALI HAMED
+Dubai, UAE | +971 50 123 4567 | ali.hamed@example.com
+LinkedIn: https://linkedin.com/in/alihamed | GitHub: https://github.com/alihamed
+
+PROFESSIONAL SUMMARY
+Experienced RF/RAN Engineer with 7+ years in telecom infrastructure design, optimization, and deployment.
+Expertise in LTE/4G, 5G NR, and emerging 6G technologies. Strong background in network planning, drive testing,
+and capacity optimization. Proven track record delivering high-quality network solutions for Tier-1 operators.
+
+TECHNICAL SKILLS
+- Radio Access Networks: LTE, LTE-A, 5G NR, 3GPP standards
+- RF Planning & Optimization: PathLoss, Mentum Netcell, Aspen Tech
+- Technologies: MIMO, Beamforming, Massive MIMO, Sub-6 GHz, mmWave
+- Tools: Drive test software (TEMS, Netscout), network simulation (NS-3)
+- Programming: Python, MATLAB, bash scripting
+- Protocols: RRC, RAN slicing, Quality of Service (QoS), HARQ
+- Site Survey & Design: Propagation modeling, antenna selection, site optimization
+- Monitoring & KPIs: CSFB, VoLTE, network congestion analysis
+
+PROFESSIONAL EXPERIENCE
+
+Senior RF Engineer | Parallel Wireless, Dubai | Jan 2021 - Present
+- Led RF optimization strategy for 5G NR deployments across MENA region
+- Designed and validated RF configurations achieving 98% coverage targets
+- Managed RAN slicing initiatives reducing latency by 35% for enterprise customers
+- Mentored junior engineers on 5G technologies and best practices
+- Collaborated with hardware vendors on MIMO antenna validation
+
+RF Engineer | Etisalat UAE, Abu Dhabi | Jun 2018 - Dec 2020
+- Performed network planning and RF design for LTE expansion (100+ sites)
+- Optimized network performance using drive testing and counter-balance techniques
+- Reduced dropped call rate from 2.1% to 0.8% through targeted optimization
+- Supported 5G trial deployment and field validation
+- Analyzed propagation models and antenna patterns for site engineering
+
+Junior RAN Specialist | du Telecom, Dubai | Jul 2016 - May 2018
+- Assisted in LTE network deployment and commissioning
+- Conducted drive tests and collected field measurement data
+- Prepared technical reports and KPI dashboards for management
+- Learned 3GPP standards and network architecture fundamentals
+
+CERTIFICATIONS & TRAINING
+- 5G NR Fundamentals (Qualcomm), 2022
+- LTE Advanced & 4G Engineering (Nokia), 2019
+- RF Design & Propagation Models (Aspen Tech), 2017
+
+EDUCATION
+Bachelor of Science in Electrical Engineering
+American University of Sharjah, UAE | Graduation: May 2016
+GPA: 3.7/4.0 | Relevant Coursework: Electromagnetics, Signal Processing, Communications Systems
+
+LANGUAGES
+- English: Fluent (Professional Working Proficiency)
+- Arabic: Native
+
+REFERENCES
+Available upon request
