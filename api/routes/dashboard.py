@@ -14,6 +14,7 @@ from core.config import get_settings
 from core.operations import readiness_report
 from db.models import (
     Application,
+    BrowserQualificationRun,
     CoverLetterFeedback,
     ExtractedURL,
     Job,
@@ -58,6 +59,8 @@ class DashboardSummary(BaseModel):
     cv_routing_total: int
     cv_routing_abstention_rate: float
     application_outcomes: dict[str, int]
+    selector_failure_clusters: dict[str, int]
+    browser_qualification_runs: int
 
 
 class ManualIngestRequest(BaseModel):
@@ -160,6 +163,19 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         .group_by(Application.outcome)
         .all()
     )
+    cluster_rows = (
+        db.query(
+            BrowserQualificationRun.selector_version,
+            BrowserQualificationRun.terminal_reason,
+            func.count(BrowserQualificationRun.id),
+        )
+        .filter(BrowserQualificationRun.qualified.is_(False))
+        .group_by(
+            BrowserQualificationRun.selector_version,
+            BrowserQualificationRun.terminal_reason,
+        )
+        .all()
+    )
 
     return DashboardSummary(
         total_messages=total_messages,
@@ -188,6 +204,10 @@ async def dashboard_summary(db: Session = Depends(get_db)):
             routing_abstained / routing_total if routing_total else 0.0
         ),
         application_outcomes={outcome: count for outcome, count in outcome_rows},
+        selector_failure_clusters={
+            f"{version}:{reason}": count for version, reason, count in cluster_rows
+        },
+        browser_qualification_runs=db.query(BrowserQualificationRun).count(),
     )
 
 

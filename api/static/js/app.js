@@ -438,7 +438,12 @@ function renderDashboard() {
         <div class="stat-card">
             <div class="stat-header"><i data-lucide="message-square-text"></i> Cover Letter Edits</div>
             <div class="stat-value count-anim">${d.feedback_count ?? 0}</div>
-            <div class="stat-sub">Corrections saved for training</div>
+            <div class="stat-sub">Human corrections used as prompt examples</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-header"><i data-lucide="scan-search"></i> Browser Qualification</div>
+            <div class="stat-value count-anim">${d.browser_qualification_runs ?? 0}</div>
+            <div class="stat-sub">${Object.entries(d.selector_failure_clusters || {}).map(([reason, count]) => `${esc(reason)}: ${count}`).join(' · ') || 'No selector failures'}</div>
         </div>
     `;
 
