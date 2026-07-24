@@ -46,7 +46,10 @@ jobs:
       - name: Typed safety-critical modules
         run: mypy --ignore-missing-imports --disable-error-code var-annotated core/config.py profile/cv_intake.py profile/writer.py worker/celery_app.py
       - name: PostgreSQL migrations
-        run: alembic upgrade head
+        run: |
+          alembic upgrade head
+          alembic downgrade 003_v2_tables
+          alembic upgrade head
       - name: Tests
         run: pytest -q --cov=api --cov=core --cov=profile --cov=worker --cov-report=term-missing
       - name: Compose validation

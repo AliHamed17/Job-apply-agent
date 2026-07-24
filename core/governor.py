@@ -47,6 +47,32 @@ class RateGovernor:
 
     def record_application(self) -> None:
         self.store.incr(self._day_key())
+        # Stamp the earliest epoch the next LinkedIn action may start, so the
+        # configured random gap is actually enforced between real Easy Apply
+        # submissions — not just relied on the 5-min beat cadence (which is
+        # shorter than the max gap) or bypassed by directly-enqueued submits.
+        self.store.set("li:next_action_at", self._epoch() + self.next_gap_seconds())
+
+    def gap_ready(self) -> bool:
+        """True if the inter-action gap since the last application has elapsed."""
+        until = self.store.get("li:next_action_at")
+        return not until or self._epoch() >= int(until)
+
+    def gap_remaining_s(self) -> int:
+        until = self.store.get("li:next_action_at")
+        return max(0, int(until) - self._epoch()) if until else 0
+
+    def can_apply_linkedin(self) -> tuple[bool, str]:
+        """can_act() plus the inter-action gap — the gate for LinkedIn Easy
+        Apply specifically. Kept separate from can_act() so WhatsApp/email
+        outbound and discovery (which share can_act()) are not throttled by
+        the LinkedIn apply gap."""
+        ok, reason = self.can_act()
+        if not ok:
+            return ok, reason
+        if not self.gap_ready():
+            return False, f"min gap not elapsed ({self.gap_remaining_s()}s left)"
+        return True, "ok"
 
     # ── WhatsApp/email outbound day-scoped counter (Task 5.5) ─
     def _wa_key(self) -> str:
@@ -124,6 +150,7 @@ class RateGovernor:
             "in_cooldown": self.in_cooldown(),
             "cooldown_remaining_s": self.cooldown_remaining_s(),
             "within_active_hours": self.within_active_hours(),
+            "gap_remaining_s": self.gap_remaining_s(),
         }
 
 

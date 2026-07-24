@@ -436,25 +436,23 @@ def submit_application_task(self, application_id: int):
     from submitters.workday import WorkdaySubmitter
 
     db = _get_db()
+    attempt = None
     try:
         settings = get_settings()
 
-        app = db.query(Application).filter(Application.id == application_id).first()
-        if not app:
-            logger.warning("application_not_found", id=application_id)
-            return
+        from worker.submission_attempts import claim_attempt
 
-        # *** APPROVAL ENFORCEMENT ***
-        if app.status != JobStatus.APPROVED:
-            logger.warning(
-                "submission_blocked_not_approved",
-                application_id=application_id,
-                status=app.status.value if app.status else "unknown",
-            )
+        attempt = claim_attempt(db, application_id)
+        if attempt is None:
+            logger.info("submission_claim_skipped", application_id=application_id)
             return
+        app = attempt.application
 
         db_job = app.job
         if not db_job:
+            from worker.submission_attempts import mark_attempt_unknown
+
+            mark_attempt_unknown(db, attempt, "JOB_MISSING")
             return
 
         profile = get_profile()
@@ -500,7 +498,19 @@ def submit_application_task(self, application_id: int):
         )
 
         profile_dict = profile.model_dump()
-        resume_path  = profile.resume.pdf_path or None
+        resume_path = profile.resume.pdf_path or None
+        from pathlib import Path
+
+        from db.models import UserProfileVersion
+
+        latest_profile = (
+            db.query(UserProfileVersion)
+            .order_by(UserProfileVersion.version.desc())
+            .first()
+        )
+        attempt.selected_cv_id = Path(resume_path).name if resume_path else None
+        attempt.profile_version = latest_profile.version if latest_profile else None
+        db.commit()
 
         # Cascade: try each matching submitter, stop on first success
         result = None
@@ -511,8 +521,18 @@ def submit_application_task(self, application_id: int):
                 if not sub.can_submit(job_ref):
                     continue
                 if isinstance(sub, LinkedInV2Submitter):
-                    ok, reason = governor.can_act()
+                    # can_apply_linkedin() adds the inter-action gap on top of
+                    # can_act(), so a submission enqueued directly (e.g. the
+                    # approve endpoint) can't run back-to-back inside the gap.
+                    ok, reason = governor.can_apply_linkedin()
                     if not ok:
+                        from datetime import UTC as _UTC
+                        from datetime import datetime as _dt
+
+                        attempt.status = SubmissionStatus.FAILED
+                        attempt.reason_code = "GOVERNOR_DEFERRED"
+                        attempt.finished_at = _dt.now(_UTC).replace(tzinfo=None)
+                        db.commit()
                         logger.info(
                             "linkedin_submit_deferred",
                             application_id=application_id,
@@ -546,8 +566,15 @@ def submit_application_task(self, application_id: int):
         if result.error and result.error.startswith("NEEDS_REVIEW:"):
             needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
-        # Record submission
+        # Finalize the pre-committed attempt. No external action can run before
+        # this attempt exists, so task redelivery cannot duplicate the action.
+        from datetime import UTC as _UTC
         from datetime import datetime as _dt
+        from worker.submission_attempts import (
+            classify_reason,
+            redacted_diagnostics,
+        )
+
         if result.status == "submitted" and result.success:
             sub_status = SubmissionStatus.SUCCESS
         elif result.status == "draft_only":
@@ -555,16 +582,18 @@ def submit_application_task(self, application_id: int):
         else:
             sub_status = SubmissionStatus.FAILED
 
-        submission = Submission(
-            application_id=application_id,
-            submitter_name=result.platform,
-            status=sub_status,
-            confirmation_url=result.confirmation_url,
-            confirmation_id=result.confirmation_id,
-            error_message=result.error,
-            submitted_at=_dt.utcnow() if result.success and result.status == "submitted" else None,
+        now = _dt.now(_UTC).replace(tzinfo=None)
+        attempt.submitter_name = result.platform
+        attempt.status = sub_status
+        attempt.confirmation_url = result.confirmation_url
+        attempt.confirmation_id = result.confirmation_id
+        attempt.error_message = None
+        attempt.reason_code = classify_reason(result.error, result.status)
+        attempt.diagnostic_details = redacted_diagnostics(result.error)
+        attempt.finished_at = now
+        attempt.submitted_at = (
+            now if result.success and result.status == "submitted" else None
         )
-        db.add(submission)
 
         # Job/application status mirrors submission outcome.
         #
@@ -603,7 +632,13 @@ def submit_application_task(self, application_id: int):
 
     except Exception as exc:
         db.rollback()
-        logger.error("submission_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=60)
+        logger.error("submission_failed", error=type(exc).__name__)
+        if attempt is not None:
+            from worker.submission_attempts import mark_attempt_unknown
+
+            refreshed = db.get(Submission, attempt.id)
+            if refreshed is not None:
+                mark_attempt_unknown(db, refreshed, "WORKER_EXCEPTION_INDETERMINATE")
+        return
     finally:
         db.close()
