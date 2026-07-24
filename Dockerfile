@@ -4,7 +4,8 @@ FROM python:3.11-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -26,13 +27,13 @@ COPY pyproject.toml ./
 # web-api sends the CV by email when a recruiter post has only an email
 # contact — without it that send is swallowed and reported as no_contact.
 RUN pip install --upgrade pip && \
-    pip install ".[pdf,email]"
+    pip install ".[pdf,email,postgres]"
 
 # ── Stage 3: web-api ───────────────────────────────────────────────────────
 FROM deps AS web-api
 
 COPY . .
-RUN pip install -e ".[pdf,email]"
+RUN pip install -e ".[pdf,email,postgres]"
 
 # Run DB migrations then start Uvicorn
 CMD ["sh", "-c", "mkdir -p /app/profile-data && if [ ! -f /app/profile-data/user_profile.yaml ]; then cp /app/user_profile.yaml /app/profile-data/user_profile.yaml; fi && alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
@@ -44,7 +45,7 @@ CMD ["sh", "-c", "mkdir -p /app/profile-data && if [ ! -f /app/profile-data/user
 FROM deps AS celery-worker
 
 COPY . .
-RUN pip install -e ".[pdf,browser,email]" && \
+RUN pip install -e ".[pdf,browser,email,postgres]" && \
     playwright install --with-deps chromium
 
 # Each Celery worker handles all queues by default; override via CELERY_QUEUES env var
