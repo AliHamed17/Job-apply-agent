@@ -35,10 +35,14 @@ RUN pip install -e ".[pdf]"
 CMD ["sh", "-c", "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
 
 # ── Stage 4: celery-worker ─────────────────────────────────────────────────
+# celery-beat (docker-compose) builds from this same stage — it schedules
+# discover_jobs_task, and a worker on the "discovery" queue then imports
+# playwright to run it, so both need the browser extra + Chromium installed.
 FROM deps AS celery-worker
 
 COPY . .
-RUN pip install -e ".[pdf]"
+RUN pip install -e ".[pdf,browser]" && \
+    playwright install --with-deps chromium
 
 # Each Celery worker handles all queues by default; override via CELERY_QUEUES env var
 CMD ["celery", "-A", "worker.celery_app", "worker", \

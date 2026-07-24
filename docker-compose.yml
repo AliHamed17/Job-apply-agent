@@ -68,7 +68,10 @@ services:
     networks:
       - agent-net
     volumes:
-      - ./user_profile.yaml:/app/user_profile.yaml:ro
+      # Writable: the resume-upload endpoint (api/routes/profile.py) rebuilds
+      # and writes this file back on every CV upload. Read-only here would
+      # make uploads fail instead of updating the profile and rescoring jobs.
+      - ./user_profile.yaml:/app/user_profile.yaml
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s

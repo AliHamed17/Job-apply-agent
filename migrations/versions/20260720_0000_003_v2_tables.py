@@ -55,8 +55,22 @@ def upgrade() -> None:
         batch.add_column(sa.Column("submission_channel", sa.String(length=30), nullable=True))
         batch.add_column(sa.Column("needs_review_reason", sa.Text(), nullable=True))
 
+    # jobs.status / applications.status are backed by a native Postgres enum
+    # (created as "jobstatus" in migration 001). SQLite has no real enum type
+    # (columns are permissive VARCHAR), so this only matters on Postgres —
+    # without it, persisting JobStatus.NEEDS_REVIEW there raises
+    # InvalidTextRepresentation the first time a required Easy Apply field
+    # can't be answered.
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute("ALTER TYPE jobstatus ADD VALUE IF NOT EXISTS 'needs_review'")
+
 
 def downgrade() -> None:
+    # Note: Postgres has no "ALTER TYPE ... DROP VALUE" — an added enum label
+    # can't be cleanly removed short of rebuilding the type. 'needs_review'
+    # is left in place on downgrade; this is a standard, accepted limitation
+    # of Postgres enum migrations and does not affect the column/table drops
+    # below.
     with op.batch_alter_table("applications") as batch:
         batch.drop_column("needs_review_reason")
         batch.drop_column("submission_channel")
