@@ -184,7 +184,7 @@ async def health():
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
-    return templates.TemplateResponse(request, "index.html", {"api_key": settings.secret_key})
+    return templates.TemplateResponse(request, "index.html")
 
 @app.get("/metrics")
 async def metrics():
