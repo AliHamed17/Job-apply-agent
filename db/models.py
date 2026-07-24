@@ -251,6 +251,27 @@ class UserProfileVersion(Base):
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
 
+class BrowserQualificationRun(Base):
+    """Privacy-safe record of a guarded browser smoke qualification."""
+
+    __tablename__ = "browser_qualification_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    selector_version = Column(String(64), nullable=False)
+    terminal_reason = Column(String(64), nullable=False)
+    qualified = Column(Boolean, nullable=False, default=False)
+    trace_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_browser_qualification_selector_reason",
+            "selector_version",
+            "terminal_reason",
+        ),
+    )
+
+
 class CoverLetterFeedback(Base):
     """User corrections to LLM-generated cover letters (Phase 10 feedback loop).
 

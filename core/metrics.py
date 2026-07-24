@@ -33,3 +33,8 @@ CHALLENGE_TRIPS = Counter(
 OUTBOUND_RESULTS = Counter(
     "job_agent_outbound_results_total", "Outbound results.", ["channel", "result"]
 )
+SELECTOR_FAILURES = Counter(
+    "job_agent_selector_failures_total",
+    "Browser flow failures by selector version and stable reason.",
+    ["selector_version", "reason"],
+)

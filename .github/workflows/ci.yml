@@ -57,7 +57,9 @@ jobs:
           worker/tasks.py profile/cv_routing.py profile/routing_evaluation.py
           profile/models.py submitters/form_brain.py llm/generation.py
           scripts/evaluate_cv_routing.py tests/test_operations.py
-          tests/test_cv_routing.py
+          scripts/linkedin_dry_run_smoke.py submitters/browser_trace.py
+          submitters/linkedin_v2.py tests/test_cv_routing.py
+          tests/test_linkedin_smoke.py
       - name: Typed safety-critical modules
         run: mypy --ignore-missing-imports --disable-error-code var-annotated core/config.py profile/cv_intake.py profile/writer.py worker/celery_app.py
       - name: PostgreSQL migrations

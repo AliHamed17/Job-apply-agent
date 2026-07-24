@@ -39,10 +39,12 @@ import structlog
 
 from core.config import get_settings
 from core.governor import get_governor
+from core.metrics import CHALLENGE_TRIPS, SELECTOR_FAILURES
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters import selectors
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.browser_trace import SELECTOR_VERSION, RedactedTrace
 from submitters.field_extractor import parse_fields
 from submitters.form_brain import FieldSpec, FormBrain
 
@@ -60,6 +62,7 @@ class StepPlan:
     """Outcome of resolving one Easy Apply modal step's fields."""
 
     fills: dict[str, str]
+    sources: list[str]
     blocked_by: str | None = None
 
 
@@ -74,18 +77,20 @@ async def resolve_step(fields: list[FieldSpec], brain: FormBrain, job: JobData |
     (they're left blank / untouched on the page).
     """
     fills: dict[str, str] = {}
+    sources: list[str] = []
     blocked_by: str | None = None
 
     for f in fields:
         res = await brain.answer(f, job)
         if res.confident and res.value is not None:
             fills[f.label] = res.value
+            sources.append(res.source)
         elif f.required:
             blocked_by = f.label
             break
         # else: non-required and unanswerable — skip silently
 
-    return StepPlan(fills=fills, blocked_by=blocked_by)
+    return StepPlan(fills=fills, sources=sources, blocked_by=blocked_by)
 
 
 class LinkedInV2Submitter(BaseSubmitter):
@@ -101,8 +106,31 @@ class LinkedInV2Submitter(BaseSubmitter):
 
     platform_name = "linkedin"
 
-    def __init__(self, db=None):
+    def __init__(self, db=None, trace: RedactedTrace | None = None):
         self.db = db
+        self.trace = trace
+
+    def _trace(self, event: str, **details) -> None:
+        if self.trace:
+            self.trace.record(event, **details)
+        reason = details.get("terminal_reason")
+        if event == "terminal" and reason in {
+            "SESSION_EXPIRED",
+            "SELECTOR_DRIFT",
+            "SUBMIT_UNCONFIRMED",
+            "DISCARD_FAILED",
+        }:
+            SELECTOR_FAILURES.labels(SELECTOR_VERSION, reason).inc()
+
+    @staticmethod
+    def _session_expired(url: str, html: str) -> bool:
+        low_url = url.lower()
+        low_html = html.lower()
+        return (
+            any(marker in low_url for marker in ("/login", "/authwall", "/uas/login"))
+            or 'data-test="login-form"' in low_html
+            or "<h1>sign in</h1>" in low_html
+        )
 
     def can_submit(self, job: JobData) -> bool:
         url = (job.apply_url or job.source_url or "").lower()
@@ -175,10 +203,23 @@ class LinkedInV2Submitter(BaseSubmitter):
         governor,
     ) -> SubmissionResult:
         """Navigate to the job and walk the Easy Apply modal to completion."""
+        self._trace("navigation_started")
         await page.goto(job_url, timeout=_NAV_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
 
-        if self.detect_captcha(await page.content()):
+        initial_html = await page.content()
+        if self._session_expired(page.url, initial_html):
+            self._trace("terminal", terminal_reason="SESSION_EXPIRED")
+            return SubmissionResult(
+                success=True,
+                platform=self.platform_name,
+                status="draft_only",
+                error="SESSION_EXPIRED",
+            )
+
+        if self.detect_captcha(initial_html):
+            CHALLENGE_TRIPS.labels(self.platform_name).inc()
+            self._trace("terminal", terminal_reason="CHALLENGE_DETECTED")
             governor.trip_cooldown()
             await self._notify_challenge(settings)
             return SubmissionResult(
@@ -188,6 +229,7 @@ class LinkedInV2Submitter(BaseSubmitter):
 
         easy_apply_btn = page.locator(selectors.join(selectors.EASY_APPLY_BUTTON)).first
         if not await easy_apply_btn.is_visible(timeout=5000):
+            self._trace("terminal", terminal_reason="EASY_APPLY_UNAVAILABLE")
             return SubmissionResult(
                 success=True, platform=self.platform_name,
                 status="draft_only",
@@ -195,12 +237,15 @@ class LinkedInV2Submitter(BaseSubmitter):
             )
 
         await easy_apply_btn.click(timeout=_ELEM_TIMEOUT)
+        self._trace("easy_apply_opened")
         await page.wait_for_timeout(_SHORT_WAIT)
 
-        for _ in range(_MAX_STEPS):
+        for step_number in range(1, _MAX_STEPS + 1):
             html = await page.content()
 
             if self.detect_captcha(html):
+                CHALLENGE_TRIPS.labels(self.platform_name).inc()
+                self._trace("terminal", terminal_reason="CHALLENGE_DETECTED")
                 governor.trip_cooldown()
                 await self._notify_challenge(settings)
                 await self._discard(page)
@@ -213,9 +258,21 @@ class LinkedInV2Submitter(BaseSubmitter):
             # through FormBrain (there's nothing for an LLM to "answer").
             fields = [f for f in parse_fields(html) if f.kind != "file"]
             plan = await resolve_step(fields, brain, job)
+            self._trace(
+                "step_resolved",
+                step=step_number,
+                field_types=sorted({field.kind for field in fields}),
+                resolver_sources=sorted(set(plan.sources)),
+            )
 
             if plan.blocked_by:
-                await self._discard(page)
+                discarded = await self._discard(page)
+                self._trace(
+                    "terminal",
+                    terminal_reason=(
+                        "REQUIRED_FIELD_UNKNOWN" if discarded else "DISCARD_FAILED"
+                    ),
+                )
                 return SubmissionResult(
                     success=True, platform=self.platform_name,
                     status="draft_only",
@@ -227,7 +284,20 @@ class LinkedInV2Submitter(BaseSubmitter):
             submit_btn = page.locator(selectors.join(selectors.SUBMIT_BUTTON)).first
             if await submit_btn.is_visible(timeout=2000):
                 if settings.dry_run:
-                    await self._discard(page)
+                    discarded = await self._discard(page)
+                    self._trace(
+                        "terminal",
+                        terminal_reason=(
+                            "DRY_RUN_DISCARDED" if discarded else "DISCARD_FAILED"
+                        ),
+                    )
+                    if not discarded:
+                        return SubmissionResult(
+                            success=False,
+                            platform=self.platform_name,
+                            status="failed",
+                            error="DRY_RUN_DISCARD_FAILED",
+                        )
                     return SubmissionResult(
                         success=True, platform=self.platform_name,
                         status="draft_only", error="DRY_RUN",
@@ -238,6 +308,7 @@ class LinkedInV2Submitter(BaseSubmitter):
 
                 success_dialog = page.locator(selectors.join(selectors.SUCCESS_DIALOG)).first
                 if await success_dialog.is_visible(timeout=5000):
+                    self._trace("terminal", terminal_reason="SUBMITTED")
                     logger.info("linkedin_v2_submitted", url=job_url)
                     return SubmissionResult(
                         success=True, platform=self.platform_name,
@@ -245,6 +316,7 @@ class LinkedInV2Submitter(BaseSubmitter):
                     )
                 # Clicked submit but never saw confirmation — never claim
                 # success we can't verify (abort-don't-lie).
+                self._trace("terminal", terminal_reason="SUBMIT_UNCONFIRMED")
                 return SubmissionResult(
                     success=False, platform=self.platform_name,
                     status="failed",
@@ -260,7 +332,11 @@ class LinkedInV2Submitter(BaseSubmitter):
             else:
                 break  # No recognizable control — unexpected state
 
-        await self._discard(page)
+        discarded = await self._discard(page)
+        self._trace(
+            "terminal",
+            terminal_reason="SELECTOR_DRIFT" if discarded else "DISCARD_FAILED",
+        )
         return SubmissionResult(
             success=True, platform=self.platform_name,
             status="draft_only",
@@ -326,7 +402,7 @@ class LinkedInV2Submitter(BaseSubmitter):
 
     # ── Discard chain ────────────────────────────────────────────────────
 
-    async def _discard(self, page) -> None:
+    async def _discard(self, page) -> bool:
         """Discard the in-progress application via LinkedIn's dismiss/confirm dialog."""
         try:
             discard_btn = page.locator(selectors.join(selectors.DISCARD_BUTTON)).first
@@ -336,5 +412,8 @@ class LinkedInV2Submitter(BaseSubmitter):
                 confirm_btn = page.locator(selectors.join(selectors.DISCARD_CONFIRM_BUTTON)).first
                 if await confirm_btn.is_visible(timeout=2000):
                     await confirm_btn.click(timeout=_ELEM_TIMEOUT)
+                    return True
+            return False
         except Exception as exc:
             logger.warning("linkedin_v2_discard_failed", error=str(exc))
+            return False
