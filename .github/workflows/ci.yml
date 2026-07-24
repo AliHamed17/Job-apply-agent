@@ -49,7 +49,15 @@ jobs:
       - name: Critical lint
         run: ruff check . --select E9,F63,F7,F82
       - name: Full lint for v3 operational modules
-        run: ruff check core/config.py core/operations.py core/metrics.py api/main.py api/routes/dashboard.py worker/health.py worker/celery_app.py tests/test_operations.py
+        run: >
+          ruff check
+          core/config.py core/operations.py core/metrics.py
+          api/main.py api/routes/dashboard.py api/routes/cv_routing.py
+          api/routes/applications.py worker/health.py worker/celery_app.py
+          worker/tasks.py profile/cv_routing.py profile/routing_evaluation.py
+          profile/models.py submitters/form_brain.py llm/generation.py
+          scripts/evaluate_cv_routing.py tests/test_operations.py
+          tests/test_cv_routing.py
       - name: Typed safety-critical modules
         run: mypy --ignore-missing-imports --disable-error-code var-annotated core/config.py profile/cv_intake.py profile/writer.py worker/celery_app.py
       - name: PostgreSQL migrations

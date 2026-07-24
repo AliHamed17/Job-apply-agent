@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
+from profile.cv_routing import load_routing_config
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from core.config import get_settings
 from db.models import Application, JobStatus, SubmissionStatus
 from db.session import get_db
 
@@ -26,6 +29,8 @@ class SubmissionAttemptResponse(BaseModel):
     started_at: str | None
     finished_at: str | None
     submitted_at: str | None
+    selected_cv_id: str | None
+    profile_version: int | None
 
 
 class ApplicationResponse(BaseModel):
@@ -48,6 +53,12 @@ class ApplicationResponse(BaseModel):
     submission_error: str | None = None
     submitted_at: str | None = None
     attempts: list[SubmissionAttemptResponse] = Field(default_factory=list)
+    selected_cv_id: str | None = None
+    profile_version: int | None = None
+    cv_routing_confidence: float | None = None
+    cv_routing_evidence: list[str] = Field(default_factory=list)
+    cv_routing_fallback_reason: str | None = None
+    cv_override_id: str | None = None
 
 class ApproveResponse(BaseModel):
     message: str
@@ -70,6 +81,8 @@ def _attempt_response(attempt) -> SubmissionAttemptResponse:
         started_at=attempt.started_at.isoformat() if attempt.started_at else None,
         finished_at=attempt.finished_at.isoformat() if attempt.finished_at else None,
         submitted_at=attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+        selected_cv_id=attempt.selected_cv_id,
+        profile_version=attempt.profile_version,
     )
 
 
@@ -117,6 +130,12 @@ async def list_applications(
             submission_error=submission.error_message if submission else None,
             submitted_at=submission.created_at.isoformat() if submission else None,
             attempts=_attempt_history(app),
+            selected_cv_id=app.selected_cv_id,
+            profile_version=app.profile_version,
+            cv_routing_confidence=app.cv_routing_confidence,
+            cv_routing_evidence=json.loads(app.cv_routing_evidence or "[]"),
+            cv_routing_fallback_reason=app.cv_routing_fallback_reason,
+            cv_override_id=app.cv_override_id,
         ))
 
     return results
@@ -150,6 +169,12 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         submission_error=submission.error_message if submission else None,
         submitted_at=submission.created_at.isoformat() if submission else None,
         attempts=_attempt_history(app),
+        selected_cv_id=app.selected_cv_id,
+        profile_version=app.profile_version,
+        cv_routing_confidence=app.cv_routing_confidence,
+        cv_routing_evidence=json.loads(app.cv_routing_evidence or "[]"),
+        cv_routing_fallback_reason=app.cv_routing_fallback_reason,
+        cv_override_id=app.cv_override_id,
     )
 
 
@@ -166,6 +191,23 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
             application_id=app.id,
             status="approved",
         )
+    if not app.selected_cv_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Preview or override CV routing before approval.",
+        )
+    settings = get_settings()
+    try:
+        config = load_routing_config(settings.cv_routing_path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409, detail="CV routing configuration is unavailable."
+        ) from exc
+    selected = next((cv for cv in config.cvs if cv.id == app.selected_cv_id), None)
+    root = Path(settings.cv_directory).resolve()
+    candidate = (root / selected.file).resolve() if selected else None
+    if not candidate or candidate.parent != root or not candidate.is_file():
+        raise HTTPException(status_code=409, detail="Selected CV file is unavailable.")
 
     app.status = JobStatus.APPROVED
     app.approved_at = datetime.utcnow()
@@ -177,7 +219,6 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     # Enqueue submission task
-    from core.config import get_settings
     from worker.tasks import submit_application_task
     settings = get_settings()
     if settings.tasks_always_eager:

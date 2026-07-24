@@ -1,0 +1,11 @@
+[
+  {"id":"ai-1","category":"AI/ML","job":{"title":"Machine Learning Engineer","description":"Python PyTorch model serving","seniority":"mid","required_skills":["python","pytorch"]},"expected_cv_id":"data-ai","answer_provenance":"cv_extracted"},
+  {"id":"data-1","category":"data","job":{"title":"Data Analyst","description":"SQL analytics dashboards","seniority":"junior","required_skills":["sql"]},"expected_cv_id":"data-ai","answer_provenance":"cv_extracted"},
+  {"id":"software-1","category":"software","job":{"title":"Backend Software Engineer","description":"Python APIs and SQL","seniority":"senior","required_skills":["python","api"]},"expected_cv_id":"software","answer_provenance":"cv_extracted"},
+  {"id":"qa-1","category":"QA","job":{"title":"QA Automation Engineer","description":"Python API testing","seniority":"mid","required_skills":["python","api"]},"expected_cv_id":"software","answer_provenance":"cv_extracted"},
+  {"id":"devops-1","category":"DevOps","job":{"title":"DevOps Developer","description":"Python deployment APIs","seniority":"senior","required_skills":["python"]},"expected_cv_id":"software","answer_provenance":"cv_extracted"},
+  {"id":"infra-1","category":"infrastructure","job":{"title":"Infrastructure Software Engineer","description":"Backend services and SQL","seniority":"mid","required_skills":["sql"]},"expected_cv_id":"software","answer_provenance":"cv_extracted"},
+  {"id":"embedded-1","category":"embedded","job":{"title":"Embedded Software Developer","description":"software APIs","seniority":"mid","required_skills":["api"]},"expected_cv_id":"software","answer_provenance":"cv_extracted"},
+  {"id":"junior-1","category":"junior","job":{"title":"Junior Data Engineer","description":"Python SQL","seniority":"junior","required_skills":["python","sql"]},"expected_cv_id":"data-ai","answer_provenance":"user_confirmed"},
+  {"id":"intern-1","category":"internship","job":{"title":"Software Developer Internship","description":"API development","seniority":"intern","required_skills":["api"]},"expected_cv_id":"software","unsupported_required_field":true,"answer_provenance":"confirmed_evidence_required"}
+]

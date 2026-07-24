@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from profile.models import UserProfile
 
 import structlog
 
@@ -15,7 +16,6 @@ from llm.prompts import (
     SYSTEM_PROMPT,
     build_system_prompt,
 )
-from profile.models import UserProfile
 
 logger = structlog.get_logger(__name__)
 
@@ -95,7 +95,9 @@ async def generate_cover_letter(
         description=job.description[:3000],  # truncate to fit context
         name=profile.personal.name,
         user_location=profile.personal.location,
-        work_authorization=profile.personal.work_authorization,
+        work_authorization=profile.evidence.user_confirmed.get(
+            "work authorization", "[CONFIRMED EVIDENCE REQUIRED]"
+        ),
         resume_text=profile.resume.text[:4000],
         cover_letter_style=profile.cover_letter.style,
     )
