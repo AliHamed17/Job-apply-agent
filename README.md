@@ -201,9 +201,27 @@ curl -H "Authorization: Bearer $SECRET_KEY" http://localhost:8000/api/control/st
 | POST | `/api/applications/{id}/approve` | Bearer | Approve and queue for submission |
 | POST | `/api/applications/{id}/reject` | Bearer | Reject application |
 | GET | `/api/dashboard` | Bearer | Pipeline summary stats |
+| GET | `/api/dashboard/insights` | Bearer | Actionable backlog, stale-work, bottleneck, and top-opportunity insights |
 | POST | `/api/ingest` | Bearer | Manually ingest a URL |
 
 **Auth**: Set `SECRET_KEY` in `.env`, then pass `Authorization: Bearer <your-secret-key>` header.
+
+## Operator Insights
+
+Use `GET /api/dashboard/insights` when you need an actionable operations view instead of only aggregate dashboard counts. The endpoint returns:
+
+- queue depth by pipeline stage (`urls_pending`, `jobs_extracted`, `applications_draft`, submission states);
+- stale work based on a configurable `stale_hours` query parameter;
+- bottleneck recommendations with severity and remediation steps;
+- top scored opportunities still awaiting action;
+- recent job events within a configurable `window_days` window.
+
+Example:
+
+```bash
+curl -H "Authorization: Bearer $SECRET_KEY" \
+  "http://localhost:8000/api/dashboard/insights?window_days=14&stale_hours=12&limit=5"
+```
 
 ## Running Tests
 
