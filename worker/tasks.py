@@ -293,7 +293,6 @@ def score_job_task(self, job_id: int):
 @shared_task(name="worker.tasks.generate_application_task", bind=True, max_retries=2)
 def generate_application_task(self, job_id: int):
     """Generate cover letter, recruiter message, and Q&A answers via LLM."""
-    import asyncio
     from profile.loader import get_profile
 
     from jobs.models import JobData
@@ -421,7 +420,6 @@ def submit_application_task(self, application_id: int):
     CRITICAL: Enforces that the application must be APPROVED before submission.
     Falls back to draft_only for unsupported platforms.
     """
-    import asyncio
     from profile.loader import get_profile
 
     from jobs.models import JobData
