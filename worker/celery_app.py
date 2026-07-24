@@ -56,6 +56,7 @@ def create_celery_app() -> Celery:
             "worker.tasks.submit_application_task": {"queue": "submission"},
             "worker.drainer.drain_apply_queue_task": {"queue": "submission"},
             "worker.drainer.expire_stale_jobs_task": {"queue": "submission"},
+            "worker.drainer.reconcile_stale_attempts_task": {"queue": "submission"},
             "worker.discovery_tasks.discover_jobs_task": {"queue": "discovery"},
             # Routed onto "submission" (not a new queue) so the existing
             # `-Q ingestion,processing,llm,submission,discovery` worker
@@ -75,6 +76,10 @@ def create_celery_app() -> Celery:
     app.conf.beat_schedule["expire-stale-jobs"] = {
         "task": "worker.drainer.expire_stale_jobs_task",
         "schedule": crontab(hour=3, minute=0),
+    }
+    app.conf.beat_schedule["reconcile-stale-submission-attempts"] = {
+        "task": "worker.drainer.reconcile_stale_attempts_task",
+        "schedule": 300.0,
     }
     from core.config import get_settings as _gs  # noqa: E402, F401
     _interval = _gs().discovery_interval_h * 3600

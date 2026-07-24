@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import structlog
 from celery import shared_task
 
-from db.models import Application, Job, JobStatus, Submission
+from db.models import Application, Job, JobStatus, Submission, SubmissionStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -26,8 +26,22 @@ def select_next_application(db) -> int | None:
     row = (
         db.query(Application)
         .join(Job, Application.job_id == Job.id)
-        .outerjoin(Submission, Submission.application_id == Application.id)
-        .filter(Application.status == JobStatus.APPROVED, Submission.id.is_(None))
+        .filter(
+            Application.status == JobStatus.APPROVED,
+            ~db.query(Submission.id)
+            .filter(
+                Submission.application_id == Application.id,
+                Submission.status.in_(
+                    (
+                        SubmissionStatus.PENDING,
+                        SubmissionStatus.RUNNING,
+                        SubmissionStatus.SUCCESS,
+                        SubmissionStatus.UNKNOWN,
+                    )
+                ),
+            )
+            .exists(),
+        )
         .order_by(Job.score.desc(), Job.id.asc())
         .first()
     )
@@ -55,7 +69,10 @@ def drain_apply_queue_task() -> int:
     from worker.tasks import submit_application_task  # noqa: PLC0415
 
     gov = get_governor()
-    ok, reason = gov.can_act()
+    # can_apply_linkedin() = can_act() + the inter-action gap, so the drainer
+    # honours the configured random gap between Easy Apply submissions instead
+    # of firing on every 5-min beat tick.
+    ok, reason = gov.can_apply_linkedin()
     if not ok:
         logger.info("drain_skipped", reason=reason)
         return 0
@@ -78,5 +95,17 @@ def expire_stale_jobs_task() -> int:
     db = get_session_factory()()
     try:
         return expire_stale_jobs(db, datetime.utcnow(), get_settings().queue_ttl_days)
+    finally:
+        db.close()
+
+
+@shared_task(name="worker.drainer.reconcile_stale_attempts_task")
+def reconcile_stale_attempts_task() -> int:
+    from db.session import get_session_factory  # noqa: PLC0415
+    from worker.submission_attempts import mark_stale_attempts_unknown  # noqa: PLC0415
+
+    db = get_session_factory()()
+    try:
+        return mark_stale_attempts_unknown(db)
     finally:
         db.close()

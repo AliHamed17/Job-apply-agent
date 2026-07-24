@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import uuid
 
 from sqlalchemy import (
     Boolean,
@@ -48,9 +49,11 @@ class JobStatus(str, enum.Enum):
 
 class SubmissionStatus(str, enum.Enum):
     PENDING = "pending"
+    RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
     DRAFT_ONLY = "draft_only"
+    UNKNOWN = "unknown"
 
 
 def _enum_values(enum_class) -> list[str]:
@@ -171,7 +174,17 @@ class Application(Base):
     needs_review_reason = Column(Text, nullable=True)
 
     job = relationship("Job", back_populates="application")
-    submission = relationship("Submission", back_populates="application", uselist=False)
+    submissions = relationship(
+        "Submission",
+        back_populates="application",
+        order_by="Submission.attempt_number",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def submission(self):
+        """Compatibility accessor for the latest submission attempt."""
+        return self.submissions[-1] if self.submissions else None
 
 
 class Submission(Base):
@@ -180,7 +193,11 @@ class Submission(Base):
     __tablename__ = "submissions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    application_id = Column(Integer, ForeignKey("applications.id"), unique=True, nullable=False)
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    idempotency_key = Column(
+        String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4())
+    )
     submitter_name = Column(String(100), nullable=False)  # e.g. "greenhouse", "lever"
     status = Column(
         Enum(SubmissionStatus, values_callable=_enum_values),
@@ -190,10 +207,29 @@ class Submission(Base):
     confirmation_url = Column(Text, nullable=True)
     confirmation_id = Column(String(255), nullable=True)
     error_message = Column(Text, nullable=True)
+    reason_code = Column(String(64), nullable=True)
+    diagnostic_details = Column(Text, nullable=True)
+    selected_cv_id = Column(String(255), nullable=True)
+    profile_version = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    reconciled_at = Column(DateTime, nullable=True)
+    reconciliation_note = Column(Text, nullable=True)
     submitted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
-    application = relationship("Application", back_populates="submission")
+    application = relationship("Application", back_populates="submissions")
+
+    __table_args__ = (
+        Index("ix_submissions_application_id", "application_id"),
+        Index("ix_submissions_status", "status"),
+        Index(
+            "uq_submissions_application_attempt",
+            "application_id",
+            "attempt_number",
+            unique=True,
+        ),
+    )
 
 
 class UserProfileVersion(Base):

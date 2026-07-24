@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from db.models import Application, JobStatus
+from db.models import Application, JobStatus, SubmissionStatus
 from db.session import get_db
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["applications"])
+
+
+class SubmissionAttemptResponse(BaseModel):
+    attempt_number: int
+    idempotency_key: str
+    status: str
+    platform: str
+    reason_code: str | None
+    started_at: str | None
+    finished_at: str | None
+    submitted_at: str | None
 
 
 class ApplicationResponse(BaseModel):
@@ -36,11 +47,34 @@ class ApplicationResponse(BaseModel):
     submission_confirmation_url: str | None = None
     submission_error: str | None = None
     submitted_at: str | None = None
+    attempts: list[SubmissionAttemptResponse] = Field(default_factory=list)
 
 class ApproveResponse(BaseModel):
     message: str
     application_id: int
     status: str
+
+
+class ReconcileRequest(BaseModel):
+    outcome: str
+    note: str = Field(min_length=3, max_length=500)
+
+
+def _attempt_response(attempt) -> SubmissionAttemptResponse:
+    return SubmissionAttemptResponse(
+        attempt_number=attempt.attempt_number,
+        idempotency_key=attempt.idempotency_key,
+        status=attempt.status.value,
+        platform=attempt.submitter_name,
+        reason_code=attempt.reason_code,
+        started_at=attempt.started_at.isoformat() if attempt.started_at else None,
+        finished_at=attempt.finished_at.isoformat() if attempt.finished_at else None,
+        submitted_at=attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+    )
+
+
+def _attempt_history(app) -> list[SubmissionAttemptResponse]:
+    return [_attempt_response(attempt) for attempt in app.submissions]
 
 
 @router.get("/applications", response_model=list[ApplicationResponse])
@@ -82,6 +116,7 @@ async def list_applications(
             submission_confirmation_url=submission.confirmation_url if submission else None,
             submission_error=submission.error_message if submission else None,
             submitted_at=submission.created_at.isoformat() if submission else None,
+            attempts=_attempt_history(app),
         ))
 
     return results
@@ -114,6 +149,7 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         submission_confirmation_url=submission.confirmation_url if submission else None,
         submission_error=submission.error_message if submission else None,
         submitted_at=submission.created_at.isoformat() if submission else None,
+        attempts=_attempt_history(app),
     )
 
 
@@ -159,23 +195,25 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
 
 @router.post("/applications/{app_id}/retry")
 async def retry_application(app_id: int, db: Session = Depends(get_db)):
-    """Re-queue a failed or draft application for submission."""
+    """Create a new attempt only after a definitive failed/draft outcome."""
     app = db.query(Application).filter(Application.id == app_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    if app.status not in (JobStatus.DRAFT, JobStatus.APPROVED):
-        # Force back to approved so submission gate passes
-        app.status = JobStatus.APPROVED
-        app.approved_at = datetime.utcnow()
-        if app.job:
-            app.job.status = JobStatus.APPROVED
-        db.commit()
-
-    # Delete existing failed submission record so a new one is created
-    if app.submission:
-        db.delete(app.submission)
-        db.commit()
+    latest = app.submission
+    if latest is None or latest.status not in (
+        SubmissionStatus.FAILED,
+        SubmissionStatus.DRAFT_ONLY,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Only definitively failed or draft-only attempts may be retried.",
+        )
+    app.status = JobStatus.APPROVED
+    app.approved_at = datetime.now(UTC).replace(tzinfo=None)
+    if app.job:
+        app.job.status = JobStatus.APPROVED
+    db.commit()
 
     from core.config import get_settings
     from worker.tasks import submit_application_task
@@ -187,6 +225,46 @@ async def retry_application(app_id: int, db: Session = Depends(get_db)):
 
     logger.info("application_retry_queued", app_id=app.id)
     return {"message": "Re-queued for submission", "application_id": app.id}
+
+
+@router.post("/applications/{app_id}/reconcile")
+async def reconcile_application(
+    app_id: int,
+    payload: ReconcileRequest,
+    db: Session = Depends(get_db),
+):
+    app = db.query(Application).filter(Application.id == app_id).first()
+    if not app or not app.submission:
+        raise HTTPException(status_code=404, detail="Application attempt not found")
+    attempt = app.submission
+    if attempt.status != SubmissionStatus.UNKNOWN:
+        raise HTTPException(status_code=409, detail="Only unknown attempts require reconciliation")
+    if payload.outcome not in ("confirmed_submitted", "confirmed_not_submitted"):
+        raise HTTPException(status_code=422, detail="Unsupported reconciliation outcome")
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    attempt.reconciled_at = now
+    attempt.reconciliation_note = payload.note
+    attempt.finished_at = now
+    if payload.outcome == "confirmed_submitted":
+        attempt.status = SubmissionStatus.SUCCESS
+        attempt.reason_code = "RECONCILED_SUBMITTED"
+        attempt.submitted_at = now
+        app.status = JobStatus.SUBMITTED
+        if app.job:
+            app.job.status = JobStatus.SUBMITTED
+    else:
+        attempt.status = SubmissionStatus.FAILED
+        attempt.reason_code = "RECONCILED_NOT_SUBMITTED"
+        app.status = JobStatus.DRAFT
+        if app.job:
+            app.job.status = JobStatus.DRAFT
+    db.commit()
+    return {
+        "message": "Submission attempt reconciled",
+        "application_id": app.id,
+        "outcome": payload.outcome,
+    }
 
 
 @router.post("/applications/{app_id}/reject")
