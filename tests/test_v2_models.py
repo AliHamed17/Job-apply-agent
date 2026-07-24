@@ -7,6 +7,18 @@ def test_new_models_and_columns_import():
     assert hasattr(Job, "easy_apply")
     assert hasattr(Application, "submission_channel")
     assert JobStatus.NEEDS_REVIEW.value == "needs_review"
+
+
+def test_postgres_enum_bind_values_match_migration_labels():
+    from sqlalchemy.dialects import postgresql
+
+    from db.models import Job, JobStatus, Submission, SubmissionStatus
+
+    dialect = postgresql.dialect()
+    job_processor = Job.__table__.c.status.type.bind_processor(dialect)
+    submission_processor = Submission.__table__.c.status.type.bind_processor(dialect)
+    assert job_processor(JobStatus.NEEDS_REVIEW) == "needs_review"
+    assert submission_processor(SubmissionStatus.SUCCESS) == "success"
     assert AnswerCache.__tablename__ == "answer_cache"
     assert OutboundContact.__tablename__ == "outbound_contacts"
 

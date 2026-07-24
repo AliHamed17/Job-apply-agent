@@ -53,6 +53,11 @@ class SubmissionStatus(str, enum.Enum):
     DRAFT_ONLY = "draft_only"
 
 
+def _enum_values(enum_class) -> list[str]:
+    """Persist enum values, matching the lowercase labels in Alembic."""
+    return [member.value for member in enum_class]
+
+
 # ── Models ───────────────────────────────────────────────
 
 
@@ -85,7 +90,11 @@ class ExtractedURL(Base):
     original_url = Column(Text, nullable=False)
     normalized_url = Column(Text, nullable=False)
     url_hash = Column(String(64), nullable=False)
-    status = Column(Enum(URLStatus), default=URLStatus.PENDING, nullable=False)
+    status = Column(
+        Enum(URLStatus, values_callable=_enum_values),
+        default=URLStatus.PENDING,
+        nullable=False,
+    )
     fetch_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
@@ -117,7 +126,11 @@ class Job(Base):
     keywords = Column(Text, nullable=True)  # JSON-serialized list
     apply_url_hash = Column(String(64), nullable=True)
     job_signature = Column(String(64), nullable=True)  # hash(title+company+location)
-    status = Column(Enum(JobStatus), default=JobStatus.EXTRACTED, nullable=False)
+    status = Column(
+        Enum(JobStatus, values_callable=_enum_values),
+        default=JobStatus.EXTRACTED,
+        nullable=False,
+    )
     score = Column(Float, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
     discovery_source = Column(String(30), default="manual", nullable=True)
@@ -144,7 +157,11 @@ class Application(Base):
     cover_letter = Column(Text, nullable=True)
     recruiter_message = Column(Text, nullable=True)
     qa_answers = Column(Text, nullable=True)  # JSON
-    status = Column(Enum(JobStatus), default=JobStatus.DRAFT, nullable=False)
+    status = Column(
+        Enum(JobStatus, values_callable=_enum_values),
+        default=JobStatus.DRAFT,
+        nullable=False,
+    )
     approved_at = Column(DateTime, nullable=True)
     rejected_at = Column(DateTime, nullable=True)
     rejection_reason = Column(Text, nullable=True)
@@ -165,7 +182,11 @@ class Submission(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     application_id = Column(Integer, ForeignKey("applications.id"), unique=True, nullable=False)
     submitter_name = Column(String(100), nullable=False)  # e.g. "greenhouse", "lever"
-    status = Column(Enum(SubmissionStatus), default=SubmissionStatus.PENDING, nullable=False)
+    status = Column(
+        Enum(SubmissionStatus, values_callable=_enum_values),
+        default=SubmissionStatus.PENDING,
+        nullable=False,
+    )
     confirmation_url = Column(Text, nullable=True)
     confirmation_id = Column(String(255), nullable=True)
     error_message = Column(Text, nullable=True)
