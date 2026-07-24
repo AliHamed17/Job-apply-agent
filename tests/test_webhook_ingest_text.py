@@ -51,8 +51,9 @@ def test_ingest_text_invokes_outbound_routing():
     app.dependency_overrides[get_db] = _override_get_db
     calls = {}
 
-    async def fake_route(text, db, settings):
+    async def fake_route(text, db, settings, sender=None):
         calls["text"] = text
+        calls["sender"] = sender
         return "sent_whatsapp"
 
     try:
@@ -60,11 +61,17 @@ def test_ingest_text_invokes_outbound_routing():
             resp = client.post(
                 "/api/ingest-text",
                 headers=_auth(),
-                json={"text": "Hiring RF Engineer, WhatsApp +971500000000"},
+                json={
+                    "text": "Hiring RF Engineer, interested? DM me",
+                    "sender": "+972500000123",
+                },
             )
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok", "result": "sent_whatsapp"}
-        assert calls["text"] == "Hiring RF Engineer, WhatsApp +971500000000"
+        assert calls["text"] == "Hiring RF Engineer, interested? DM me"
+        # The bridge-supplied sender must survive Pydantic and reach routing —
+        # it's the only usable contact for "DM me" posts.
+        assert calls["sender"] == "+972500000123"
     finally:
         app.dependency_overrides.pop(get_db, None)
 

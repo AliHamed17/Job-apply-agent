@@ -39,6 +39,11 @@ ingest_router = APIRouter(tags=["ingest"])
 
 class IngestTextRequest(BaseModel):
     text: str
+    # The WhatsApp bridge posts the poster's own number here. For "DM me"
+    # style posts (no phone/email in the body) it's the only usable contact,
+    # so it must be captured — not silently dropped — and passed downstream
+    # as a WhatsApp fallback.
+    sender: str | None = None
 
 
 def _default_outbound_deps() -> SimpleNamespace:
@@ -61,7 +66,9 @@ def _default_outbound_deps() -> SimpleNamespace:
     )
 
 
-async def _route_text_post(text: str, db: Session, settings: Settings) -> str:
+async def _route_text_post(
+    text: str, db: Session, settings: Settings, sender: str | None = None
+) -> str:
     """Score + (maybe) reply to a text-only job post via worker.outbound."""
     from core.governor import get_governor
     from profile.loader import get_profile
@@ -74,6 +81,7 @@ async def _route_text_post(text: str, db: Session, settings: Settings) -> str:
         profile=get_profile(),
         governor=get_governor(),
         deps=_default_outbound_deps(),
+        sender=sender,
     )
 
 # ── URL extraction regex ────────────────────────────────
@@ -458,8 +466,10 @@ async def receive_message(
             )
         elif looks_like_job(text_body):
             # No job-board URL, but reads like a recruiter "hiring" broadcast —
-            # route it through the outbound applier (Task 5.5) instead.
-            result = await _route_text_post(text_body, db, settings)
+            # route it through the outbound applier (Task 5.5) instead. Pass
+            # the sender so "DM me" posts (no phone/email in body) can still
+            # reply to the poster's own number.
+            result = await _route_text_post(text_body, db, settings, sender=sender)
             logger.info("text_post_routed", sender=sender, result=result)
 
         processed += 1
@@ -482,6 +492,6 @@ async def ingest_text(
     Runs the same parse -> score -> outbound-reply pipeline as text messages
     received directly over the WhatsApp webhook.
     """
-    result = await _route_text_post(payload.text, db, settings)
+    result = await _route_text_post(payload.text, db, settings, sender=payload.sender)
     db.commit()
     return {"status": "ok", "result": result}

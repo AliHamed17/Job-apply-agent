@@ -23,6 +23,16 @@ def create_celery_app() -> Celery:
         "job_apply_agent",
         broker=broker,
         backend=backend,
+        # autodiscover_tasks(["worker"]) below only imports worker/tasks.py
+        # (Celery's "related_name" convention) — it does not pick up sibling
+        # task modules. Without an explicit import, a real worker process
+        # never registers these, so beat's scheduled messages for them
+        # arrive as unregistered tasks and silently never run.
+        include=[
+            "worker.drainer",
+            "worker.discovery_tasks",
+            "worker.digest",
+        ],
     )
 
     app.conf.update(

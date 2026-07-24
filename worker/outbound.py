@@ -26,8 +26,12 @@ logger = structlog.get_logger(__name__)
 __all__ = ["ParsedPost", "looks_like_job", "process_text_post"]
 
 
-async def process_text_post(text, db, settings, profile, governor, deps) -> str:
+async def process_text_post(text, db, settings, profile, governor, deps, sender=None) -> str:
     """Parse, score, and (maybe) reply to a text-only job post.
+
+    ``sender`` is the poster's own WhatsApp number (supplied by the bridge for
+    group posts). It's used as the contact of last resort for "DM me" style
+    posts that carry no phone/email in the body.
 
     Returns one of: "not_job" | "low_score" | "duplicate" | "capped" |
     "draft_only" | "sent_whatsapp" | "sent_email" | "no_contact".
@@ -66,6 +70,12 @@ async def process_text_post(text, db, settings, profile, governor, deps) -> str:
     elif parsed.contact_email:
         channel = "email"
         contact_value = parsed.contact_email
+    elif sender:
+        # No phone/email in the post body — fall back to the poster's own
+        # WhatsApp number (e.g. "interested? DM me"). This is the only
+        # usable contact for such posts.
+        channel = "whatsapp"
+        contact_value = sender
     else:
         return "no_contact"
 

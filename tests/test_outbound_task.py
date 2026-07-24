@@ -73,6 +73,83 @@ async def test_sends_whatsapp_when_phone_present(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sender_used_as_whatsapp_fallback_when_no_contact_in_body():
+    """A "DM me" post with no phone/email in the body must reply to the
+    poster's own WhatsApp number (passed as `sender`), not return no_contact."""
+    from worker import outbound
+    calls = {}
+
+    async def fake_parse(text, client=None):
+        return outbound.ParsedPost(is_job=True, title="RF Engineer", company="X",
+                                   description="5g", contact_phone="", contact_email="")
+
+    async def fake_bridge(to, text, pdf, settings, http=None):
+        calls["wa"] = to
+        return True
+
+    async def fake_email(*a, **k):
+        raise AssertionError("email should not be used when sender fallback applies")
+
+    prof = UserProfile()
+    prof.preferences.roles = ["RF Engineer"]
+    prof.resume.pdf_path = ""
+    deps = SimpleNamespace(parse=fake_parse, bridge=fake_bridge, email=fake_email,
+                           gen_msg=_gen, now=datetime(2026, 7, 20, 12, 0, 0))
+
+    class _Gov:
+        def can_act(self):
+            return (True, "ok")
+
+        def wa_remaining(self):
+            return 5
+
+        def wa_record(self):
+            calls["rec"] = True
+
+    r = await outbound.process_text_post(
+        "Hiring RF Engineer, interested? DM me",
+        db=_FakeDB(), settings=_settings(draft_only=False),
+        profile=prof, governor=_Gov(), deps=deps, sender="+972500000123",
+    )
+    assert r == "sent_whatsapp"
+    assert calls["wa"] == "+972500000123"
+    assert calls["rec"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_contact_when_no_body_contact_and_no_sender():
+    """Without a body contact AND without a sender, there's genuinely nobody
+    to reach — must return no_contact (not crash, not misfire)."""
+    from worker import outbound
+
+    async def fake_parse(text, client=None):
+        return outbound.ParsedPost(is_job=True, title="RF Engineer", company="X",
+                                   description="5g", contact_phone="", contact_email="")
+
+    async def fake_bridge(*a, **k):
+        raise AssertionError("bridge should not be called with no contact")
+
+    prof = UserProfile()
+    prof.preferences.roles = ["RF Engineer"]
+    deps = SimpleNamespace(parse=fake_parse, bridge=fake_bridge, email=fake_bridge,
+                           gen_msg=_gen, now=datetime(2026, 7, 20, 12, 0, 0))
+
+    class _Gov:
+        def can_act(self):
+            return (True, "ok")
+
+        def wa_remaining(self):
+            return 5
+
+    r = await outbound.process_text_post(
+        "Hiring RF Engineer, apply on our site",
+        db=_FakeDB(), settings=_settings(draft_only=False),
+        profile=prof, governor=_Gov(), deps=deps, sender=None,
+    )
+    assert r == "no_contact"
+
+
+@pytest.mark.asyncio
 async def test_not_job_when_parser_says_no():
     from worker import outbound
 

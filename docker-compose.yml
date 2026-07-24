@@ -58,6 +58,11 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
+      # Relocate the profile YAML into the shared ./profile-data volume below
+      # so the resume PDF the upload endpoint writes next to it (same
+      # yaml_path.parent — see api/routes/profile.py) is visible to
+      # celery-worker too, not just this container's own filesystem layer.
+      USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
     ports:
       - "8000:8000"
     depends_on:
@@ -68,10 +73,11 @@ services:
     networks:
       - agent-net
     volumes:
-      # Writable: the resume-upload endpoint (api/routes/profile.py) rebuilds
-      # and writes this file back on every CV upload. Read-only here would
-      # make uploads fail instead of updating the profile and rescoring jobs.
-      - ./user_profile.yaml:/app/user_profile.yaml
+      # Writable: the resume-upload endpoint (api/routes/profile.py) rewrites
+      # user_profile.yaml here on every CV upload and saves resume.pdf
+      # alongside it. Read-only here would make uploads fail instead of
+      # updating the profile and rescoring jobs.
+      - ./profile-data:/app/profile-data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -88,6 +94,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
+      USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
     command: ["celery", "-A", "worker.celery_app", "worker", "-Q", "ingestion,processing,llm,submission,discovery", "--loglevel=info"]
     depends_on:
       postgres:
@@ -97,7 +104,16 @@ services:
     networks:
       - agent-net
     volumes:
-      - ./user_profile.yaml:/app/user_profile.yaml:ro
+      # Read-only: this container never writes the profile/resume, only
+      # web-api's upload endpoint does.
+      - ./profile-data:/app/profile-data:ro
+      # Read-write: the one-time `python -m discovery.login` session (run on
+      # the host, saved under LINKEDIN_BROWSER_PROFILE_DIR) must be visible
+      # here, since this is the container that actually launches Chromium
+      # for LinkedIn discovery/Easy Apply and needs to keep writing to it
+      # (cookie refresh etc.) — without this mount every run opens a fresh,
+      # logged-out browser.
+      - ./.linkedin_profile:/app/.linkedin_profile
     # Scale workers: docker-compose up --scale celery-worker=3
     deploy:
       replicas: 1
@@ -116,13 +132,18 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
+      USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
     command: ["celery", "-A", "worker.celery_app", "beat", "--loglevel=info"]
     depends_on:
       - redis
     networks:
       - agent-net
     volumes:
-      - ./user_profile.yaml:/app/user_profile.yaml:ro
+      # Read-only: beat only schedules tasks, it never runs them itself, so
+      # it never writes the profile or drives a browser — but it's mounted
+      # here too for parity with celery-worker.
+      - ./profile-data:/app/profile-data:ro
+      - ./.linkedin_profile:/app/.linkedin_profile:ro
 
   # ── Nginx Reverse Proxy ───────────────────────────────
   nginx:
