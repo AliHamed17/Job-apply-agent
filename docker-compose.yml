@@ -64,6 +64,18 @@ services:
       # celery-worker too, not just this container's own filesystem layer.
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
       APPLICATION_DATA_DIR: /app/profile-data
+      # The WhatsApp bridge (bridge/whatsapp_bridge.js) runs on the HOST — it
+      # holds a personal WhatsApp Web session and is intentionally NOT
+      # containerised. From inside this container, "localhost" is the container,
+      # not the host, so the default localhost bridge URL is unreachable here.
+      # Point at the host gateway instead (see extra_hosts below). NOTE: this
+      # only works if you start the bridge listening on a host interface the
+      # container can reach (e.g. HOST=0.0.0.0) rather than its default
+      # 127.0.0.1-only bind — that trade-off is yours to make when enabling
+      # WhatsApp outbound. Leave WhatsApp outbound disabled and this is a no-op.
+      BRIDGE_SEND_URL: http://host.docker.internal:8100/send
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     depends_on:
