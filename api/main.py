@@ -46,20 +46,16 @@ from api.routes.cv_routing import router as cv_routing_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.export import router as export_router
 from api.routes.feedback import router as feedback_router
-from api.routes.jobs import router as jobs_router
 from api.routes.interview_prep import router as interview_prep_router
+from api.routes.jobs import router as jobs_router
 from api.routes.outreach import router as outreach_router
 from api.routes.profile import router as profile_router
 from api.routes.realign import router as realign_router
 from api.routes.salary import router as salary_router
 from api.routes.skill_gaps import router as skill_gaps_router
-from api.routes.widgets import router as widgets_router
-
-
-
-
 from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
+from api.routes.widgets import router as widgets_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from core.metrics import HTTP_LATENCY, HTTP_REQUESTS

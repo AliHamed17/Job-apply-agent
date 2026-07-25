@@ -25,7 +25,7 @@ def test_analyze_skill_gaps():
     assert len(analysis.recommendations) > 0
 
 
-def test_outreach_endpoint(client):
+def test_outreach_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -57,7 +57,7 @@ def test_outreach_endpoint(client):
             mock_outreach.return_value.email_subject = "DevOps Engineer Application - Ali Hamed"
             mock_outreach.return_value.email_body = "Dear Hiring Manager,\n\nI am writing to express my interest."
 
-            resp = client.post(f"/api/applications/{app_rec.id}/outreach")
+            resp = client.post(f"/api/applications/{app_rec.id}/outreach", headers=auth_headers)
             assert resp.status_code == 200
             data = resp.json()
             assert data["application_id"] == app_rec.id
@@ -66,12 +66,12 @@ def test_outreach_endpoint(client):
         db_session.close()
 
 
-def test_export_applications_endpoint(client):
-    resp_json = client.get("/api/export/applications?format=json")
+def test_export_applications_endpoint(client, auth_headers):
+    resp_json = client.get("/api/export/applications?format=json", headers=auth_headers)
     assert resp_json.status_code == 200
     assert isinstance(resp_json.json(), list)
 
-    resp_csv = client.get("/api/export/applications?format=csv")
+    resp_csv = client.get("/api/export/applications?format=csv", headers=auth_headers)
     assert resp_csv.status_code == 200
     assert "text/csv" in resp_csv.headers["content-type"]
     assert "application_id,job_id" in resp_csv.text

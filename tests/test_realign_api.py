@@ -13,7 +13,7 @@ def client():
     return TestClient(app)
 
 
-def test_realign_application_endpoint(client):
+def test_realign_application_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         # Create test job & application
@@ -52,6 +52,7 @@ def test_realign_application_endpoint(client):
             response = client.post(
                 f"/api/applications/{app_rec.id}/realign",
                 json={"forced_cv_id": "ai-engineer"},
+                headers=auth_headers,
             )
 
             assert response.status_code == 200
