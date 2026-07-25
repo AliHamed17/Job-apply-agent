@@ -1,0 +1,31 @@
+# Catches the CI lint gate locally, before a push turns main red.
+#
+# Import ordering (I001) alone has broken main four separate times, always the
+# same way: a new api/routes/* router inserted in the wrong place. CI runs lint
+# BEFORE tests, so each of those failures also masked every test result behind
+# it — the suite silently stopped reporting for five consecutive commits.
+#
+# Install once:  pip install pre-commit && pre-commit install
+#
+# The hook auto-fixes what ruff can fix, so the usual remedy is just to
+# re-stage and commit again.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+        # Formatting is not part of the CI gate, so only check — reformatting
+        # the whole repo here would bury real diffs in noise.
+        stages: [manual]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+        args: [--maxkb=6000]  # the 12 CV PDFs are ~2.5MB each
