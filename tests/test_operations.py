@@ -51,7 +51,6 @@ def test_live_production_requires_explicit_acknowledgement() -> None:
         settings.validate_runtime()
 
 
-
 def test_redis_rate_limit_is_atomic() -> None:
     pipeline = MagicMock()
     pipeline.__enter__.return_value = pipeline
@@ -61,6 +60,36 @@ def test_redis_rate_limit_is_atomic() -> None:
     with patch("core.operations.redis_client", return_value=client):
         assert rate_limit_allowed("example", 1)
         assert not rate_limit_allowed("example", 1)
+
+
+def test_public_control_plane_survives_redis_outage(monkeypatch) -> None:
+    import api.main as api_main
+
+    def redis_unavailable(*_args, **_kwargs):
+        raise ConnectionError("Redis unavailable")
+
+    monkeypatch.setattr(api_main.settings, "app_env", "production")
+    monkeypatch.setattr(api_main, "rate_limit_allowed", redis_unavailable)
+    monkeypatch.setattr(
+        api_main,
+        "readiness_report",
+        lambda *_args: {"status": "degraded", "checks": {"redis": {"ok": False}}},
+    )
+    client = TestClient(api_main.app)
+
+    assert client.get("/").status_code == 200
+    assert client.get("/health/live").status_code == 200
+    readiness = client.get("/health/ready")
+    assert readiness.status_code == 503
+    assert readiness.json()["status"] == "degraded"
+    assert client.get("/static/js/app.js").status_code == 200
+
+    protected = client.get(
+        "/api/applications",
+        headers={"Authorization": f"Bearer {api_main.settings.secret_key}"},
+    )
+    assert protected.status_code == 503
+    assert protected.json() == {"detail": "Service unavailable"}
 
 
 def test_readiness_degrades_for_missing_dependency(tmp_path: Path) -> None:

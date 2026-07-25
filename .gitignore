@@ -76,3 +76,6 @@ cvs/
 cv_routing.yaml
 routing-evaluation-report.json
 linkedin-smoke-qualification.json
+
+# Local Vercel project linkage and deployment metadata.
+.vercel/
