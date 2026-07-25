@@ -39,12 +39,14 @@ except ImportError:  # pragma: no cover - exercised in dependency-light smokes
             for name in metric_names
         ).encode()
 
+from api.routes.ab_testing import router as ab_testing_router
 from api.routes.analytics import router as analytics_router
 from api.routes.applications import router as applications_router
 from api.routes.audit import router as audit_router
 from api.routes.batch_apply import router as batch_apply_router
 from api.routes.batch_rescore import router as batch_rescore_router
 from api.routes.control import router as control_router
+from api.routes.culture_fit import router as culture_fit_router
 from api.routes.cv_routing import router as cv_routing_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.digest import router as digest_router
@@ -61,9 +63,10 @@ from api.routes.profile import router as profile_router
 from api.routes.realign import router as realign_router
 from api.routes.salary import router as salary_router
 from api.routes.skill_gaps import router as skill_gaps_router
+from api.routes.stream import router as stream_router
+from api.routes.widgets import router as widgets_router
 from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
-from api.routes.widgets import router as widgets_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
@@ -238,8 +241,12 @@ app.include_router(dry_run_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(followup_router, prefix="/api")
+app.include_router(ab_testing_router, prefix="/api")
+app.include_router(culture_fit_router, prefix="/api")
+app.include_router(stream_router, prefix="/api")
 app.include_router(salary_router, prefix="/api")
 app.include_router(skill_gaps_router, prefix="/api")
+
 
 
 
