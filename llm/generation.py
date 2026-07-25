@@ -92,6 +92,17 @@ async def generate_cover_letter(
 
     resume_content = (cv_text if cv_text and cv_text.strip() else profile.resume.text)[:4000]
 
+    raw_projects = getattr(profile, "projects", []) or []
+    if isinstance(raw_projects, list) and raw_projects:
+        project_spotlights = "\n".join(
+            f"- {p.get('name', '')}: {p.get('impact', '')}"
+            if isinstance(p, dict)
+            else f"- {getattr(p, 'name', '')}: {getattr(p, 'impact', '')}"
+            for p in raw_projects
+        )
+    else:
+        project_spotlights = "None specified."
+
     prompt = COVER_LETTER_PROMPT.format(
         job_title=job.title,
         company=job.company,
@@ -103,8 +114,10 @@ async def generate_cover_letter(
             "work authorization", "[CONFIRMED EVIDENCE REQUIRED]"
         ),
         resume_text=resume_content,
+        project_spotlights=project_spotlights,
         cover_letter_style=profile.cover_letter.style,
     )
+
 
     result = await client.generate(prompt=prompt, system=system)
     logger.info(

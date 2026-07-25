@@ -46,6 +46,8 @@ from api.routes.dashboard import router as dashboard_router
 from api.routes.feedback import router as feedback_router
 from api.routes.jobs import router as jobs_router
 from api.routes.profile import router as profile_router
+from api.routes.realign import router as realign_router
+
 from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
 from core.config import get_settings
@@ -208,6 +210,8 @@ app.include_router(feedback_router, prefix="/api")
 app.include_router(profile_router)
 app.include_router(control_router)
 app.include_router(cv_routing_router, prefix="/api")
+app.include_router(realign_router, prefix="/api")
+
 
 
 # ── Static and Templates ─────────────────────────────────

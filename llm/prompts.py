@@ -61,12 +61,17 @@ Write a tailored cover letter for the following job application.
 ## Resume
 {resume_text}
 
+## Key Projects & Impact Metrics
+{project_spotlights}
+
 ## Style Preference
 {cover_letter_style}
 
 Write the cover letter now. Address it to the hiring team at {company}.
+Highlight specific relevant engineering accomplishments and metrics naturally.
 If any critical information is missing, use [PLACEHOLDER: ...] markers.
 """
+
 
 # ── Recruiter Message Prompt ──────────────────────────────────────────────
 RECRUITER_MESSAGE_PROMPT = """\

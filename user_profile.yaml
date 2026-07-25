@@ -131,3 +131,15 @@ evidence:
     "veteran": "No, not a protected veteran"
     "disability": "No, I do not have a disability"
 
+projects:
+  - name: "Parallel Wireless 4G/5G CI/CD Pipeline Redesign"
+    impact: "Cut build-to-deploy duration from 8h to 2h (~75% reduction) using Jenkins, Groovy, Docker, and KVM"
+    technologies: ["Python", "Jenkins", "Groovy", "Linux", "Docker", "KVM", "4G/5G Open RAN"]
+  - name: "Production AI Agents & Telemetry RAG"
+    impact: "Shipped 3 production LLM tools/agents using Python, LangChain, MCP, FAISS, and REST/WebSocket APIs for log summarization and telemetry semantic search"
+    technologies: ["Python", "LangChain", "LLMs", "RAG", "FAISS", "FastAPI", "HuggingFace"]
+  - name: "Automated Regression & Test Framework"
+    impact: "Automated end-to-end regression and integration testing across 200–500 test cases with PyTest and Robot Framework"
+    technologies: ["Python", "PyTest", "Robot Framework", "C/C++", "gdb", "Wireshark"]
+
+
