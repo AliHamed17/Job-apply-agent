@@ -129,7 +129,8 @@ Analyze whether the selected CV genuinely matches the requirements of the job po
 {available_cvs_info}
 
 ## Task
-Evaluate if the selected CV ({cv_id}) is a strong match for this job, or if another CV option would be significantly better aligned.
+Evaluate if the selected CV ({cv_id}) is a strong match for this job, or if
+another CV option would be significantly better aligned.
 
 Respond ONLY with a JSON object in this format:
 {{
@@ -137,6 +138,29 @@ Respond ONLY with a JSON object in this format:
     "alignment_score": float between 0.0 and 1.0,
     "reasoning": "Concise summary explaining why this CV matches or doesn't match",
     "suggested_cv_id": "cv-id-string" (or null if the selected CV is best)
+}}
+"""
+
+# ── CV Routing Prompt ─────────────────────────────────────────────────────
+CV_ROUTING_PROMPT = """\
+Select the single best candidate CV for this job using only the supplied CV
+excerpts. Prefer a strong match to the actual responsibilities and required
+skills, not a generic CV. If the excerpts do not support a reliable choice,
+return null for selected_cv_id.
+
+## Job
+- Title: {job_title}
+- Seniority: {seniority}
+- Description: {job_description}
+
+## Candidate CV Options
+{cv_options}
+
+Respond ONLY with a JSON object in this format:
+{{
+    "selected_cv_id": "configured-cv-id" or null,
+    "confidence": float between 0.0 and 1.0,
+    "reasoning": "One concise evidence-based sentence"
 }}
 """
 

@@ -342,6 +342,27 @@ def generate_application_task(self, job_id: int):
         if routing_path.exists():
             routing_config = load_routing_config(routing_path)
             routing = route_cv(routing_job, routing_config)
+            if (
+                settings.llm_cv_routing
+                and not routing.overridden
+                and routing.fallback_reason in {
+                    "confidence_below_threshold",
+                    "abstained_low_confidence",
+                }
+            ):
+                from profile.cv_routing_llm import load_cv_excerpts, select_cv_via_llm
+
+                excerpts = load_cv_excerpts(routing_config, settings.cv_directory)
+                llm_routing = run_async(
+                    select_cv_via_llm(routing_job, routing_config, excerpts)
+                )
+                if llm_routing.selected_cv_id:
+                    llm_routing.matched_evidence = [
+                        *routing.matched_evidence,
+                        *llm_routing.matched_evidence,
+                    ]
+                    routing = llm_routing
+
             if settings.llm_cv_alignment and routing.selected_cv_id:
                 routing = run_async(validate_cv_alignment(routing_job, routing, routing_config))
         else:
@@ -357,7 +378,11 @@ def generate_application_task(self, job_id: int):
         cv_text = None
         if routing.selected_cv_id:
             from profile.cv_content_cache import get_cv_text_by_id
-            cv_text = get_cv_text_by_id(routing.selected_cv_id)
+            cv_text = get_cv_text_by_id(
+                routing.selected_cv_id,
+                cv_routing_path=settings.cv_routing_path,
+                cv_directory=settings.cv_directory,
+            )
 
         # Run async generation in sync context using the selected CV text
         generated = run_async(generate_full_application(job_data, profile, cv_text=cv_text))
@@ -373,7 +398,11 @@ def generate_application_task(self, job_id: int):
             threshold=settings.auto_apply_threshold,
             min_apply_score=settings.min_apply_score,
         )
-        auto_approve = action == Action.AUTO_APPLY and routing.selected_cv_id is not None
+        auto_approve = (
+            action == Action.AUTO_APPLY
+            and routing.selected_cv_id is not None
+            and routing.fallback_reason is None
+        )
 
 
         from db.models import UserProfileVersion
@@ -406,7 +435,9 @@ def generate_application_task(self, job_id: int):
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
         app.cv_routing_fallback_reason = routing.fallback_reason
         app.needs_review_reason = (
-            "CV_ROUTING_REVIEW_REQUIRED" if routing.selected_cv_id is None else None
+            "CV_ROUTING_REVIEW_REQUIRED"
+            if routing.selected_cv_id is None or routing.fallback_reason
+            else None
         )
         app.profile_version = profile_version
         db.flush()

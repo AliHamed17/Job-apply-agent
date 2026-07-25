@@ -4,11 +4,18 @@ Copy `cv_routing.yaml.example` to the ignored `cv_routing.yaml` file and place
 the referenced PDFs in the ignored `cvs/` directory. CV ids are stable audit
 identifiers; filenames and CV content are never committed.
 
-Routing is deterministic. Ordered overrides run first, followed by weighted
-title, required-skill, description, and seniority evidence. A route below
-`minimum_confidence` either uses the configured fallback with an explicit
-reason or abstains. An abstained application cannot be approved until the
+Routing starts deterministically. Ordered overrides run first, followed by
+weighted title, required-skill, description, and seniority evidence. A route
+below `minimum_confidence` can use the optional LLM fallback (`LLM_CV_ROUTING`,
+enabled by default), which reads bounded excerpts from the configured CV PDFs.
+The LLM may select only a configured CV with readable text; provider errors,
+missing text, malformed IDs, and low confidence remain explicitly reviewable.
+An abstained or low-confidence application cannot be auto-approved until the
 operator previews the route or selects an override in the dashboard.
+
+`LLM_CV_ALIGNMENT` separately controls the post-selection content check. Both
+features are evidence-bounded: no CV text means no LLM selection, and the
+fallback never invents a CV or candidate fact.
 
 Every application and submission attempt records the selected CV id and profile
 version. Applications also retain confidence, matched evidence, fallback
