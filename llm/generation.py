@@ -71,6 +71,7 @@ async def generate_cover_letter(
     profile: UserProfile,
     client: LLMClient | None = None,
     few_shot_examples: list[dict] | None = None,
+    cv_text: str | None = None,
 ) -> str:
     """Generate a tailored cover letter for a specific job.
 
@@ -79,6 +80,7 @@ async def generate_cover_letter(
                            the feedback DB. Injected into the system prompt to
                            steer the LLM toward the user's preferred style.
                            If None, examples are auto-loaded from the DB.
+        cv_text: Optional text of the specifically aligned CV.
     """
     if client is None:
         client = get_llm_client()
@@ -87,6 +89,8 @@ async def generate_cover_letter(
         few_shot_examples = _load_few_shot_examples()
 
     system = build_system_prompt(few_shot_examples) if few_shot_examples else SYSTEM_PROMPT
+
+    resume_content = (cv_text if cv_text and cv_text.strip() else profile.resume.text)[:4000]
 
     prompt = COVER_LETTER_PROMPT.format(
         job_title=job.title,
@@ -98,7 +102,7 @@ async def generate_cover_letter(
         work_authorization=profile.evidence.user_confirmed.get(
             "work authorization", "[CONFIRMED EVIDENCE REQUIRED]"
         ),
-        resume_text=profile.resume.text[:4000],
+        resume_text=resume_content,
         cover_letter_style=profile.cover_letter.style,
     )
 
@@ -141,12 +145,14 @@ async def generate_qa_answers(
     job: JobData,
     profile: UserProfile,
     client: LLMClient | None = None,
+    cv_text: str | None = None,
 ) -> dict[str, str]:
     """Generate answers to common application questions."""
     if client is None:
         client = get_llm_client()
 
     salary = profile.preferences.salary
+    resume_content = (cv_text if cv_text and cv_text.strip() else profile.resume.text)[:4000]
 
     prompt = QA_ANSWERS_PROMPT.format(
         job_title=job.title,
@@ -154,7 +160,7 @@ async def generate_qa_answers(
         name=profile.personal.name,
         user_location=profile.personal.location,
         work_authorization=profile.personal.work_authorization,
-        resume_text=profile.resume.text[:4000],
+        resume_text=resume_content,
         salary_min=salary.min,
         salary_max=salary.max,
         currency=salary.currency,
@@ -173,6 +179,7 @@ async def generate_full_application(
     job: JobData,
     profile: UserProfile,
     client: LLMClient | None = None,
+    cv_text: str | None = None,
 ) -> GeneratedApplication:
     """Generate all application materials for a job.
 
@@ -188,9 +195,9 @@ async def generate_full_application(
     # Load once and pass into cover letter generation
     few_shot_examples = _load_few_shot_examples()
 
-    cover_letter = await generate_cover_letter(job, profile, client, few_shot_examples)
+    cover_letter = await generate_cover_letter(job, profile, client, few_shot_examples, cv_text=cv_text)
     recruiter_msg = await generate_recruiter_message(job, profile, client)
-    qa_answers = await generate_qa_answers(job, profile, client)
+    qa_answers = await generate_qa_answers(job, profile, client, cv_text=cv_text)
 
     # Check for placeholders
     all_text = cover_letter + " " + recruiter_msg + " " + str(qa_answers)
@@ -211,3 +218,4 @@ async def generate_full_application(
         has_placeholders=app.has_placeholders,
     )
     return app
+

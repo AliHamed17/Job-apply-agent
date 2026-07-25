@@ -58,10 +58,19 @@ class AnswerResult:
 
 
 class FormBrain:
-    def __init__(self, profile, client: LLMClient | None = None, db=None):
+    def __init__(
+        self,
+        profile,
+        client: LLMClient | None = None,
+        db=None,
+        cv_text: str | None = None,
+        selected_cv_id: str | None = None,
+    ):
         self.profile = profile
         self.client = client
         self.db = db
+        self.selected_cv_id = selected_cv_id
+        self._cv_text = cv_text
 
     # ── layer 1: deterministic map ────────────────────
     def _deterministic(self, label: str) -> str | None:
@@ -127,13 +136,22 @@ class FormBrain:
             if job
             else ""
         )
+        if self._cv_text and self._cv_text.strip():
+            cv_text = self._cv_text
+        elif self.selected_cv_id:
+            from profile.cv_content_cache import get_cv_text_by_id
+            cv_text = get_cv_text_by_id(self.selected_cv_id)
+        else:
+            cv_text = self.profile.resume.text
+
         prompt = (
             "Answer this job-application question using ONLY the candidate CV. "
             f"If the CV does not support a confident answer, reply exactly '{_UNKNOWN}'. "
             "Never invent certifications, visas, or clearances.\n"
-            f"Question: {fspec.label}{opts}{job_ctx}\n\nCV:\n{self.profile.resume.text[:4000]}"
+            f"Question: {fspec.label}{opts}{job_ctx}\n\nCV:\n{cv_text[:4000]}"
         )
         return (await client.generate(prompt=prompt, max_tokens=120, temperature=0.0)).strip()
+
 
     async def answer(self, field: FieldSpec, job) -> AnswerResult:
         qh = question_hash(field.label)

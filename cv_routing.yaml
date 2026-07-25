@@ -1,0 +1,92 @@
+minimum_confidence: 0.30
+fallback_cv_id: software-engineer
+
+cvs:
+  - id: ai-engineer
+    file: Ali_Hamed_CV_AI_Engineer.pdf
+    title_terms: [ai, artificial intelligence, llm, nlp, generative, rag, agent]
+    skills: [python, pytorch, langchain, llm, rag, faiss, huggingface, transformers, cuda, gpu, fastapi]
+    seniority: [junior, mid, senior]
+
+  - id: ai-ml-engineer
+    file: Ali_Hamed_CV_AI_ML_Engineer.pdf
+    title_terms: [machine learning, ml, deep learning, neural, data engineer]
+    skills: [python, pytorch, tensorflow, scikit-learn, pandas, numpy, ml, machine learning, deep learning]
+    seniority: [junior, mid, senior]
+
+  - id: ai-automation
+    file: Ali_Hamed_CV_AI_Automation.pdf
+    title_terms: [ai automation, intelligent automation, rpa, process automation]
+    skills: [python, automation, langchain, llm, ci/cd, jenkins, selenium, robot framework]
+    seniority: [junior, mid, senior]
+
+  - id: data-scientist
+    file: Ali_Hamed_CV_Data_Scientist.pdf
+    title_terms: [data scientist, data analyst, analytics, bi, business intelligence]
+    skills: [python, sql, pandas, numpy, scikit-learn, matplotlib, statistics, analytics, r, tableau]
+    seniority: [junior, mid, senior]
+
+  - id: devops
+    file: Ali_Hamed_CV_DevOps.pdf
+    title_terms: [devops, site reliability, sre, platform engineer, cloud engineer]
+    skills: [docker, kubernetes, jenkins, ci/cd, aws, terraform, ansible, linux, helm, monitoring]
+    seniority: [junior, mid, senior]
+
+  - id: embedded-software
+    file: Ali_Hamed_CV_Embedded_Software.pdf
+    title_terms: [embedded, firmware, hardware, iot, real-time, rtos, bsp]
+    skills: [c, c++, embedded, rtos, linux, firmware, microcontroller, uart, spi, i2c, arm]
+    seniority: [junior, mid, senior]
+
+  - id: infrastructure
+    file: Ali_Hamed_CV_Infrastructure.pdf
+    title_terms: [infrastructure, systems engineer, network engineer, it engineer, systems administrator]
+    skills: [linux, networking, tcp/ip, vmware, kvm, aws, servers, firewall, dns, dhcp, ansible]
+    seniority: [junior, mid, senior]
+
+  - id: junior-sw-engineer
+    file: Ali_Hamed_CV_Junior_SW_Engineer.pdf
+    title_terms: [junior software, junior developer, graduate, new grad, entry level]
+    skills: [python, java, c++, javascript, sql, git, oop, data structures, algorithms]
+    seniority: [entry, junior]
+
+  - id: qa-automation
+    file: Ali_Hamed_CV_QA_Automation.pdf
+    title_terms: [qa, quality assurance, test engineer, sdet, test automation]
+    skills: [python, pytest, selenium, robot framework, test automation, ci/cd, api testing, jira]
+    seniority: [junior, mid, senior]
+
+  - id: software-automation
+    file: Ali_Hamed_CV_Software_Automation.pdf
+    title_terms: [automation engineer, build engineer, release engineer, tools engineer]
+    skills: [python, automation, jenkins, groovy, ci/cd, bash, scripting, docker, ansible]
+    seniority: [junior, mid, senior]
+
+  - id: software-engineer
+    file: Ali_Hamed_CV_Software_Engineer.pdf
+    title_terms: [software, backend, fullstack, developer, programmer, engineer]
+    skills: [python, c++, java, fastapi, django, sql, api, docker, git, linux, rest]
+    seniority: [junior, mid, senior]
+
+  - id: student-intern
+    file: Ali_Hamed_CV_Student_Intern.pdf
+    title_terms: [intern, internship, student, trainee, co-op, working student]
+    skills: [python, java, c++, sql, git, oop, data structures]
+    seniority: [entry, intern]
+
+# Evaluated in order. Keep overrides narrow and explicit.
+overrides:
+  - cv_id: ai-engineer
+    title_contains: [llm, generative ai, rag, ai agent]
+  - cv_id: ai-ml-engineer
+    title_contains: [machine learning, deep learning]
+  - cv_id: data-scientist
+    title_contains: [data scientist, data analyst]
+  - cv_id: devops
+    title_contains: [devops, site reliability, sre]
+  - cv_id: qa-automation
+    title_contains: [qa, quality assurance, sdet, test engineer]
+  - cv_id: embedded-software
+    title_contains: [embedded, firmware]
+  - cv_id: student-intern
+    title_contains: [intern, internship, trainee, working student]

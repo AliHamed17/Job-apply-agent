@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     llm_model: str = "gpt-4o"
     ollama_base_url: str = "http://localhost:11434"
+    llm_cv_alignment: bool = True
 
     # ── Application Modes ───────────────────────────────
     draft_only: bool = True

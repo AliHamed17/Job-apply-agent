@@ -1,92 +1,117 @@
 # ───────────────────────────────────────────────────────
-# User Profile — fill in your details below
+# User Profile — Ali Hamed
 # ───────────────────────────────────────────────────────
 
 personal:
-  name: "Jane Doe"
-  email: "jane.doe@example.com"
-  phone: "+1-555-123-4567"
-  location: "San Francisco, CA"
-  work_authorization: "US Citizen"
+  name: "Ali Hamed"
+  email: "ali.h.10j@gmail.com"
+  phone: "+972-53-339-2826"
+  location: "Haifa District, Israel"
+  work_authorization: ""
 
 links:
-  linkedin: "https://linkedin.com/in/janedoe"
-  github: "https://github.com/janedoe"
-  portfolio: "https://janedoe.dev"
+  linkedin: "https://www.linkedin.com/in/ali-hamed-1705-/"
+  github: "https://github.com/AliHamed17"
+  portfolio: ""
 
 resume:
-  # Plain text version of your resume (used for keyword matching & LLM context)
-  text: |
-    JANE DOE
-    Software Engineer with 5 years of experience in Python, FastAPI, and cloud services.
-
-    EXPERIENCE
-    - Senior Backend Engineer at TechCorp (2022–present)
-      Built microservices handling 10k req/s, reduced latency by 40%.
-    - Software Engineer at StartupXYZ (2019–2022)
-      Full-stack development with Python/React.
-
-    EDUCATION
-    - B.S. Computer Science, UC Berkeley, 2019
-
-    SKILLS
-    Python, FastAPI, Django, PostgreSQL, Redis, AWS, Docker, Kubernetes, CI/CD
-
-  # Path to your resume PDF (used for job board uploads)
-  pdf_path: "./resume.pdf"
+  # Plain text version of your resume (auto-populated from PDF on load)
+  text: ""
+  # Path to your default resume PDF (used when CV routing abstains)
+  pdf_path: "./cvs/Ali_Hamed_CV_Software_Engineer.pdf"
 
 cover_letter:
   # Style guide for LLM-generated cover letters
-  style: "professional but personable, concise (3-4 paragraphs), highlight relevant experience"
+  style: "professional but personable, concise (3-4 paragraphs), highlight relevant technical experience and projects, mention bilingual ability (Arabic, Hebrew, English)"
 
 preferences:
   # Target roles (case-insensitive matching)
   roles:
     - "Software Engineer"
+    - "AI Engineer"
+    - "ML Engineer"
+    - "AI/ML Engineer"
+    - "Machine Learning Engineer"
+    - "Data Scientist"
+    - "DevOps Engineer"
+    - "Automation Engineer"
+    - "QA Automation Engineer"
+    - "Embedded Software Engineer"
     - "Backend Engineer"
     - "Python Developer"
-    - "Full Stack Engineer"
+    - "Infrastructure Engineer"
+    - "Software Developer"
 
   # Preferred locations (or "Remote")
   locations:
-    - "San Francisco, CA"
+    - "Haifa, Israel"
+    - "Tel Aviv, Israel"
+    - "Israel"
     - "Remote"
-    - "New York, NY"
 
   # Work arrangement
   remote_ok: true
   hybrid_ok: true
-  onsite_ok: false
+  onsite_ok: true
 
   # Salary expectations
   salary:
-    min: 120000
-    max: 200000
-    currency: "USD"
+    min: 0
+    max: 0
+    currency: "ILS"
 
   # Keywords to boost score
   keywords:
     - "python"
+    - "c++"
+    - "c"
+    - "java"
     - "fastapi"
-    - "microservices"
-    - "aws"
+    - "django"
+    - "pytorch"
+    - "langchain"
+    - "llm"
+    - "rag"
+    - "machine learning"
+    - "deep learning"
+    - "docker"
     - "kubernetes"
-    - "backend"
+    - "jenkins"
+    - "ci/cd"
+    - "linux"
+    - "aws"
+    - "automation"
+    - "pytest"
+    - "selenium"
+    - "robot framework"
+    - "sql"
+    - "git"
+    - "api"
+    - "rest"
+    - "microservices"
+    - "agile"
+    - "oop"
+    - "data structures"
+    - "algorithms"
+    - "huggingface"
+    - "transformers"
+    - "faiss"
+    - "embeddings"
+    - "scikit-learn"
+    - "pandas"
+    - "numpy"
 
   # Companies to never apply to
-  blacklist_companies:
-    - "SpamCorp"
-    - "BadCompanyInc"
+  blacklist_companies: []
 
   # Seniority levels to target
   seniority:
+    - "entry"
+    - "junior"
     - "mid"
     - "senior"
-    - "lead"
 
 # Attachments (additional docs to upload when supported)
 attachments:
-  - path: "./resume.pdf"
+  - path: "./cvs/Ali_Hamed_CV_Software_Engineer.pdf"
     label: "Resume"
-  - path: "./certificates/aws_cert.pdf"
-    label: "AWS Certification"

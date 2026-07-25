@@ -317,10 +317,50 @@ def generate_application_task(self, job_id: int):
             source_url=db_job.source_url,
         )
 
-        # Run async generation in sync context
-        generated = run_async(generate_full_application(job_data, profile))
-
         settings = get_settings()
+
+        from pathlib import Path
+        from profile.cv_routing import (
+            RoutingDecision,
+            RoutingJob,
+            load_routing_config,
+            parse_required_skills,
+            route_cv,
+            validate_cv_alignment,
+        )
+
+        routing_job = RoutingJob(
+            title=db_job.title or "",
+            description=" ".join(
+                filter(None, [db_job.description, db_job.requirements])
+            ),
+            seniority=db_job.seniority or "",
+            required_skills=parse_required_skills(db_job.keywords),
+        )
+
+        routing_path = Path(settings.cv_routing_path)
+        if routing_path.exists():
+            routing_config = load_routing_config(routing_path)
+            routing = route_cv(routing_job, routing_config)
+            if settings.llm_cv_alignment and routing.selected_cv_id:
+                routing = run_async(validate_cv_alignment(routing_job, routing, routing_config))
+        else:
+            routing = RoutingDecision(
+                selected_cv_id=None,
+                selected_file=None,
+                confidence=0,
+                matched_evidence=[],
+                fallback_reason="routing_not_configured",
+            )
+
+        # Get selected CV text for application generation
+        cv_text = None
+        if routing.selected_cv_id:
+            from profile.cv_content_cache import get_cv_text_by_id
+            cv_text = get_cv_text_by_id(routing.selected_cv_id)
+
+        # Run async generation in sync context using the selected CV text
+        generated = run_async(generate_full_application(job_data, profile, cv_text=cv_text))
 
         # Decide whether to auto-approve immediately
         from datetime import datetime
@@ -333,40 +373,8 @@ def generate_application_task(self, job_id: int):
             threshold=settings.auto_apply_threshold,
             min_apply_score=settings.min_apply_score,
         )
-        auto_approve = action == Action.AUTO_APPLY
+        auto_approve = action == Action.AUTO_APPLY and routing.selected_cv_id is not None
 
-        from pathlib import Path
-        from profile.cv_routing import (
-            RoutingDecision,
-            RoutingJob,
-            load_routing_config,
-            parse_required_skills,
-            route_cv,
-        )
-
-        routing_path = Path(settings.cv_routing_path)
-        if routing_path.exists():
-            routing = route_cv(
-                RoutingJob(
-                    title=db_job.title or "",
-                    description=" ".join(
-                        filter(None, [db_job.description, db_job.requirements])
-                    ),
-                    seniority=db_job.seniority or "",
-                    required_skills=parse_required_skills(db_job.keywords),
-                ),
-                load_routing_config(routing_path),
-            )
-        else:
-            routing = RoutingDecision(
-                selected_cv_id=None,
-                selected_file=None,
-                confidence=0,
-                matched_evidence=[],
-                fallback_reason="routing_not_configured",
-            )
-        # An application cannot become eligible until routing selected a CV.
-        auto_approve = auto_approve and routing.selected_cv_id is not None
 
         from db.models import UserProfileVersion
 
