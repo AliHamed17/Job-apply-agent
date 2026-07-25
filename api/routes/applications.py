@@ -330,3 +330,28 @@ async def reject_application(
     db.commit()
     logger.info("application_rejected_via_api", app_id=app.id, reason=reason)
     return {"message": "Application rejected", "application_id": app.id}
+
+
+class OutcomeRequest(BaseModel):
+    outcome: str
+    note: str | None = None
+
+
+@router.post("/applications/{app_id}/outcome")
+async def record_application_outcome(
+    app_id: int,
+    payload: OutcomeRequest,
+    db: Session = Depends(get_db),
+):
+    """Record candidate response outcome (e.g. interview invitation) for self-tuning metrics."""
+    app = db.query(Application).filter(Application.id == app_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    app.outcome = payload.outcome
+    app.outcome_note = payload.note
+    db.commit()
+
+    logger.info("application_outcome_recorded", app_id=app.id, outcome=payload.outcome)
+    return {"message": "Outcome recorded", "application_id": app.id, "outcome": payload.outcome}
+

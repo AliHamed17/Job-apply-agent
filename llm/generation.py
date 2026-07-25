@@ -90,7 +90,13 @@ async def generate_cover_letter(
 
     system = build_system_prompt(few_shot_examples) if few_shot_examples else SYSTEM_PROMPT
 
+    from llm.language import detect_language
+    lang = detect_language(f"{job.title} {job.description}")
+    if lang == "he":
+        system += "\nCRITICAL LANGUAGE INSTRUCTION: The job posting is in Hebrew. Write the cover letter in professional, fluent Hebrew."
+
     resume_content = (cv_text if cv_text and cv_text.strip() else profile.resume.text)[:4000]
+
 
     raw_projects = getattr(profile, "projects", []) or []
     if isinstance(raw_projects, list) and raw_projects:
