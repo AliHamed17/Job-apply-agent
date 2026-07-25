@@ -29,14 +29,14 @@ class Base(DeclarativeBase):
 # ── Enums ────────────────────────────────────────────────
 
 
-class URLStatus(str, enum.Enum):
+class URLStatus(str, enum.Enum):  # noqa: UP042 - preserve persisted enum behavior
     PENDING = "pending"
     FETCHED = "fetched"
     FAILED = "failed"
     BLOCKED = "blocked"  # bot protection / CAPTCHA
 
 
-class JobStatus(str, enum.Enum):
+class JobStatus(str, enum.Enum):  # noqa: UP042 - preserve persisted enum behavior
     EXTRACTED = "extracted"
     SCORED = "scored"
     SKIPPED = "skipped"
@@ -47,7 +47,7 @@ class JobStatus(str, enum.Enum):
     NEEDS_REVIEW = "needs_review"
 
 
-class SubmissionStatus(str, enum.Enum):
+class SubmissionStatus(str, enum.Enum):  # noqa: UP042 - preserve persisted enum behavior
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"
@@ -269,6 +269,24 @@ class BrowserQualificationRun(Base):
             "selector_version",
             "terminal_reason",
         ),
+    )
+
+
+class DiscoveryRun(Base):
+    """Durable, privacy-safe status for one discovery provider run."""
+
+    __tablename__ = "discovery_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False)
+    inserted = Column(Integer, nullable=False, default=0)
+    reason_code = Column(String(64), nullable=True)
+    started_at = Column(DateTime, default=func.now(), nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_discovery_runs_source_finished", "source", "finished_at"),
     )
 
 

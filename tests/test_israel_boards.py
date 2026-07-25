@@ -8,8 +8,8 @@ from jobs.models import JobData
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(auth_headers):
+    return TestClient(app, headers=auth_headers)
 
 
 def test_drushim_parser():
