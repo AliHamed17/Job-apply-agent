@@ -23,6 +23,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -56,9 +58,16 @@ class IcimsSubmitter(BaseSubmitter):
                 success=True,
                 platform=self.platform_name,
                 status="draft_only",
-                error="Playwright not installed. Run: pip install 'job-apply-agent[browser]' && playwright install chromium",
+                error=(
+                    "Playwright not installed. Run: "
+                    "pip install 'job-apply-agent[browser]' && playwright install chromium"
+                ),
             )
 
+        from profile.models import UserProfile  # noqa: PLC0415
+
+        profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+        brain = FormBrain(profile_obj)
         job_url = job.apply_url or job.source_url or ""
 
         async with async_playwright() as pw:
@@ -76,7 +85,9 @@ class IcimsSubmitter(BaseSubmitter):
             )
             page = await ctx.new_page()
             try:
-                result = await self._apply(page, job_url, application, user_profile, resume_path)
+                result = await self._apply(
+                    page, job_url, job, brain, application, user_profile, resume_path
+                )
             except Exception as exc:
                 logger.error("icims_apply_error", error=str(exc))
                 result = SubmissionResult(
@@ -90,8 +101,9 @@ class IcimsSubmitter(BaseSubmitter):
 
         return result
 
-    async def _apply(self, page, job_url: str, application: GeneratedApplication,
-                     user_profile: dict, resume_path: str | None) -> SubmissionResult:
+    async def _apply(self, page, job_url: str, job: JobData, brain: FormBrain,
+                     application: GeneratedApplication, user_profile: dict,
+                     resume_path: str | None) -> SubmissionResult:
         await page.goto(job_url, timeout=_NAV_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
 
@@ -127,6 +139,17 @@ class IcimsSubmitter(BaseSubmitter):
 
             await self._fill_icims_fields(page, application, user_profile, resume_path)
 
+            # Everything else (free text, numbers, dropdowns) goes through FormBrain,
+            # which abstains rather than guess. A required question it cannot answer
+            # stops the run instead of submitting a false answer.
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
+            if blocked:
+                logger.warning("icims_unanswered_required", url=job_url, fields=blocked[:5])
+                return SubmissionResult(
+                    success=True, platform=self.platform_name, status="draft_only",
+                    error=needs_review_error(blocked),
+                )
+
             # Check for final submission
             submit_btn = page.locator(
                 'input[type="submit"], '
@@ -140,7 +163,9 @@ class IcimsSubmitter(BaseSubmitter):
                 await page.wait_for_timeout(3000)
 
                 final_content = (await page.content()).lower()
-                if any(k in final_content for k in ["thank you", "application received", "successfully submitted", "confirmation"]):
+                if any(k in final_content for k in [
+                    "thank you", "application received", "successfully submitted", "confirmation",
+                ]):
                     logger.info("icims_application_submitted", url=job_url)
                     return SubmissionResult(
                         success=True, platform=self.platform_name, status="submitted",
@@ -151,8 +176,8 @@ class IcimsSubmitter(BaseSubmitter):
                         success=True, platform=self.platform_name, status="draft_only",
                         error="CAPTCHA appeared during iCIMS submission",
                     )
-                # If we clicked submit and didn't get success or captcha, assume success if URL changed?
-                # iCIMS often redirects.
+                # If we clicked submit and didn't get success or captcha, assume
+                # success if URL changed? iCIMS often redirects.
                 logger.info("icims_application_submitted_assumed", url=job_url)
                 return SubmissionResult(
                     success=True, platform=self.platform_name, status="submitted",
@@ -179,7 +204,11 @@ class IcimsSubmitter(BaseSubmitter):
 
     async def _fill_icims_fields(self, page, application: GeneratedApplication,
                                  user_profile: dict, resume_path: str | None) -> None:
-        """Fill all visible form inputs with profile data and Q&A answers on iCIMS."""
+        """Fill the identity fields we know deterministically from the profile.
+
+        Question-answering (free text, numbers, dropdowns) is handled by
+        fill_form_safely in _apply, which reads each label first.
+        """
         personal = user_profile.get("personal", {})
         name_parts = (personal.get("name", "") or "").split()
 
@@ -212,59 +241,3 @@ class IcimsSubmitter(BaseSubmitter):
         cl = page.locator('textarea[name*="coverletter"], textarea[id*="coverletter"]').first
         if await cl.count() > 0 and await cl.is_visible() and await cl.is_editable():
             await cl.fill(application.cover_letter or "")
-
-        # Work authorization — select "Yes"
-        for auth_label in ["authorized to work", "legally authorized", "work authorization", "sponsorship"]:
-            yes_radio = page.locator(
-                f'label:has-text("Yes"):near(label:has-text("{auth_label}"))'
-            ).first
-            if await yes_radio.count() > 0 and await yes_radio.is_visible():
-                await yes_radio.click()
-
-        # Numeric inputs
-        num_inputs = page.locator('input[type="number"]')
-        for i in range(await num_inputs.count()):
-            el = num_inputs.nth(i)
-            if await el.is_visible() and await el.is_editable():
-                current = await el.input_value()
-                if not current:
-                    await el.fill("0")
-
-        # Custom text questions
-        if application.qa_answers:
-            text_inputs = page.locator('input[type="text"]:visible, textarea:visible')
-            for i in range(await text_inputs.count()):
-                el = text_inputs.nth(i)
-                if not await el.is_editable():
-                    continue
-                current = await el.input_value()
-                if current:
-                    continue
-                el_id = await el.get_attribute("id") or ""
-                label_text = ""
-                if el_id:
-                    lbl = page.locator(f'label[for="{el_id}"]').first
-                    if await lbl.count() > 0:
-                        label_text = (await lbl.inner_text()).strip().lower()
-                if not label_text:
-                    label_text = (await el.get_attribute("aria-label") or "").lower()
-                if not label_text:
-                    continue
-                best_answer = ""
-                for q_key, q_val in application.qa_answers.items():
-                    if any(kw in label_text for kw in q_key.lower().split("_")):
-                        best_answer = str(q_val)
-                        break
-                if not best_answer:
-                    best_answer = next((str(v) for v in application.qa_answers.values() if v), "")
-                if best_answer:
-                    await el.fill(best_answer[:500])
-
-        # Select dropdowns — pick "Yes" for yes/no questions
-        selects = page.locator('select:visible')
-        for i in range(await selects.count()):
-            sel = selects.nth(i)
-            options = await sel.locator('option').all_text_contents()
-            options_lower = [o.lower() for o in options]
-            if "yes" in options_lower and "no" in options_lower:
-                await sel.select_option(label=next(o for o in options if o.lower() == "yes"))

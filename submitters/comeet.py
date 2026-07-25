@@ -11,6 +11,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -54,6 +56,11 @@ class ComeetSubmitter(BaseSubmitter):
         name_parts = full_name.split() if full_name else []
         first_name = name_parts[0] if name_parts else ""
         last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+
+        from profile.models import UserProfile
+
+        profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+        brain = FormBrain(profile_obj)
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
@@ -114,51 +121,19 @@ class ComeetSubmitter(BaseSubmitter):
                     application.cover_letter,
                 )
 
-            # Numeric inputs
-            num_inputs = page.locator('input[type="number"]')
-            for i in range(await num_inputs.count()):
-                el = num_inputs.nth(i)
-                if await el.is_visible() and await el.is_editable():
-                    if not await el.input_value():
-                        await el.fill("0")
-
-            # Q&A custom questions
-            if application.qa_answers:
-                text_inputs = page.locator('input[type="text"]:visible, textarea:visible')
-                for i in range(await text_inputs.count()):
-                    el = text_inputs.nth(i)
-                    if not await el.is_editable():
-                        continue
-                    if await el.input_value():
-                        continue
-                    el_id = await el.get_attribute("id") or ""
-                    label_text = ""
-                    if el_id:
-                        lbl = page.locator(f'label[for="{el_id}"]').first
-                        if await lbl.count() > 0:
-                            label_text = (await lbl.inner_text()).strip().lower()
-                    if not label_text:
-                        label_text = (await el.get_attribute("aria-label") or "").lower()
-                    if not label_text:
-                        continue
-                    best = ""
-                    for q_key, q_val in application.qa_answers.items():
-                        if any(kw in label_text for kw in q_key.lower().split("_")):
-                            best = str(q_val)
-                            break
-                    if not best:
-                        best = next((str(v) for v in application.qa_answers.values() if v), "")
-                    if best:
-                        await el.fill(best[:500])
-
-            # Select dropdowns (yes/no questions)
-            selects = page.locator("select:visible")
-            for i in range(await selects.count()):
-                sel_el = selects.nth(i)
-                options = await sel_el.locator("option").all_text_contents()
-                options_lower = [o.lower() for o in options]
-                if "yes" in options_lower:
-                    await sel_el.select_option(label=next(o for o in options if o.lower() == "yes"))
+            # Custom questions (text, numeric, dropdowns) — label-aware.
+            # FormBrain abstains rather than guess, so a question we cannot
+            # answer truthfully is left blank instead of filled with "0"/"Yes".
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
+            if blocked:
+                # A required question has no confident answer — never submit a
+                # made-up one; hand the application to a human instead.
+                await browser.close()
+                return SubmissionResult(
+                    success=True, platform=self.platform_name,
+                    status="draft_only",
+                    error=needs_review_error(blocked),
+                )
 
             # ── Submit ────────────────────────────────────────────────────────
             submit_clicked = False

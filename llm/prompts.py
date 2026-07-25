@@ -112,8 +112,30 @@ Provide answers as a JSON object with these keys:
     "relevant_experience": "Describe your most relevant experience for this role."
 }}
 
-Use ONLY facts from the profile. Salary expectation: {salary_min}–{salary_max} {currency}.
+Use ONLY facts from the profile. {salary_guidance}
 If info is missing, use [PLACEHOLDER: ...].
 
 Respond with the JSON object only.
 """
+
+# Salary guidance is built rather than interpolated raw, because an unset
+# range (min=max=0, the default in profile/models.py) used to render as the
+# literal "Salary expectation: 0–0 ILS" and the model dutifully answered
+# "0-0 ILS" on real applications.
+SALARY_UNSET_GUIDANCE = (
+    "The candidate has NOT specified a salary range. For "
+    '"salary_expectations", do not state any number: say the expectation is '
+    "open and best discussed once the role's scope is clear, and that the "
+    "candidate is happy to align with the band for the position."
+)
+
+
+def build_salary_guidance(salary_min: int, salary_max: int, currency: str) -> str:
+    """Describe the salary expectation, or say it is unset — never '0–0'."""
+    if not salary_min and not salary_max:
+        return SALARY_UNSET_GUIDANCE
+    if salary_min and salary_max:
+        return f"Salary expectation: {salary_min}–{salary_max} {currency}."
+    single = salary_min or salary_max
+    qualifier = "from" if salary_min else "up to"
+    return f"Salary expectation: {qualifier} {single} {currency}."

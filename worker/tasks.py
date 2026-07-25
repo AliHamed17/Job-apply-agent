@@ -389,7 +389,15 @@ def generate_application_task(self, job_id: int):
             threshold=settings.auto_apply_threshold,
             min_apply_score=settings.min_apply_score,
         )
-        auto_approve = action == Action.AUTO_APPLY and routing.selected_cv_id is not None
+        # Unfilled [PLACEHOLDER: ...] markers must never reach an employer.
+        # has_placeholders was previously computed and logged but gated
+        # nothing, so a letter still reading "[PLACEHOLDER: notice period]"
+        # could auto-approve and submit verbatim.
+        auto_approve = (
+            action == Action.AUTO_APPLY
+            and routing.selected_cv_id is not None
+            and not generated.has_placeholders
+        )
 
         from db.models import UserProfileVersion
 
@@ -420,9 +428,13 @@ def generate_application_task(self, job_id: int):
         app.cv_routing_confidence = routing.confidence
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
         app.cv_routing_fallback_reason = routing.fallback_reason
-        app.needs_review_reason = (
-            "CV_ROUTING_REVIEW_REQUIRED" if routing.selected_cv_id is None else None
-        )
+        if routing.selected_cv_id is None:
+            app.needs_review_reason = "CV_ROUTING_REVIEW_REQUIRED"
+        elif generated.has_placeholders:
+            fields = ", ".join(generated.placeholder_fields[:3]) or "unspecified"
+            app.needs_review_reason = f"UNFILLED_PLACEHOLDERS:{fields}"
+        else:
+            app.needs_review_reason = None
         app.profile_version = profile_version
         db.flush()
 
@@ -686,6 +698,18 @@ def submit_application_task(self, application_id: int):
                     # Keep best result seen (prefer draft_only over failed)
                     result = sub_result
 
+        # abort-don't-lie: a blocked required field is surfaced as
+        # NEEDS_REVIEW rather than silently drafted or failed.
+        #
+        # Read this BEFORE the draft fallback below. The fallback replaces
+        # `result` wholesale with DraftOnlySubmitter's (error=None), so
+        # extracting afterwards silently dropped the reason for any submitter
+        # that reported the block as status="failed" — the application landed
+        # in DRAFT with no record of which question stopped it.
+        needs_review_reason = None
+        if result is not None and result.error and result.error.startswith("NEEDS_REVIEW:"):
+            needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
+
         # Always fall back to draft_only if no real submission succeeded
         if result is None or result.status == "failed":
             result = run_async(
@@ -693,12 +717,6 @@ def submit_application_task(self, application_id: int):
                     job_ref, generated, profile_dict, resume_path
                 )
             )
-
-        # abort-don't-lie: a blocked required field is surfaced as
-        # NEEDS_REVIEW rather than silently drafted or failed.
-        needs_review_reason = None
-        if result.error and result.error.startswith("NEEDS_REVIEW:"):
-            needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
         # Finalize the pre-committed attempt. No external action can run before
         # this attempt exists, so task redelivery cannot duplicate the action.

@@ -34,6 +34,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -89,6 +91,10 @@ class IndeedSubmitter(BaseSubmitter):
                 error="Indeed credentials not configured. Set INDEED_COOKIES_FILE or INDEED_EMAIL+INDEED_PASSWORD in .env",
             )
 
+        from profile.models import UserProfile  # noqa: PLC0415
+
+        profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+        brain = FormBrain(profile_obj)
         job_url = job.apply_url or job.source_url or ""
 
         async with async_playwright() as pw:
@@ -122,7 +128,9 @@ class IndeedSubmitter(BaseSubmitter):
 
             page = await ctx.new_page()
             try:
-                result = await self._apply(page, job_url, application, user_profile, resume_path)
+                result = await self._apply(
+                    page, job_url, job, application, brain, user_profile, resume_path
+                )
             except Exception as exc:
                 logger.error("indeed_apply_error", error=str(exc))
                 result = SubmissionResult(
@@ -198,10 +206,9 @@ class IndeedSubmitter(BaseSubmitter):
 
     # ── Application flow ──────────────────────────────────────────────────────
 
-    async def _apply(self, page, job_url: str, application: GeneratedApplication,
-                     user_profile: dict, resume_path: str | None) -> SubmissionResult:
-        personal = user_profile.get("personal", {})
-
+    async def _apply(self, page, job_url: str, job: JobData, application: GeneratedApplication,
+                     brain: FormBrain, user_profile: dict,
+                     resume_path: str | None) -> SubmissionResult:
         await page.goto(job_url, timeout=_NAV_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
 
@@ -240,6 +247,18 @@ class IndeedSubmitter(BaseSubmitter):
                 )
 
             await self._fill_indeed_fields(page, application, user_profile, resume_path)
+
+            # Everything that is not identity data goes through FormBrain, which
+            # abstains instead of guessing. A required question it cannot answer
+            # truthfully stops the run — worker/tasks.py routes the
+            # "NEEDS_REVIEW:" prefix to a human instead of submitting a lie.
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
+            if blocked:
+                logger.warning("indeed_unanswered_required", questions=blocked[:3])
+                return SubmissionResult(
+                    success=True, platform=self.platform_name, status="draft_only",
+                    error=needs_review_error(blocked),
+                )
 
             # Check for final submission
             submit_btn = page.locator(
@@ -319,50 +338,7 @@ class IndeedSubmitter(BaseSubmitter):
             if await r.is_visible():
                 await r.check()
 
-        # Numeric inputs — years of experience
-        num_inputs = page.locator('input[type="number"]')
-        for i in range(await num_inputs.count()):
-            el = num_inputs.nth(i)
-            if await el.is_visible() and await el.is_editable():
-                val = await el.input_value()
-                if not val:
-                    await el.fill("0")
-
-        # Custom text questions — match to qa_answers
-        if application.qa_answers:
-            text_inputs = page.locator('input[type="text"]:visible, textarea:visible')
-            count = await text_inputs.count()
-            for i in range(count):
-                el = text_inputs.nth(i)
-                if not await el.is_editable():
-                    continue
-                current = await el.input_value()
-                if current:
-                    continue
-                el_id = await el.get_attribute("id") or ""
-                label_el = page.locator(f'label[for="{el_id}"]').first
-                label_text = ""
-                if el_id and await label_el.count() > 0:
-                    label_text = (await label_el.inner_text()).strip().lower()
-                if not label_text:
-                    label_text = (await el.get_attribute("aria-label") or "").lower()
-                if not label_text:
-                    continue
-                best_answer = ""
-                for q_key, q_val in application.qa_answers.items():
-                    if any(kw in label_text for kw in q_key.lower().split("_")):
-                        best_answer = str(q_val)
-                        break
-                if not best_answer:
-                    best_answer = next((str(v) for v in application.qa_answers.values() if v), "")
-                if best_answer:
-                    await el.fill(best_answer[:500])
-
-        # Select dropdowns — pick "Yes" for yes/no questions
-        selects = page.locator('select:visible')
-        for i in range(await selects.count()):
-            sel = selects.nth(i)
-            options = await sel.locator('option').all_text_contents()
-            options_lower = [o.lower() for o in options]
-            if "yes" in options_lower and "no" in options_lower:
-                await sel.select_option(label=next(o for o in options if o.lower() == "yes"))
+        # Number inputs, free-text questions and dropdowns are deliberately not
+        # handled here — the caller runs fill_form_safely() for those so an
+        # unanswerable question aborts the run instead of getting a fabricated
+        # answer.

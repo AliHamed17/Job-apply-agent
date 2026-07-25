@@ -12,6 +12,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -165,7 +167,7 @@ class LeverSubmitter(BaseSubmitter):
             await page.fill('input[name="email"]', personal.get("email", ""))
             await page.fill('input[name="phone"]', personal.get("phone", ""))
             await page.fill('input[name="org"]', "") # current company
-            
+
             # Links
             if links.get("linkedin"):
                 await page.fill('input[name="urls[LinkedIn]"]', links["linkedin"])
@@ -181,60 +183,29 @@ class LeverSubmitter(BaseSubmitter):
             # Comments / Cover Letter
             await page.fill('textarea[name="comments"]', application.cover_letter)
 
-            # Numeric inputs
-            num_inputs = page.locator('input[type="number"]')
-            for i in range(await num_inputs.count()):
-                el = num_inputs.nth(i)
-                if await el.is_visible() and await el.is_editable():
-                    current = await el.input_value()
-                    if not current:
-                        await el.fill("0")
+            # Custom questions (text, numeric, dropdowns) — resolved through
+            # FormBrain, which abstains instead of guessing.
+            from profile.models import UserProfile
 
-            # Custom text questions (Lever uses standard inputs/textareas)
-            if application.qa_answers:
-                text_inputs = page.locator('input[type="text"]:visible, textarea:visible')
-                for i in range(await text_inputs.count()):
-                    el = text_inputs.nth(i)
-                    if not await el.is_editable():
-                        continue
-                    current = await el.input_value()
-                    if current:
-                        continue
-                    el_id = await el.get_attribute("id") or ""
-                    label_text = ""
-                    if el_id:
-                        lbl = page.locator(f'label[for="{el_id}"]').first
-                        if await lbl.count() > 0:
-                            label_text = (await lbl.inner_text()).strip().lower()
-                    if not label_text:
-                        label_text = (await el.get_attribute("aria-label") or "").lower()
-                    if not label_text:
-                        continue
-                    best_answer = ""
-                    for q_key, q_val in application.qa_answers.items():
-                        if any(kw in label_text for kw in q_key.lower().split("_")):
-                            best_answer = str(q_val)
-                            break
-                    if not best_answer:
-                        best_answer = next((str(v) for v in application.qa_answers.values() if v), "")
-                    if best_answer:
-                        await el.fill(best_answer[:500])
+            profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+            brain = FormBrain(profile_obj)
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
 
-            # Select dropdowns
-            selects = page.locator('select:visible')
-            for i in range(await selects.count()):
-                sel = selects.nth(i)
-                options = await sel.locator('option').all_text_contents()
-                options_lower = [o.lower() for o in options]
-                if "yes" in options_lower and "no" in options_lower:
-                    await sel.select_option(label=next(o for o in options if o.lower() == "yes"))
+            # abort-don't-lie: a required question we cannot answer truthfully
+            # goes to human review rather than being submitted with a guess.
+            if blocked:
+                await browser.close()
+                return SubmissionResult(
+                    success=True, platform="lever", status="draft_only",
+                    error=needs_review_error(blocked)
+                )
 
             # Submit
             await page.click('button#btn-submit')
             await page.wait_for_timeout(3000)
 
             success = "thank-you" in page.url or "applied" in page.url.lower()
-            
+
             await browser.close()
             return SubmissionResult(
                 success=success,
