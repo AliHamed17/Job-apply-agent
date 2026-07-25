@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - exercised in dependency-light smokes
             for name in metric_names
         ).encode()
 
+
 from api.routes.ab_testing import router as ab_testing_router
 from api.routes.analytics import router as analytics_router
 from api.routes.applications import router as applications_router
@@ -81,13 +82,33 @@ from db.session import init_db
 setup_logging()
 logger = structlog.get_logger(__name__)
 
+_PUBLIC_READ_PATHS = frozenset(
+    {
+        "/",
+        "/health",
+        "/health/live",
+        "/health/ready",
+        "/metrics",
+        "/openapi.json",
+        "/favicon.ico",
+    }
+)
+_PUBLIC_READ_PREFIXES = ("/static", "/docs", "/redoc")
+
+
+def _is_public_read(request: Request) -> bool:
+    """Return whether a dependency probe or static UI request is read-only."""
+    if request.method not in {"GET", "HEAD"}:
+        return False
+    path = request.url.path
+    return path in _PUBLIC_READ_PATHS or path.startswith(_PUBLIC_READ_PREFIXES)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings.validate_runtime()
     init_db()
-    logger.info(
-        "app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply
-    )
+    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
     yield
 
 
@@ -113,8 +134,9 @@ app.add_middleware(
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """Redis-backed rate limiting, consistent across API processes."""
-    # Skip rate limiting for webhook (Meta sends bursts)
-    if request.url.path.startswith("/webhook"):
+    # Signed webhooks can arrive in bursts. Public probes and static dashboard
+    # assets must remain observable when Redis is the dependency that is down.
+    if request.url.path.startswith("/webhook") or _is_public_read(request):
         return await call_next(request)
 
     peer_ip = request.client.host if request.client else "unknown"
@@ -126,9 +148,7 @@ async def rate_limit_middleware(request: Request, call_next):
     if client_ip == "127.0.0.1":
         return await call_next(request)
     try:
-        allowed = rate_limit_allowed(
-            client_ip, settings.rate_limit_requests_per_minute, settings
-        )
+        allowed = rate_limit_allowed(client_ip, settings.rate_limit_requests_per_minute, settings)
     except Exception:
         logger.exception("rate_limit_backend_unavailable")
         if settings.app_env == "production":
@@ -162,18 +182,7 @@ async def auth_middleware(request: Request, call_next):
 
     Exempt: signed webhook, liveness, metrics, and API documentation.
     """
-    exempt_paths = {
-        "/webhook/whatsapp",
-        "/health",
-        "/health/live",
-        "/metrics",
-        "/docs",
-        "/openapi.json",
-        "/redoc",
-        "/static",
-        "/favicon.ico",
-    }
-    if request.url.path == "/" or any(request.url.path.startswith(p) for p in exempt_paths):
+    if request.url.path == "/webhook/whatsapp" or _is_public_read(request):
         return await call_next(request)
 
     if settings.app_env == "development" and settings.secret_key == "change-me":
@@ -201,6 +210,7 @@ async def auth_middleware(request: Request, call_next):
 async def correlation_id_middleware(request: Request, call_next):
     """Attach a correlation ID to every request for log tracing."""
     import structlog.contextvars
+
     correlation_id = request.headers.get("X-Correlation-ID", new_correlation_id())
     structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
     response = await call_next(request)
@@ -256,16 +266,6 @@ app.include_router(skill_gaps_router, prefix="/api")
 app.include_router(whatsapp_ingest_router, prefix="/api")
 
 
-
-
-
-
-
-
-
-
-
-
 # ── Static and Templates ─────────────────────────────────
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -274,6 +274,7 @@ os.makedirs(templates_dir, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates = Jinja2Templates(directory=templates_dir)
+
 
 # ── Health + Metrics ─────────────────────────────────────
 @app.get("/health")
@@ -296,6 +297,7 @@ async def health_ready():
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
     return templates.TemplateResponse(request, "index.html")
+
 
 @app.get("/metrics")
 async def metrics():
