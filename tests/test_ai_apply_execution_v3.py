@@ -1,7 +1,10 @@
+from profile.models import Personal, Resume, UserProfile
+
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from api.routes import dry_run as dry_run_route
 from db.models import Application, Job, JobStatus
 from db.session import get_session_factory
 from submitters.captcha_detector import detect_security_challenges
@@ -23,7 +26,16 @@ def test_captcha_detector():
     assert rep_cf.challenge_type == "cloudflare"
 
 
-def test_dry_run_endpoint(client, auth_headers):
+def test_dry_run_endpoint(client, auth_headers, monkeypatch):
+    profile = UserProfile(
+        personal=Personal(
+            name="Test Candidate",
+            email="candidate@example.test",
+            phone="+10000000000",
+        ),
+        resume=Resume(text="Sanitized test resume"),
+    )
+    monkeypatch.setattr(dry_run_route, "get_profile", lambda: profile)
     db_session = get_session_factory()()
     try:
         job = Job(

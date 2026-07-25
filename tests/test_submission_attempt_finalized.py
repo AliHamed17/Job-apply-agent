@@ -19,6 +19,7 @@ Only reachable with draft_only=False, which is why the suite never caught it.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -35,6 +36,7 @@ from db.models import (
     SubmissionStatus,
 )
 from submitters.base import SubmissionResult
+from submitters.platforms import QualificationTier, adapter_for_url
 
 
 def _factory(tmp_path):
@@ -84,6 +86,15 @@ def _settings(**kw):
     )
 
 
+def _live_qualified_descriptor(url):
+    descriptor = adapter_for_url(url)
+    assert descriptor is not None
+    return replace(
+        descriptor,
+        qualification=QualificationTier.LIVE_CANARY_QUALIFIED,
+    )
+
+
 @pytest.mark.parametrize(
     ("submit_result", "expected_status"),
     [
@@ -94,6 +105,7 @@ def _settings(**kw):
                 status="submitted",
                 confirmation_id="abc123",
                 confirmation_url="https://boards.greenhouse.io/confirm/abc123",
+                reason_code="EMPLOYER_VERIFIED",
             ),
             SubmissionStatus.SUCCESS,
         ),
@@ -125,7 +137,12 @@ def test_claimed_submission_row_is_finalized(tmp_path, submit_result, expected_s
     with (
         patch("worker.tasks.get_session_factory", return_value=factory),
         patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("worker.tasks._validated_submit_command_available", return_value=True),
         patch("profile.loader.get_profile"),
+        patch(
+            "submitters.platforms.adapter_for_url",
+            side_effect=_live_qualified_descriptor,
+        ),
         patch(
             "submitters.greenhouse.GreenhouseSubmitter.submit",
             new=AsyncMock(return_value=submit_result),
@@ -160,12 +177,18 @@ def test_successful_submission_persists_confirmation(tmp_path):
         status="submitted",
         confirmation_id="conf-42",
         confirmation_url="https://boards.greenhouse.io/confirm/conf-42",
+        reason_code="EMPLOYER_VERIFIED",
     )
 
     with (
         patch("worker.tasks.get_session_factory", return_value=factory),
         patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("worker.tasks._validated_submit_command_available", return_value=True),
         patch("profile.loader.get_profile"),
+        patch(
+            "submitters.platforms.adapter_for_url",
+            side_effect=_live_qualified_descriptor,
+        ),
         patch(
             "submitters.greenhouse.GreenhouseSubmitter.submit",
             new=AsyncMock(return_value=ok),
@@ -181,6 +204,57 @@ def test_successful_submission_persists_confirmation(tmp_path):
     assert row.confirmation_url == "https://boards.greenhouse.io/confirm/conf-42"
     assert row.submitted_at is not None
     assert row.submitter_name == "greenhouse"
+    db.close()
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "confirmation_url"),
+    [
+        ("SUBMITTED", "https://boards.greenhouse.io/thank-you"),
+        ("EMPLOYER_VERIFIED", "   "),
+    ],
+)
+def test_submit_success_without_valid_employer_evidence_becomes_unknown(
+    tmp_path,
+    reason_code,
+    confirmation_url,
+):
+    factory = _factory(tmp_path)
+    app_id = _approved_application(factory)
+    unverified = SubmissionResult(
+        success=True,
+        platform="greenhouse",
+        status="submitted",
+        confirmation_url=confirmation_url,
+        reason_code=reason_code,
+    )
+
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("worker.tasks._validated_submit_command_available", return_value=True),
+        patch("profile.loader.get_profile"),
+        patch(
+            "submitters.platforms.adapter_for_url",
+            side_effect=_live_qualified_descriptor,
+        ),
+        patch(
+            "submitters.greenhouse.GreenhouseSubmitter.submit",
+            new=AsyncMock(return_value=unverified),
+        ),
+    ):
+        from worker.tasks import submit_application_task
+
+        submit_application_task.apply(args=[app_id])
+
+    db = factory()
+    row = db.query(Submission).filter(Submission.application_id == app_id).one()
+    application = db.get(Application, app_id)
+    assert row.status == SubmissionStatus.UNKNOWN
+    assert row.reason_code == "FINAL_ACTION_UNCONFIRMED"
+    assert row.submitted_at is None
+    assert application.status == JobStatus.NEEDS_REVIEW
+    assert application.job.status == JobStatus.NEEDS_REVIEW
     db.close()
 
 

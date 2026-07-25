@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from core.application_state import prepared_application_count
+from core.submission_truth import latest_employer_verified_count
 from db.models import Application, JobStatus
 from db.session import get_db
 
@@ -24,16 +26,11 @@ class WidgetSummaryResponse(BaseModel):
 async def get_widget_summary(db: Session = Depends(get_db)):
     """Return compact mobile widget summary payload."""
     total = db.query(Application).count()
-    approved = db.query(Application).filter(Application.status == JobStatus.APPROVED).count()
+    approved = prepared_application_count(db)
     review = db.query(Application).filter(Application.status == JobStatus.NEEDS_REVIEW).count()
-    submitted = db.query(Application).filter(Application.status == JobStatus.SUBMITTED).count()
+    submitted = latest_employer_verified_count(db)
 
-    recent_apps = (
-        db.query(Application)
-        .order_by(Application.created_at.desc())
-        .limit(5)
-        .all()
-    )
+    recent_apps = db.query(Application).order_by(Application.created_at.desc()).limit(5).all()
 
     actions = [
         {

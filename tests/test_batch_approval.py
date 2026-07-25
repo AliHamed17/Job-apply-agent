@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api.routes import applications as applications_route
 from core.config import Settings
-from db.models import Application, ApplicationEvent, Base, Job, JobStatus
+from db.models import Application, ApplicationEvent, Base, Job, JobStatus, Submission
 from db.session import get_db
 from worker.batch_runner import trigger_batch_auto_apply
 
@@ -79,9 +79,7 @@ def _client(factory, settings, monkeypatch):
 
     app.dependency_overrides[get_db] = override_db
     monkeypatch.setattr(applications_route, "get_settings", lambda: settings)
-    queued: list[int] = []
-    monkeypatch.setattr(applications_route, "_queue_submission", queued.append)
-    return TestClient(app), queued
+    return TestClient(app)
 
 
 def test_batch_preview_is_read_only(tmp_path):
@@ -99,7 +97,7 @@ def test_batch_preview_is_read_only(tmp_path):
     check.close()
 
 
-def test_exact_batch_approval_records_provenance_and_queues(
+def test_exact_batch_preparation_records_provenance_without_queueing(
     tmp_path,
     monkeypatch,
 ):
@@ -111,29 +109,69 @@ def test_exact_batch_approval_records_provenance_and_queues(
         cv_routing_path=str(config),
         cv_directory=str(cv_dir),
     )
-    client, queued = _client(factory, settings, monkeypatch)
+    client = _client(factory, settings, monkeypatch)
 
     response = client.post(
-        "/api/applications/batch-approve",
+        "/api/applications/batch-prepare",
         json={
             "application_ids": [application_id],
             "acknowledgement": "APPROVE_SELECTED_APPLICATIONS",
         },
     )
-    assert response.status_code == 200
-    assert response.json()["queued_application_ids"] == [application_id]
-    assert queued == [application_id]
+    assert response.status_code == 202
+    assert response.json()["prepared_application_ids"] == [application_id]
+    assert response.json()["queued_application_ids"] == []
+    repeated = client.post(
+        "/api/applications/batch-approve",
+        json={
+            "application_ids": [application_id],
+            "acknowledgement": "PREPARE_SELECTED_APPLICATIONS",
+        },
+    )
+    assert repeated.status_code == 409
 
     db = factory()
     application = db.get(Application, application_id)
-    assert application.status == JobStatus.APPROVED
-    assert application.approval_source == "batch"
+    assert application.status == JobStatus.DRAFT
+    assert application.approval_source == "batch_prepare"
+    assert db.query(Submission).count() == 0
     event = (
         db.query(ApplicationEvent).filter(ApplicationEvent.application_id == application_id).one()
     )
-    assert event.event_type == "application_approved"
+    assert event.event_type == "application_prepared"
     assert event.actor == "batch_operator"
-    assert "batch" in (event.details or "")
+    assert "batch_prepare" in (event.details or "")
+    summary = trigger_batch_auto_apply(db, min_score=80, max_batch_size=10)
+    assert summary.application_ids == []
+    db.close()
+
+
+def test_legacy_approve_alias_prepares_without_creating_attempt(
+    tmp_path,
+    monkeypatch,
+):
+    factory = _factory(tmp_path)
+    config, cv_dir = _routing_files(tmp_path)
+    application_id = _draft(factory)
+    settings = Settings(
+        _env_file=None,
+        cv_routing_path=str(config),
+        cv_directory=str(cv_dir),
+    )
+    client = _client(factory, settings, monkeypatch)
+    response = client.post(
+        f"/api/applications/{application_id}/approve",
+    )
+
+    assert response.status_code == 202
+    assert response.json()["state"] == "prepared"
+    assert response.json()["attempt_id"] is None
+    assert response.json()["verified"] is False
+    db = factory()
+    application = db.get(Application, application_id)
+    assert application.status == JobStatus.DRAFT
+    assert application.approval_source == "manual_prepare"
+    assert db.query(Submission).count() == 0
     db.close()
 
 
@@ -150,7 +188,7 @@ def test_batch_approval_is_atomic_when_one_application_is_invalid(
         cv_routing_path=str(config),
         cv_directory=str(cv_dir),
     )
-    client, queued = _client(factory, settings, monkeypatch)
+    client = _client(factory, settings, monkeypatch)
 
     response = client.post(
         "/api/applications/batch-approve",
@@ -160,7 +198,6 @@ def test_batch_approval_is_atomic_when_one_application_is_invalid(
         },
     )
     assert response.status_code == 409
-    assert queued == []
 
     db = factory()
     assert db.get(Application, valid_id).status == JobStatus.DRAFT

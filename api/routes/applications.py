@@ -14,7 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
-from db.models import Application, JobStatus, SubmissionStatus
+from core.submission_truth import is_employer_verified
+from db.models import Application, JobStatus, Submission, SubmissionStatus
 from db.session import get_db
 from submitters.platforms import detect_platform
 
@@ -23,9 +24,11 @@ router = APIRouter(tags=["applications"])
 
 
 class SubmissionAttemptResponse(BaseModel):
+    id: int
     attempt_number: int
     idempotency_key: str
     status: str
+    verified: bool
     platform: str
     reason_code: str | None
     started_at: str | None
@@ -64,6 +67,7 @@ class ApplicationResponse(BaseModel):
     submission_confirmation_url: str | None = None
     submission_error: str | None = None
     submitted_at: str | None = None
+    submission_verified: bool = False
     attempts: list[SubmissionAttemptResponse] = Field(default_factory=list)
     selected_cv_id: str | None = None
     profile_version: int | None = None
@@ -80,22 +84,34 @@ class ApplicationResponse(BaseModel):
 class ApproveResponse(BaseModel):
     message: str
     application_id: int
+    state: str
     status: str
+    verified: bool = False
+    attempt_id: int | None = None
+    status_url: str | None = None
 
 
 class ReconcileRequest(BaseModel):
     outcome: str
     note: str = Field(min_length=3, max_length=500)
+    source: Literal["candidate_portal", "email", "manual_check"] = "manual_check"
+    reference: str | None = Field(default=None, max_length=500)
 
 
 class BatchApproveRequest(BaseModel):
     application_ids: list[int] = Field(min_length=1, max_length=50)
-    acknowledgement: Literal["APPROVE_SELECTED_APPLICATIONS"]
+    acknowledgement: Literal[
+        "PREPARE_SELECTED_APPLICATIONS",
+        "APPROVE_SELECTED_APPLICATIONS",
+    ]
 
 
 class BatchApproveResponse(BaseModel):
     message: str
+    prepared_application_ids: list[int] = Field(default_factory=list)
+    # Compatibility fields retained while older dashboard builds are retired.
     queued_application_ids: list[int] = Field(default_factory=list)
+    failed_application_ids: list[int] = Field(default_factory=list)
 
 
 def _json_dict(value: str | None) -> dict:
@@ -115,15 +131,20 @@ def _json_list(value: str | None) -> list:
 
 
 def _attempt_response(attempt) -> SubmissionAttemptResponse:
+    verified = is_employer_verified(attempt)
     return SubmissionAttemptResponse(
+        id=attempt.id,
         attempt_number=attempt.attempt_number,
         idempotency_key=attempt.idempotency_key,
         status=attempt.status.value,
+        verified=verified,
         platform=attempt.submitter_name,
         reason_code=attempt.reason_code,
         started_at=attempt.started_at.isoformat() if attempt.started_at else None,
         finished_at=attempt.finished_at.isoformat() if attempt.finished_at else None,
-        submitted_at=attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+        submitted_at=(
+            attempt.submitted_at.isoformat() if verified and attempt.submitted_at else None
+        ),
         selected_cv_id=attempt.selected_cv_id,
         profile_version=attempt.profile_version,
         confirmation_id=attempt.confirmation_id,
@@ -184,14 +205,49 @@ def _validate_selected_cv(app: Application) -> None:
         raise HTTPException(status_code=409, detail="Selected CV file is unavailable.")
 
 
-def _queue_submission(application_id: int) -> None:
-    from worker.tasks import submit_application_task
+def _prepare_response(application_id: int) -> ApproveResponse:
+    return ApproveResponse(
+        message="Application prepared for review; no submission was queued.",
+        application_id=application_id,
+        state="prepared",
+        status="prepared",
+        verified=False,
+        attempt_id=None,
+        status_url=None,
+    )
 
-    settings = get_settings()
-    if settings.tasks_always_eager:
-        submit_application_task.apply(args=[application_id])
-    else:
-        submit_application_task.delay(application_id)
+
+def _record_prepared(
+    db: Session,
+    app: Application,
+    *,
+    actor: str,
+    source: str,
+    event_type: str = "application_prepared",
+) -> None:
+    """Record operator review without making the application worker-eligible."""
+    app.status = JobStatus.DRAFT
+    app.approved_at = datetime.now(UTC).replace(tzinfo=None)
+    app.approval_source = source
+    if app.job:
+        app.job.status = JobStatus.DRAFT
+
+    from core.application_audit import record_application_event
+
+    record_application_event(
+        db,
+        app.id,
+        event_type,
+        actor=actor,
+        details={
+            "approval_source": source,
+            "selected_cv_id": app.selected_cv_id,
+            "profile_version": app.profile_version,
+            "state": "prepared",
+            "external_action_queued": False,
+        },
+    )
+    db.commit()
 
 
 @router.get("/applications", response_model=list[ApplicationResponse])
@@ -234,7 +290,12 @@ async def list_applications(
                 submission_platform=submission.submitter_name if submission else None,
                 submission_confirmation_url=submission.confirmation_url if submission else None,
                 submission_error=submission.error_message if submission else None,
-                submitted_at=submission.created_at.isoformat() if submission else None,
+                submitted_at=(
+                    submission.submitted_at.isoformat()
+                    if submission and is_employer_verified(submission)
+                    else None
+                ),
+                submission_verified=is_employer_verified(submission),
                 attempts=_attempt_history(app),
                 selected_cv_id=app.selected_cv_id,
                 profile_version=app.profile_version,
@@ -279,7 +340,12 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         submission_platform=submission.submitter_name if submission else None,
         submission_confirmation_url=submission.confirmation_url if submission else None,
         submission_error=submission.error_message if submission else None,
-        submitted_at=submission.created_at.isoformat() if submission else None,
+        submitted_at=(
+            submission.submitted_at.isoformat()
+            if submission and is_employer_verified(submission)
+            else None
+        ),
+        submission_verified=is_employer_verified(submission),
         attempts=_attempt_history(app),
         selected_cv_id=app.selected_cv_id,
         profile_version=app.profile_version,
@@ -294,61 +360,67 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/applications/{app_id}/approve", response_model=ApproveResponse)
+@router.post(
+    "/applications/{app_id}/prepare",
+    response_model=ApproveResponse,
+    status_code=202,
+)
+@router.post(
+    "/applications/{app_id}/approve",
+    response_model=ApproveResponse,
+    status_code=202,
+    deprecated=True,
+)
 async def approve_application(app_id: int, db: Session = Depends(get_db)):
-    """Approve an application and enqueue for submission."""
+    """Prepare an application without queueing or performing an external action."""
     app = db.query(Application).filter(Application.id == app_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    if app.status == JobStatus.APPROVED:
-        return ApproveResponse(
-            message="Already approved",
-            application_id=app.id,
-            status="approved",
+    if app.status in (JobStatus.SUBMITTED, JobStatus.SKIPPED):
+        raise HTTPException(
+            status_code=409,
+            detail="A terminal application cannot be prepared.",
         )
+    if app.status not in (JobStatus.DRAFT, JobStatus.APPROVED):
+        raise HTTPException(
+            status_code=409,
+            detail="Only a reviewable draft can be prepared.",
+        )
+    if (
+        app.status == JobStatus.DRAFT
+        and app.approved_at is not None
+        and app.approval_source in {"manual_prepare", "batch_prepare", "retry_prepare"}
+    ):
+        return _prepare_response(app.id)
     _validate_selected_cv(app)
-
-    app.status = JobStatus.APPROVED
-    app.approved_at = datetime.now(UTC).replace(tzinfo=None)
-    app.approval_source = "manual"
-
-    job = app.job
-    if job:
-        job.status = JobStatus.APPROVED
-
-    from core.application_audit import record_application_event
-
-    record_application_event(
+    _record_prepared(
         db,
-        app.id,
-        "application_approved",
+        app,
         actor="operator",
-        details={
-            "approval_source": "manual",
-            "selected_cv_id": app.selected_cv_id,
-            "profile_version": app.profile_version,
-            "state": "approved",
-        },
-    )
-    db.commit()
-
-    _queue_submission(app.id)
-
-    logger.info("application_approved_via_api", app_id=app.id)
-    return ApproveResponse(
-        message="Approved and queued for submission",
-        application_id=app.id,
-        status="approved",
+        source="manual_prepare",
     )
 
+    logger.info("application_prepared_via_api", app_id=app.id)
+    return _prepare_response(app.id)
 
-@router.post("/applications/batch-approve", response_model=BatchApproveResponse)
+
+@router.post(
+    "/applications/batch-prepare",
+    response_model=BatchApproveResponse,
+    status_code=202,
+)
+@router.post(
+    "/applications/batch-approve",
+    response_model=BatchApproveResponse,
+    status_code=202,
+    deprecated=True,
+)
 async def batch_approve_applications(
     payload: BatchApproveRequest,
     db: Session = Depends(get_db),
 ):
-    """Approve an exact reviewed set and queue each application once."""
+    """Prepare an exact reviewed set without queueing any external action."""
     application_ids = list(dict.fromkeys(payload.application_ids))
     apps = db.query(Application).filter(Application.id.in_(application_ids)).all()
     by_id = {app.id: app for app in apps}
@@ -358,7 +430,7 @@ async def batch_approve_applications(
 
     for application_id in application_ids:
         app = by_id[application_id]
-        if app.status != JobStatus.DRAFT:
+        if app.status != JobStatus.DRAFT or app.approved_at is not None:
             raise HTTPException(
                 status_code=409,
                 detail=f"Application {application_id} is not a reviewable draft.",
@@ -370,37 +442,54 @@ async def batch_approve_applications(
 
     for application_id in application_ids:
         app = by_id[application_id]
-        app.status = JobStatus.APPROVED
         app.approved_at = now
-        app.approval_source = "batch"
+        app.approval_source = "batch_prepare"
         if app.job:
-            app.job.status = JobStatus.APPROVED
+            app.job.status = JobStatus.DRAFT
         record_application_event(
             db,
             app.id,
-            "application_approved",
+            "application_prepared",
             actor="batch_operator",
             details={
-                "approval_source": "batch",
+                "approval_source": "batch_prepare",
                 "selected_cv_id": app.selected_cv_id,
                 "profile_version": app.profile_version,
-                "state": "approved",
+                "state": "prepared",
+                "external_action_queued": False,
             },
         )
     db.commit()
 
-    for application_id in application_ids:
-        _queue_submission(application_id)
-
     return BatchApproveResponse(
-        message="Selected applications approved and queued.",
-        queued_application_ids=application_ids,
+        message=f"{len(application_ids)} application(s) prepared; nothing was queued.",
+        prepared_application_ids=application_ids,
     )
 
 
-@router.post("/applications/{app_id}/retry")
+@router.post("/applications/{app_id}/submit", status_code=409)
+async def submit_application(app_id: int, db: Session = Depends(get_db)):
+    """Fail closed until the permit-backed submission command exists."""
+    if db.get(Application, app_id) is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "SUBMIT_PERMIT_REQUIRED",
+            "message": (
+                "Final submission is unavailable until a verified form plan and permit exist."
+            ),
+        },
+    )
+
+
+@router.post(
+    "/applications/{app_id}/retry",
+    response_model=ApproveResponse,
+    status_code=202,
+)
 async def retry_application(app_id: int, db: Session = Depends(get_db)):
-    """Create a new attempt only after a definitive failed/draft outcome."""
+    """Prepare a definitively retryable application; sending remains explicit."""
     app = db.query(Application).filter(Application.id == app_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
@@ -414,30 +503,36 @@ async def retry_application(app_id: int, db: Session = Depends(get_db)):
             status_code=409,
             detail="Only definitively failed or draft-only attempts may be retried.",
         )
-    app.status = JobStatus.APPROVED
-    app.approved_at = datetime.now(UTC).replace(tzinfo=None)
-    app.approval_source = "retry"
-    if app.job:
-        app.job.status = JobStatus.APPROVED
-    from core.application_audit import record_application_event
-
-    record_application_event(
+    _validate_selected_cv(app)
+    _record_prepared(
         db,
-        app.id,
-        "submission_retry_approved",
+        app,
         actor="operator",
-        details={
-            "approval_source": "retry",
-            "attempt_number": latest.attempt_number,
-            "state": "approved",
-        },
+        source="retry_prepare",
+        event_type="submission_retry_prepared",
     )
-    db.commit()
 
-    _queue_submission(app.id)
+    logger.info(
+        "application_retry_prepared",
+        app_id=app.id,
+        previous_attempt_number=latest.attempt_number,
+    )
+    return _prepare_response(app.id)
 
-    logger.info("application_retry_queued", app_id=app.id)
-    return {"message": "Re-queued for submission", "application_id": app.id}
+
+@router.get(
+    "/submission-attempts/{attempt_id}",
+    response_model=SubmissionAttemptResponse,
+)
+async def get_submission_attempt(
+    attempt_id: int,
+    db: Session = Depends(get_db),
+):
+    """Return the durable attempt state used by truthful dashboard polling."""
+    attempt = db.query(Submission).filter(Submission.id == attempt_id).first()
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="Submission attempt not found")
+    return _attempt_response(attempt)
 
 
 @router.post("/applications/{app_id}/reconcile")
@@ -457,12 +552,21 @@ async def reconcile_application(
 
     now = datetime.now(UTC).replace(tzinfo=None)
     attempt.reconciled_at = now
-    attempt.reconciliation_note = payload.note
+    reconciliation = {
+        "source": payload.source,
+        "reference": payload.reference,
+        "note": payload.note,
+    }
+    attempt.reconciliation_note = json.dumps(
+        reconciliation,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     attempt.finished_at = now
     if payload.outcome == "confirmed_submitted":
         attempt.status = SubmissionStatus.SUCCESS
-        attempt.reason_code = "RECONCILED_SUBMITTED"
-        attempt.submitted_at = now
+        attempt.reason_code = "OPERATOR_CONFIRMED_SUBMITTED"
+        attempt.submitted_at = None
         app.status = JobStatus.SUBMITTED
         if app.job:
             app.job.status = JobStatus.SUBMITTED
@@ -482,6 +586,7 @@ async def reconcile_application(
         details={
             "attempt_number": attempt.attempt_number,
             "reason_code": attempt.reason_code,
+            "verification_kind": "operator_confirmed",
             "state": attempt.status.value,
         },
     )
@@ -490,6 +595,8 @@ async def reconcile_application(
         "message": "Submission attempt reconciled",
         "application_id": app.id,
         "outcome": payload.outcome,
+        "verified": False,
+        "verification_kind": "operator_confirmed",
     }
 
 

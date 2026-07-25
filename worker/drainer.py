@@ -59,27 +59,9 @@ def expire_stale_jobs(db, now: datetime, ttl_days: int) -> int:
 
 @shared_task(name="worker.drainer.drain_apply_queue_task")
 def drain_apply_queue_task() -> int:
-    from core.governor import get_governor  # noqa: PLC0415
-    from db.session import get_session_factory  # noqa: PLC0415
-    from worker.tasks import submit_application_task  # noqa: PLC0415
-
-    gov = get_governor()
-    # can_apply_linkedin() = can_act() + the inter-action gap, so the drainer
-    # honours the configured random gap between Easy Apply submissions instead
-    # of firing on every 5-min beat tick.
-    ok, reason = gov.can_apply_linkedin()
-    if not ok:
-        logger.info("drain_skipped", reason=reason)
-        return 0
-    db = get_session_factory()()
-    try:
-        app_id = select_next_application(db)
-        if app_id is None:
-            return 0
-        submit_application_task.apply(args=[app_id])  # governor.record_application in submit path
-        return 1
-    finally:
-        db.close()
+    """Do not dispatch legacy approved rows without a one-use submit permit."""
+    logger.info("drain_skipped", reason="SUBMIT_PERMIT_REQUIRED")
+    return 0
 
 
 @shared_task(name="worker.drainer.expire_stale_jobs_task")

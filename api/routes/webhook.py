@@ -3,7 +3,7 @@
 Handles:
 - GET  /webhook/whatsapp — Meta verification challenge
 - POST /webhook/whatsapp — Incoming messages + interactive button replies
-                           (approve_, skip_, edit_ actions)
+                           (legacy approve_, skip_, edit_ actions)
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -197,7 +197,7 @@ async def _send_approval_buttons(
     score: float,
     settings: Settings,
 ) -> None:
-    """Send an interactive approval message with approve/skip/edit buttons."""
+    """Send an interactive preparation message with prepare/skip/edit buttons."""
     if not settings.whatsapp_api_token:
         return
     try:
@@ -222,7 +222,10 @@ async def _send_approval_buttons(
                             "buttons": [
                                 {
                                     "type": "reply",
-                                    "reply": {"id": f"approve_{job_id}", "title": "✅ Approve"},
+                                    "reply": {
+                                        "id": f"approve_{job_id}",
+                                        "title": "📝 Prepare",
+                                    },
                                 },
                                 {
                                     "type": "reply",
@@ -246,7 +249,7 @@ async def _send_approval_buttons(
 
 
 async def _handle_approve(job_id: int, sender: str, db: Session, settings: Settings) -> None:
-    """Handle approve_ action: mark application as approved and enqueue submission."""
+    """Handle the legacy approve action as preparation only."""
     app = db.query(Application).filter(Application.job_id == job_id).first()
     if not app:
         await _send_whatsapp_message(
@@ -256,8 +259,19 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
         )
         return
 
-    if app.status == JobStatus.APPROVED:
-        await _send_whatsapp_message(sender, "ℹ️ Already approved.", settings)
+    if (
+        app.status == JobStatus.DRAFT
+        and app.approved_at is not None
+        and app.approval_source == "whatsapp_prepare"
+    ):
+        await _send_whatsapp_message(sender, "ℹ️ Already prepared.", settings)
+        return
+    if app.status not in (JobStatus.DRAFT, JobStatus.APPROVED):
+        await _send_whatsapp_message(
+            sender,
+            "⚠️ This application requires dashboard review or reconciliation.",
+            settings,
+        )
         return
     if not app.selected_cv_id:
         await _send_whatsapp_message(
@@ -267,44 +281,40 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
         )
         return
 
-    app.status = JobStatus.APPROVED
-    app.approved_at = datetime.utcnow()
-    app.approval_source = "whatsapp"
+    app.status = JobStatus.DRAFT
+    app.approved_at = datetime.now(UTC).replace(tzinfo=None)
+    app.approval_source = "whatsapp_prepare"
 
     job = db.query(Job).filter(Job.id == job_id).first()
     if job:
-        job.status = JobStatus.APPROVED
+        job.status = JobStatus.DRAFT
 
     from core.application_audit import record_application_event
 
     record_application_event(
         db,
         app.id,
-        "application_approved",
+        "application_prepared",
         actor="whatsapp_operator",
         details={
-            "approval_source": "whatsapp",
+            "approval_source": "whatsapp_prepare",
             "selected_cv_id": app.selected_cv_id,
             "profile_version": app.profile_version,
-            "state": "approved",
+            "state": "prepared",
+            "external_action_queued": False,
         },
     )
     db.commit()
 
-    # Enqueue submission
-    from worker.tasks import submit_application_task
-
-    submit_application_task.delay(app.id)
-
     await _send_whatsapp_message(
         sender,
         (
-            f"✅ Approved! Application for *{job.title if job else 'Unknown'}* "
-            "has been queued for submission."
+            f"ℹ️ Application for *{job.title if job else 'Unknown'}* was prepared. "
+            "Nothing was submitted. Final Send is available only from the reviewed dashboard."
         ),
         settings,
     )
-    logger.info("application_approved_via_whatsapp", job_id=job_id)
+    logger.info("application_prepared_via_whatsapp", job_id=job_id)
 
 
 async def _handle_skip(job_id: int, sender: str, db: Session, settings: Settings) -> None:
@@ -353,7 +363,7 @@ async def _handle_edit(job_id: int, sender: str, db: Session, settings: Settings
         f"✏️ *Application for {job.title} at {job.company}*\n\n"
         f"*Cover Letter:*\n{(app.cover_letter or '')[:1000]}\n\n"
         f"*Recruiter Message:*\n{(app.recruiter_message or '')[:500]}\n\n"
-        f"Reply with 'approve_{job_id}' to approve or 'skip_{job_id}' to skip."
+        f"Reply with 'approve_{job_id}' to prepare or 'skip_{job_id}' to skip."
     )
     await _send_whatsapp_message(sender, preview, settings)
     logger.info("application_edit_preview_sent", job_id=job_id)

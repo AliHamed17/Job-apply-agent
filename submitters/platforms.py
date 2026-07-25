@@ -1,21 +1,181 @@
-"""Deterministic ATS/platform detection shared by routing and the dashboard."""
+"""Versioned ATS registry shared by detection and submission routing.
+
+An adapter existing in the codebase is not evidence that it is safe for live
+use.  The qualification tier in this registry is the authoritative live-action
+gate.  URL detection and qualification intentionally share the same immutable
+descriptors so they cannot drift into two different platform inventories.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from types import MappingProxyType
 from urllib.parse import urlparse
 
-_PLATFORM_DOMAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("workday", ("myworkdayjobs.com", "myworkday.com", "workday.com")),
-    ("greenhouse", ("greenhouse.io", "greenhouse-hosted.com")),
-    ("lever", ("jobs.lever.co", "lever.co")),
-    ("ashby", ("jobs.ashbyhq.com", "ashbyhq.com")),
-    ("workable", ("apply.workable.com", "workable.com")),
-    ("smartrecruiters", ("jobs.smartrecruiters.com", "smartrecruiters.com")),
-    ("jobvite", ("jobs.jobvite.com", "jobvite.com")),
-    ("icims", ("icims.com",)),
-    ("comeet", ("comeet.com",)),
-    ("linkedin", ("linkedin.com",)),
-    ("indeed", ("indeed.com",)),
+
+class QualificationTier(StrEnum):
+    """Evidence level reached by one exact adapter version."""
+
+    DISABLED = "disabled"
+    DRY_RUN_ONLY = "dry_run_only"
+    FIXTURE_QUALIFIED = "fixture_qualified"
+    DRY_RUN_QUALIFIED = "dry_run_qualified"
+    LIVE_CANARY_QUALIFIED = "live_canary_qualified"
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterDescriptor:
+    """Immutable identity and qualification policy for an ATS adapter."""
+
+    platform: str
+    adapter_version: str
+    selector_version: str
+    transport: str
+    authentication_mode: str
+    supported_controls: tuple[str, ...]
+    qualification: QualificationTier
+    qualified_form_scope: tuple[str, ...]
+    domains: tuple[str, ...]
+
+    @property
+    def allows_live_submission(self) -> bool:
+        """Only a completed live canary qualifies an external final action."""
+        return self.qualification is QualificationTier.LIVE_CANARY_QUALIFIED
+
+
+_COMMON_CONTROLS = ("text", "textarea", "select", "radio", "checkbox", "file")
+
+# PR1 deliberately qualifies no adapter for live use.  The first five planned
+# ATS families remain available for safe inspection/dry-run work; legacy
+# adapters are disabled until they receive their own fixture and canary program.
+_ADAPTERS: tuple[AdapterDescriptor, ...] = (
+    AdapterDescriptor(
+        platform="workday",
+        adapter_version="1.0.0",
+        selector_version="workday-candidate-v1",
+        transport="browser",
+        authentication_mode="persistent_profile",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DRY_RUN_ONLY,
+        qualified_form_scope=(),
+        domains=("myworkdayjobs.com", "myworkday.com", "workday.com"),
+    ),
+    AdapterDescriptor(
+        platform="greenhouse",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="legacy_hybrid",
+        authentication_mode="optional_api_key",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DRY_RUN_ONLY,
+        qualified_form_scope=(),
+        domains=("greenhouse.io", "greenhouse-hosted.com"),
+    ),
+    AdapterDescriptor(
+        platform="lever",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="legacy_hybrid",
+        authentication_mode="optional_api_key",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DRY_RUN_ONLY,
+        qualified_form_scope=(),
+        domains=("jobs.lever.co", "lever.co"),
+    ),
+    AdapterDescriptor(
+        platform="ashby",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="legacy_hybrid",
+        authentication_mode="public_candidate_flow",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DRY_RUN_ONLY,
+        qualified_form_scope=(),
+        domains=("jobs.ashbyhq.com", "ashbyhq.com"),
+    ),
+    AdapterDescriptor(
+        platform="workable",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="legacy_hybrid",
+        authentication_mode="public_candidate_flow",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DISABLED,
+        qualified_form_scope=(),
+        domains=("apply.workable.com", "workable.com"),
+    ),
+    AdapterDescriptor(
+        platform="smartrecruiters",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="legacy_hybrid",
+        authentication_mode="optional_oauth",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DRY_RUN_ONLY,
+        qualified_form_scope=(),
+        domains=("jobs.smartrecruiters.com", "smartrecruiters.com"),
+    ),
+    AdapterDescriptor(
+        platform="jobvite",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="legacy_hybrid",
+        authentication_mode="public_candidate_flow",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DISABLED,
+        qualified_form_scope=(),
+        domains=("jobs.jobvite.com", "jobvite.com"),
+    ),
+    AdapterDescriptor(
+        platform="icims",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="browser",
+        authentication_mode="public_candidate_flow",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DISABLED,
+        qualified_form_scope=(),
+        domains=("icims.com",),
+    ),
+    AdapterDescriptor(
+        platform="comeet",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="browser",
+        authentication_mode="public_candidate_flow",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DISABLED,
+        qualified_form_scope=(),
+        domains=("comeet.com", "comeet.co"),
+    ),
+    AdapterDescriptor(
+        platform="linkedin",
+        adapter_version="2.0.0",
+        selector_version="linkedin-easy-apply-v1",
+        transport="browser",
+        authentication_mode="persistent_profile",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DISABLED,
+        qualified_form_scope=(),
+        domains=("linkedin.com",),
+    ),
+    AdapterDescriptor(
+        platform="indeed",
+        adapter_version="0.1.0",
+        selector_version="legacy-v1",
+        transport="browser",
+        authentication_mode="persistent_profile",
+        supported_controls=_COMMON_CONTROLS,
+        qualification=QualificationTier.DISABLED,
+        qualified_form_scope=(),
+        domains=("indeed.com",),
+    ),
+)
+
+_ADAPTERS_BY_PLATFORM: Mapping[str, AdapterDescriptor] = MappingProxyType(
+    {descriptor.platform: descriptor for descriptor in _ADAPTERS}
 )
 
 
@@ -26,11 +186,27 @@ def _matches_domain(hostname: str, domain: str) -> bool:
 def detect_platform(url: str) -> str:
     """Return a stable platform name without performing network requests."""
     hostname = (urlparse((url or "").strip()).hostname or "").lower().rstrip(".")
-    for platform, domains in _PLATFORM_DOMAINS:
-        if any(_matches_domain(hostname, domain) for domain in domains):
-            return platform
+    for descriptor in _ADAPTERS:
+        if any(_matches_domain(hostname, domain) for domain in descriptor.domains):
+            return descriptor.platform
     return "generic_portal" if hostname else "unknown"
 
 
 def supported_platforms() -> list[str]:
-    return [platform for platform, _domains in _PLATFORM_DOMAINS]
+    """Return platforms with a registered adapter descriptor."""
+    return [descriptor.platform for descriptor in _ADAPTERS]
+
+
+def registered_adapters() -> tuple[AdapterDescriptor, ...]:
+    """Return the immutable adapter inventory in URL-detection order."""
+    return _ADAPTERS
+
+
+def adapter_for_platform(platform: str) -> AdapterDescriptor | None:
+    """Resolve an exact platform identifier to its versioned descriptor."""
+    return _ADAPTERS_BY_PLATFORM.get((platform or "").strip().lower())
+
+
+def adapter_for_url(url: str) -> AdapterDescriptor | None:
+    """Resolve a URL through the same detector used by ingestion and routing."""
+    return adapter_for_platform(detect_platform(url))

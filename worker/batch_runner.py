@@ -28,7 +28,10 @@ def trigger_batch_auto_apply(
     rows = (
         db.query(Application, Job)
         .join(Job, Application.job_id == Job.id)
-        .filter(Application.status == JobStatus.DRAFT)
+        .filter(
+            Application.status == JobStatus.DRAFT,
+            Application.approved_at.is_(None),
+        )
         .filter(Job.score >= min_score)
         .order_by(Job.score.desc())
         .limit(max_batch_size)

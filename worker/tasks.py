@@ -39,6 +39,11 @@ def _get_db():
     return factory()
 
 
+def _validated_submit_command_available(_db, _application_id: int) -> bool:
+    """Fail closed until PR2 adds a durable, permit-backed command lookup."""
+    return False
+
+
 # ── Task 1: Process a message ─────────────────────────────
 
 
@@ -527,7 +532,7 @@ def submit_application_task(self, application_id: int):
 
     from jobs.models import JobData
     from submitters.ashby import AshbySubmitter
-    from submitters.base import DraftOnlySubmitter
+    from submitters.base import DraftOnlySubmitter, SubmissionResult
     from submitters.comeet import ComeetSubmitter
     from submitters.greenhouse import GreenhouseSubmitter
     from submitters.indeed import IndeedSubmitter
@@ -542,6 +547,36 @@ def submit_application_task(self, application_id: int):
     attempt = None
     try:
         settings = get_settings()
+        if (
+            not settings.dry_run
+            and not settings.draft_only
+            and not _validated_submit_command_available(db, application_id)
+        ):
+            app = db.get(Application, application_id)
+            if app is not None and app.status == JobStatus.APPROVED:
+                app.status = JobStatus.NEEDS_REVIEW
+                app.needs_review_reason = "SUBMIT_PERMIT_REQUIRED"
+                if app.job:
+                    app.job.status = JobStatus.NEEDS_REVIEW
+                from core.application_audit import record_application_event
+
+                record_application_event(
+                    db,
+                    app.id,
+                    "submission_dispatch_blocked",
+                    actor="worker",
+                    details={
+                        "reason_code": "SUBMIT_PERMIT_REQUIRED",
+                        "external_action_started": False,
+                    },
+                )
+                db.commit()
+            logger.warning(
+                "submission_dispatch_blocked",
+                application_id=application_id,
+                reason_code="SUBMIT_PERMIT_REQUIRED",
+            )
+            return
 
         from worker.submission_attempts import claim_attempt
 
@@ -652,8 +687,6 @@ def submit_application_task(self, application_id: int):
         # Route to the matching submitter and preserve its authoritative result.
         result = None
         if settings.dry_run:
-            from submitters.base import SubmissionResult
-
             result = SubmissionResult(
                 success=True,
                 platform="dry_run",
@@ -671,48 +704,100 @@ def submit_application_task(self, application_id: int):
                 )
             )
         else:
-            for sub in all_submitters:
-                if not sub.can_submit(job_ref):
-                    continue
-                if isinstance(sub, LinkedInV2Submitter):
-                    # can_apply_linkedin() adds the inter-action gap on top of
-                    # can_act(), so a submission enqueued directly (e.g. the
-                    # approve endpoint) can't run back-to-back inside the gap.
-                    ok, reason = governor.can_apply_linkedin()
-                    if not ok:
-                        from datetime import UTC as _UTC
-                        from datetime import datetime as _dt
+            from submitters.platforms import adapter_for_url, detect_platform
 
-                        attempt.status = SubmissionStatus.FAILED
-                        attempt.reason_code = "GOVERNOR_DEFERRED"
-                        attempt.finished_at = _dt.now(_UTC).replace(tzinfo=None)
-                        db.commit()
-                        logger.info(
-                            "linkedin_submit_deferred",
-                            application_id=application_id,
-                            job=db_job.title,
-                            reason=reason,
-                        )
-                        # Leave the application APPROVED — the drainer
-                        # (Task 3.6) will retry once the governor allows it.
-                        return
-                # NOT `attempt` — that name holds the claimed Submission ORM
-                # row, and rebinding it here would leave the row unfinalized
-                # below (and break the except-handler's db.get on .id).
-                sub_result = run_async(sub.submit(job_ref, generated, profile_dict, resume_path))
-                logger.info(
-                    "submitter_attempt",
-                    platform=sub.platform_name,
-                    status=sub_result.status,
-                    success=sub_result.success,
+            route_url = job_ref.apply_url or job_ref.source_url
+            descriptor = adapter_for_url(route_url)
+            detected_platform = detect_platform(route_url)
+            if descriptor is None or not descriptor.allows_live_submission:
+                selector_version = (
+                    descriptor.selector_version if descriptor is not None else "unregistered"
                 )
-                if sub_result.success and sub_result.status == "submitted":
-                    result = sub_result
-                    break
-                if result is None or (result.status == "failed" and sub_result.status != "failed"):
-                    # Keep the first definitive result; a real failure must
-                    # never be replaced by a fake draft success.
-                    result = sub_result
+                qualification = (
+                    descriptor.qualification.value if descriptor is not None else "unregistered"
+                )
+                logger.warning(
+                    "adapter_not_qualified",
+                    platform=detected_platform,
+                    adapter_version=(
+                        descriptor.adapter_version if descriptor is not None else "unregistered"
+                    ),
+                    qualification=qualification,
+                )
+                result = SubmissionResult(
+                    success=False,
+                    platform=detected_platform,
+                    status="failed",
+                    error="NEEDS_REVIEW:ADAPTER_NOT_QUALIFIED",
+                    reason_code="ADAPTER_NOT_QUALIFIED",
+                    diagnostic_details={
+                        "selector_version": selector_version,
+                        "terminal_reason": "ADAPTER_NOT_QUALIFIED",
+                    },
+                )
+            else:
+                matching_submitter = next(
+                    (
+                        submitter
+                        for submitter in all_submitters
+                        if submitter.platform_name == descriptor.platform
+                        and submitter.can_submit(job_ref)
+                    ),
+                    None,
+                )
+                if matching_submitter is None:
+                    result = SubmissionResult(
+                        success=False,
+                        platform=descriptor.platform,
+                        status="failed",
+                        error="NEEDS_REVIEW:ADAPTER_ROUTE_MISMATCH",
+                        reason_code="ADAPTER_ROUTE_MISMATCH",
+                        diagnostic_details={
+                            "selector_version": descriptor.selector_version,
+                            "terminal_reason": "ADAPTER_ROUTE_MISMATCH",
+                        },
+                    )
+                else:
+                    if isinstance(matching_submitter, LinkedInV2Submitter):
+                        # can_apply_linkedin() adds the inter-action gap on top of
+                        # can_act(), so a submission enqueued directly (e.g. the
+                        # approve endpoint) can't run back-to-back inside the gap.
+                        ok, reason = governor.can_apply_linkedin()
+                        if not ok:
+                            from datetime import UTC as _UTC
+                            from datetime import datetime as _dt
+
+                            attempt.status = SubmissionStatus.FAILED
+                            attempt.reason_code = "GOVERNOR_DEFERRED"
+                            attempt.finished_at = _dt.now(_UTC).replace(tzinfo=None)
+                            db.commit()
+                            logger.info(
+                                "linkedin_submit_deferred",
+                                application_id=application_id,
+                                job=db_job.title,
+                                reason=reason,
+                            )
+                            # Leave the application APPROVED — the drainer
+                            # (Task 3.6) will retry once the governor allows it.
+                            return
+                    # NOT `attempt` — that name holds the claimed Submission ORM
+                    # row, and rebinding it here would leave the row unfinalized
+                    # below (and break the except-handler's db.get on .id).
+                    result = run_async(
+                        matching_submitter.submit(
+                            job_ref,
+                            generated,
+                            profile_dict,
+                            resume_path,
+                        )
+                    )
+                    logger.info(
+                        "submitter_attempt",
+                        platform=matching_submitter.platform_name,
+                        adapter_version=descriptor.adapter_version,
+                        status=result.status,
+                        success=result.success,
+                    )
 
         # abort-don't-lie: a blocked required field is surfaced as
         # NEEDS_REVIEW rather than silently drafted or failed.
@@ -735,13 +820,37 @@ def submit_application_task(self, application_id: int):
         from datetime import UTC as _UTC
         from datetime import datetime as _dt
 
+        from core.submission_truth import (
+            EMPLOYER_VERIFIED_REASON_CODES,
+            has_nonblank_employer_evidence,
+        )
         from worker.submission_attempts import (
             classify_reason,
             redacted_result_diagnostics,
         )
 
-        if result.status == "submitted" and result.success:
+        claimed_submitted = result.status == "submitted" and result.success
+        result_reason_code = result.reason_code or classify_reason(
+            result.error,
+            result.status,
+        )
+        employer_verified = (
+            claimed_submitted
+            and result_reason_code in EMPLOYER_VERIFIED_REASON_CODES
+            and has_nonblank_employer_evidence(
+                result.confirmation_id,
+                result.confirmation_url,
+            )
+        )
+        diagnostic_details = dict(result.diagnostic_details)
+        if employer_verified:
             sub_status = SubmissionStatus.SUCCESS
+        elif claimed_submitted:
+            # A click, redirect, generic success phrase, or adapter boolean is
+            # not employer evidence. The irreversible action is indeterminate.
+            sub_status = SubmissionStatus.UNKNOWN
+            result_reason_code = "FINAL_ACTION_UNCONFIRMED"
+            diagnostic_details["terminal_reason"] = "FINAL_ACTION_UNCONFIRMED"
         elif result.status == "draft_only":
             sub_status = SubmissionStatus.DRAFT_ONLY
         elif result.status == "unknown":
@@ -755,27 +864,30 @@ def submit_application_task(self, application_id: int):
         attempt.confirmation_url = result.confirmation_url
         attempt.confirmation_id = result.confirmation_id
         attempt.error_message = None
-        attempt.reason_code = result.reason_code or classify_reason(
-            result.error,
-            result.status,
-        )
+        attempt.reason_code = result_reason_code
         attempt.diagnostic_details = redacted_result_diagnostics(
             result.error,
-            result.diagnostic_details,
+            diagnostic_details,
         )
         attempt.finished_at = now
-        attempt.submitted_at = now if result.success and result.status == "submitted" else None
+        attempt.submitted_at = now if employer_verified else None
 
         # Job/application status mirrors submission outcome.
         #
         # CRITICAL: app.status must leave APPROVED on every terminal branch.
         # Otherwise the drainer can select it again and create a new attempt.
-        if result.status == "submitted" and result.success:
+        if employer_verified:
             db_job.status = JobStatus.SUBMITTED
             app.status = JobStatus.SUBMITTED
             if result.platform == "linkedin":
                 governor.record_application()
                 app.submission_channel = "linkedin_easy"
+        elif claimed_submitted:
+            app.needs_review_reason = (
+                "Final action was reported without employer-verifiable evidence."
+            )
+            app.status = JobStatus.NEEDS_REVIEW
+            db_job.status = JobStatus.NEEDS_REVIEW
         elif needs_review_reason is not None:
             app.needs_review_reason = needs_review_reason
             app.status = JobStatus.NEEDS_REVIEW
@@ -813,8 +925,8 @@ def submit_application_task(self, application_id: int):
             "submission_completed",
             job=db_job.title,
             platform=result.platform,
-            status=result.status,
-            success=result.success,
+            status=attempt.status.value,
+            employer_verified=employer_verified,
         )
 
     except Exception as exc:
