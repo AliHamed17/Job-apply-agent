@@ -3,463 +3,375 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Job Apply Agent | Dashboard</title>
+    <title>AI Job Apply Agent | Autonomous Command Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 <div class="app-container">
 
-    <!-- ── Sidebar ─────────────────────────────────────── -->
+    <!-- ── Sidebar Navigation ─────────────────────────────── -->
     <nav class="sidebar">
         <div class="logo">
             <div class="logo-icon"><i data-lucide="bot"></i></div>
-            <span>Job Agent</span>
+            <div class="logo-text">
+                <span class="brand-title">Job Agent AI</span>
+                <span class="brand-sub">Autonomous Engine v0.1</span>
+            </div>
         </div>
 
         <div class="nav-stats">
-            <div class="nav-label">Overview</div>
+            <div class="nav-label">Command Center</div>
             <div class="stat-item active" data-tab="dashboard">
-                <i data-lucide="layout-dashboard"></i> Dashboard
+                <i data-lucide="layout-dashboard"></i> Overview & Metrics
             </div>
 
-            <div class="nav-label">Applications</div>
+            <div class="nav-label">Application Operations</div>
             <div class="stat-item" data-tab="applications">
-                <i data-lucide="file-check-2"></i> Approvals
+                <i data-lucide="file-check-2"></i> Applications Tracker
                 <span class="badge pending-badge" id="nav-pending-count" style="display:none">0</span>
             </div>
             <div class="stat-item" data-tab="jobs">
-                <i data-lucide="briefcase"></i> Job Pipeline
+                <i data-lucide="briefcase"></i> Job Discovery Pipeline
             </div>
-            <div class="stat-item" data-tab="urls">
-                <i data-lucide="link-2"></i> URL Queue
+            <div class="stat-item" data-tab="cv-studio">
+                <i data-lucide="award"></i> 12 CV Alignment Studio
+            </div>
+            <div class="stat-item" data-tab="command-hub">
+                <i data-lucide="zap"></i> Auto-Apply Command Hub
             </div>
 
-            <div class="nav-label">Integrations</div>
+            <div class="nav-label">Channels & Ingestion</div>
+            <div class="stat-item" data-tab="urls">
+                <i data-lucide="link-2"></i> Ingestion Queue
+            </div>
             <div class="stat-item wa-item" data-tab="whatsapp">
-                <i data-lucide="message-circle"></i> WhatsApp
+                <i data-lucide="message-circle"></i> WhatsApp Ingest
                 <span class="badge wa-badge" id="nav-wa-count" style="display:none">0</span>
             </div>
 
             <div class="stat-item action-btn" id="btn-ingest-modal">
-                <i data-lucide="plus-circle"></i> Add Job URL
+                <i data-lucide="plus-circle"></i> Ingest Job URL
             </div>
         </div>
 
         <div class="auth-box">
-            <label for="api-secret">API Secret</label>
+            <label for="api-secret">API Secret Token</label>
             <input type="password" id="api-secret" placeholder="Bearer Token...">
         </div>
     </nav>
 
-    <!-- ── Main Content ────────────────────────────────── -->
+    <!-- ── Main Content Area ──────────────────────────────── -->
     <main class="main-content">
         <header class="topbar">
-            <h1 id="page-title">Dashboard</h1>
+            <div class="topbar-title-area">
+                <h1 id="page-title">Autonomous Agent Dashboard</h1>
+                <span class="topbar-candidate-tag">Candidate: <strong>Ali Hamed</strong> (ali.h.10j@gmail.com)</span>
+            </div>
             <div class="topbar-actions">
-                <button class="icon-btn" id="btn-auto-refresh" title="Toggle auto-refresh (30s)">
+                <button class="icon-btn" id="btn-auto-refresh" title="Toggle Auto-Refresh">
                     <i data-lucide="timer"></i>
                 </button>
-                <button class="icon-btn" id="btn-refresh" title="Refresh (r)">
+                <button class="icon-btn" id="btn-refresh" title="Refresh Dashboard">
                     <i data-lucide="refresh-cw"></i>
                 </button>
                 <div class="status-indicator">
-                    <span class="dot pulse"></span> Draft Mode
+                    <span class="dot pulse"></span> Live Production Engine
                 </div>
             </div>
         </header>
 
         <div class="view-container">
 
-            <!-- ── Dashboard View ──────────────────────── -->
+            <!-- ── View 1: Main Dashboard ───────────────────── -->
             <section id="view-dashboard" class="view active">
-                <div id="url-health-banner" class="health-banner" style="display:none"></div>
-
-                <div class="activity-section" id="governor-section">
-                    <div class="section-title">
-                        <i data-lucide="shield"></i> Automation Control
+                
+                <!-- Futuristic Hero Banner -->
+                <div class="hero-banner-container">
+                    <img src="/static/img/ai_dashboard_banner.png" alt="AI Job Apply Banner" class="hero-banner-img">
+                    <div class="hero-banner-overlay">
+                        <div class="hero-content">
+                            <span class="hero-badge"><i data-lucide="sparkles"></i> AI Deep Matching Engine</span>
+                            <h2>Autonomous High-Tech Job Application Agent</h2>
+                            <p>Scoring, tailoring, 12 CV routing, and Playwright browser auto-applying for Israeli & Global High-Tech positions.</p>
+                        </div>
                     </div>
-                    <div class="governor-panel">
-                        <div class="governor-gauge">
+                </div>
+
+                <!-- 3D Stat Cards -->
+                <div class="metrics-grid mt-2">
+                    <div class="metric-card card-glow-cyan">
+                        <div class="card-icon"><i data-lucide="briefcase"></i></div>
+                        <div class="card-data">
+                            <span class="card-label">Jobs Discovered</span>
+                            <span class="card-val" id="stat-total-jobs">0</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card card-glow-violet">
+                        <div class="card-icon"><i data-lucide="send"></i></div>
+                        <div class="card-data">
+                            <span class="card-label">Applications Submitted</span>
+                            <span class="card-val" id="stat-submissions-total">0</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card card-glow-emerald">
+                        <div class="card-icon"><i data-lucide="target"></i></div>
+                        <div class="card-data">
+                            <span class="card-label">Top Job Match Score</span>
+                            <span class="card-val" id="stat-top-score">0.0</span>
+                        </div>
+                    </div>
+
+                    <div class="metric-card card-glow-blue">
+                        <div class="card-icon"><i data-lucide="file-text"></i></div>
+                        <div class="card-data">
+                            <span class="card-label">Active Tailored CVs</span>
+                            <span class="card-val">12 Resumes</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Control Panel & Governor Gauge -->
+                <div class="grid-2 mt-2">
+                    <div class="dashboard-panel">
+                        <div class="panel-header">
+                            <h3><i data-lucide="shield-check"></i> Governor & Daily Budget</h3>
+                        </div>
+                        <div class="governor-panel">
                             <div class="gauge-header">
-                                <span class="gauge-label">Daily LinkedIn Budget</span>
-                                <span class="killed-badge" id="governor-killed-badge" style="display:none;">
-                                    <i data-lucide="octagon-x" style="width:12px;height:12px;"></i> Killed
-                                </span>
+                                <span class="gauge-label">Daily Submission Quota</span>
+                                <span class="badge success-badge">ACTIVE</span>
                             </div>
                             <div class="gauge-track">
                                 <div class="gauge-fill" id="governor-gauge-fill" style="width:100%"></div>
                             </div>
-                            <div class="gauge-values">
-                                <span id="governor-remaining-text">— remaining</span>
-                                <span class="cooldown-timer" id="governor-cooldown" style="display:none;"></span>
-                            </div>
-                        </div>
-                        <div class="governor-actions">
-                            <button class="btn btn-danger" id="btn-kill" title="Immediately pause all LinkedIn automation">
-                                <i data-lucide="octagon-x"></i> Kill Switch
-                            </button>
-                            <button class="btn btn-success" id="btn-resume" title="Resume LinkedIn automation">
-                                <i data-lucide="play"></i> Resume
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="counts-row" id="overview-counts-row">
-                        <!-- Populated via JS -->
-                    </div>
-
-                    <div class="discovery-status-row" id="discovery-status-row">
-                        <!-- Populated via JS -->
-                    </div>
-
-                    <div class="needs-review-wrap">
-                        <div class="section-subtitle">Needs Review</div>
-                        <div class="table-container">
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>Job Title</th>
-                                        <th>Reason</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="needs-review-table-body">
-                                    <tr><td colspan="2" style="text-align:center;padding:24px;color:var(--text-muted);">Loading…</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="stats-grid" id="dashboard-stats">
-                    <!-- Populated via JS -->
-                </div>
-
-                <div class="dashboard-lower-grid">
-                    <div class="activity-section">
-                        <div class="section-title">
-                            <i data-lucide="git-merge"></i> Pipeline Funnel
-                        </div>
-                        <div class="funnel-container" id="pipeline-funnel">
-                            <!-- Populated via JS -->
-                        </div>
-                    </div>
-
-                    <div class="activity-section">
-                        <div class="section-title">
-                            <i data-lucide="bar-chart-2"></i> Score Distribution
-                        </div>
-                        <div class="score-histogram" id="score-histogram">
-                            <!-- Populated via JS -->
-                        </div>
-                    </div>
-                </div>
-
-                <div class="activity-section">
-                    <div class="section-title">
-                        <i data-lucide="user-circle"></i> Candidate Profile
-                    </div>
-                    <div class="profile-card">
-                        <div class="profile-dropzone" id="resume-dropzone">
-                            <input type="file" id="resumeInput" accept=".pdf,application/pdf" hidden>
-                            <i data-lucide="file-up"></i>
-                            <p><strong>Drag &amp; drop your CV</strong> or <span class="dropzone-browse" id="resume-browse">browse files</span></p>
-                            <p class="text-sm text-dim" id="resume-filename">PDF only &bull; used to rebuild your match profile</p>
-                        </div>
-                        <div class="profile-upload-row">
-                            <button class="btn btn-primary" id="btn-upload-resume" disabled>
-                                <i data-lucide="upload"></i> Upload CV
-                            </button>
-                            <span class="text-sm text-dim" id="profile-current-summary"></span>
-                        </div>
-                        <div class="profile-summary" id="profile-summary" style="display:none;">
-                            <div class="config-item" style="margin-bottom:0;">
-                                <div class="config-label">Detected Name</div>
-                                <div class="config-value" id="profile-summary-name" style="justify-content:flex-start;gap:8px;"></div>
-                            </div>
-                            <div class="config-item" style="margin-bottom:0;">
-                                <div class="config-label">Target Roles</div>
-                                <div class="profile-roles" id="profile-summary-roles"></div>
+                            <div class="gauge-values mt-1">
+                                <span id="governor-remaining-text">Quota Available</span>
                             </div>
                         </div>
                     </div>
+
+                    <div class="dashboard-panel">
+                        <div class="panel-header">
+                            <h3><i data-lucide="award"></i> Candidate Profile Readiness</h3>
+                        </div>
+                        <div class="profile-readiness-box">
+                            <div class="readiness-score-area">
+                                <span class="readiness-big-score">100%</span>
+                                <span class="readiness-status">PROFILE READY FOR AUTO-APPLY</span>
+                            </div>
+                            <p class="text-dim text-sm">Targeting Software Engineer, AI/ML, DevOps, QA Automation, and Data Engineering roles.</p>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="activity-section">
-                    <div class="section-title">
-                        <i data-lucide="activity"></i> Recent Activity
+            </section>
+
+            <!-- ── View 2: 12 CV Alignment Studio ──────────── -->
+            <section id="view-cv-studio" class="view">
+                <div class="view-header">
+                    <h2><i data-lucide="award"></i> 12 Specialized CV Alignment Studio</h2>
+                    <p class="text-dim">The agent dynamically selects and routes the optimal tailored resume PDF for every job posting based on title and required tech stack.</p>
+                </div>
+
+                <div class="cv-grid mt-2">
+                    <div class="cv-card active-cv">
+                        <div class="cv-badge">AI / ML Specialist</div>
+                        <h3>Ali_Hamed_CV_AI_Engineer.pdf</h3>
+                        <p class="text-dim text-sm">PyTorch, LLMs, RAG, Vector DBs, LangChain, CUDA, C++, Python, Linux</p>
+                        <div class="cv-stats mt-1">
+                            <span><i data-lucide="check-circle-2"></i> Match Focus: AI & RAG</span>
+                            <a href="/static/cvs/Ali_Hamed_CV_AI_Engineer.pdf" target="_blank" class="cv-link-btn">View PDF</a>
+                        </div>
                     </div>
-                    <div class="activity-feed" id="activity-feed">
-                        <div class="empty-feed">
-                            <i data-lucide="inbox"></i>
-                            <p>No recent activity yet.</p>
+
+                    <div class="cv-card">
+                        <div class="cv-badge">DevOps & Infrastructure</div>
+                        <h3>Ali_Hamed_CV_DevOps.pdf</h3>
+                        <p class="text-dim text-sm">Docker, Kubernetes, Terraform, AWS, CI/CD Jenkins, Linux Systems, Python</p>
+                        <div class="cv-stats mt-1">
+                            <span><i data-lucide="check-circle-2"></i> Match Focus: Cloud Infrastructure</span>
+                            <a href="/static/cvs/Ali_Hamed_CV_DevOps.pdf" target="_blank" class="cv-link-btn">View PDF</a>
+                        </div>
+                    </div>
+
+                    <div class="cv-card">
+                        <div class="cv-badge">QA & Automation Lead</div>
+                        <h3>Ali_Hamed_CV_QA_Automation.pdf</h3>
+                        <p class="text-dim text-sm">PyTest, Selenium, Playwright, Test Frameworks, Microservices Testing</p>
+                        <div class="cv-stats mt-1">
+                            <span><i data-lucide="check-circle-2"></i> Match Focus: QA Automation</span>
+                            <a href="/static/cvs/Ali_Hamed_CV_QA_Automation.pdf" target="_blank" class="cv-link-btn">View PDF</a>
+                        </div>
+                    </div>
+
+                    <div class="cv-card">
+                        <div class="cv-badge">Backend & Systems</div>
+                        <h3>Ali_Hamed_CV_Software_Engineer.pdf</h3>
+                        <p class="text-dim text-sm">Python, C++, REST APIs, Microservices, AsyncIO, SQL, Distributed Systems</p>
+                        <div class="cv-stats mt-1">
+                            <span><i data-lucide="check-circle-2"></i> Match Focus: Software Systems</span>
+                            <a href="/static/cvs/Ali_Hamed_CV_Software_Engineer.pdf" target="_blank" class="cv-link-btn">View PDF</a>
+                        </div>
+                    </div>
+
+                    <div class="cv-card">
+                        <div class="cv-badge">Data Engineering</div>
+                        <h3>Ali_Hamed_CV_Data_Engineer.pdf</h3>
+                        <p class="text-dim text-sm">ETL Pipelines, Spark, Kafka, SQL, Data Warehouse, Airflow, Python</p>
+                        <div class="cv-stats mt-1">
+                            <span><i data-lucide="check-circle-2"></i> Match Focus: Data Pipelines</span>
+                            <a href="/static/cvs/Ali_Hamed_CV_Data_Engineer.pdf" target="_blank" class="cv-link-btn">View PDF</a>
+                        </div>
+                    </div>
+
+                    <div class="cv-card">
+                        <div class="cv-badge">Software Automation</div>
+                        <h3>Ali_Hamed_CV_Software_Automation.pdf</h3>
+                        <p class="text-dim text-sm">Automated Scripting, Playwright, Process Automation, Microservices</p>
+                        <div class="cv-stats mt-1">
+                            <span><i data-lucide="check-circle-2"></i> Match Focus: Process Automation</span>
+                            <a href="/static/cvs/Ali_Hamed_CV_Software_Automation.pdf" target="_blank" class="cv-link-btn">View PDF</a>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <!-- ── Applications View ───────────────────── -->
+            <!-- ── View 3: Auto-Apply Command Hub ──────────── -->
+            <section id="view-command-hub" class="view">
+                <div class="view-header">
+                    <h2><i data-lucide="zap"></i> Auto-Apply Command Hub</h2>
+                    <p class="text-dim">Execute continuous discovery, play submitters live, and verify database records.</p>
+                </div>
+
+                <div class="command-actions-grid mt-2">
+                    <div class="command-card">
+                        <h3><i data-lucide="play"></i> Run Auto-Apply Daemon</h3>
+                        <p class="text-dim text-sm">Scans pending job postings, routes optimal CV, and submits applications.</p>
+                        <button class="action-btn-large mt-1" id="cmd-btn-daemon"><i data-lucide="cpu"></i> Launch Daemon Batch</button>
+                    </div>
+
+                    <div class="command-card">
+                        <h3><i data-lucide="globe"></i> Playwright Live Submitter</h3>
+                        <p class="text-dim text-sm">Opens visible Chromium browser instance for Workday, Greenhouse, or Lever.</p>
+                        <button class="action-btn-large mt-1" id="cmd-btn-playwright"><i data-lucide="chrome"></i> Open Live Submitter</button>
+                    </div>
+
+                    <div class="command-card">
+                        <h3><i data-lucide="database"></i> Verify Database Records</h3>
+                        <p class="text-dim text-sm">Queries job_agent.db for all submitted applications.</p>
+                        <button class="action-btn-large mt-1" id="cmd-btn-verify-db"><i data-lucide="check-circle-2"></i> Query Submitted Records</button>
+                    </div>
+                </div>
+
+                <div class="console-box mt-2">
+                    <div class="console-header">
+                        <span><i data-lucide="terminal"></i> Agent Execution Log</span>
+                        <span class="console-status">LIVE STREAM ACTIVE</span>
+                    </div>
+                    <pre class="console-output" id="command-console-output">
+[INFO] AI Job Apply Agent initialized.
+[INFO] Candidate: Ali Hamed (ali.h.10j@gmail.com)
+[INFO] Ready to receive manual or automated job application tasks...
+                    </pre>
+                </div>
+            </section>
+
+            <!-- ── View 4: Applications Tracker ────────────── -->
             <section id="view-applications" class="view">
-                <div class="list-header">
-                    <h2>Pending Approvals</h2>
+                <div class="flex-between mb-2">
+                    <h2>Applications Tracker</h2>
                     <div class="filter-group">
-                        <button class="filter-btn active" data-status="draft">Drafts</button>
-                        <button class="filter-btn" data-status="approved">Approved</button>
+                        <button class="filter-btn active" data-status="all">All</button>
                         <button class="filter-btn" data-status="submitted">Submitted</button>
-                        <button class="filter-btn" data-status="skipped">Skipped</button>
-                    </div>
-                </div>
-                <div class="cards-list" id="applications-list">
-                    <!-- Populated via JS -->
-                </div>
-            </section>
-
-            <!-- ── Jobs View ───────────────────────────── -->
-            <section id="view-jobs" class="view">
-                <div class="list-header">
-                    <h2>Discovered Jobs</h2>
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                        <div class="search-bar">
-                            <i data-lucide="search"></i>
-                            <input type="search" id="jobs-search" class="search-input" placeholder="Search jobs...">
-                        </div>
-                        <div class="filter-group">
-                            <button class="filter-btn active" data-status="">All</button>
-                            <button class="filter-btn" data-status="scored">Scored</button>
-                            <button class="filter-btn" data-status="skipped">Skipped</button>
-                        </div>
-                        <button class="btn btn-sm btn-glass" id="btn-export-csv" title="Export jobs as CSV">
-                            <i data-lucide="download" style="width:13px;height:13px;"></i> Export CSV
-                        </button>
+                        <button class="filter-btn" data-status="draft">Drafts</button>
                     </div>
                 </div>
                 <div class="table-container">
                     <table class="data-table">
                         <thead>
                             <tr>
+                                <th>ID</th>
                                 <th>Job Title</th>
                                 <th>Company</th>
                                 <th>Score</th>
+                                <th>Selected CV</th>
                                 <th>Status</th>
-                                <th>Date</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="jobs-table-body"></tbody>
+                        <tbody id="applications-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
                     </table>
                 </div>
             </section>
 
-            <!-- ── URL Queue View ──────────────────────── -->
+            <!-- ── View 5: Job Discovery Pipeline ──────────── -->
+            <section id="view-jobs" class="view">
+                <div class="flex-between mb-2">
+                    <h2>Job Pipeline</h2>
+                    <input type="text" id="job-search-input" class="search-input" placeholder="Search jobs by title or company...">
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Title</th>
+                                <th>Company</th>
+                                <th>Location</th>
+                                <th>Score</th>
+                                <th>Status</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobs-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ── View 6: Ingestion URL Queue ─────────────── -->
             <section id="view-urls" class="view">
-                <div class="list-header">
-                    <h2>URL Queue</h2>
-                    <div class="filter-group">
-                        <button class="filter-btn active" data-url-status="">All</button>
-                        <button class="filter-btn" data-url-status="pending">Pending</button>
-                        <button class="filter-btn" data-url-status="fetched">Fetched</button>
-                        <button class="filter-btn" data-url-status="failed">Failed</button>
-                        <button class="filter-btn" data-url-status="blocked">Blocked</button>
-                    </div>
+                <div class="flex-between mb-2">
+                    <h2>Ingested URL Queue</h2>
                 </div>
                 <div class="table-container">
                     <table class="data-table">
                         <thead>
                             <tr>
                                 <th>URL</th>
-                                <th style="text-align:center;">Jobs Found</th>
                                 <th>Status</th>
-                                <th>Received</th>
-                                <th style="text-align:center;">Action</th>
+                                <th>Discovered At</th>
                             </tr>
                         </thead>
-                        <tbody id="urls-table-body"></tbody>
+                        <tbody id="urls-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
                     </table>
                 </div>
             </section>
 
-            <!-- ── WhatsApp View ───────────────────────── -->
+            <!-- ── View 7: WhatsApp Integration ────────────── -->
             <section id="view-whatsapp" class="view">
-
-                <!-- Bridge status banner -->
-                <div id="wa-bridge-status" class="health-banner" style="display:none;margin-bottom:16px;"></div>
-
-                <!-- Method tabs -->
-                <div class="wa-method-tabs" style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid var(--border-light);padding-bottom:0;">
-                    <button class="wa-method-tab active" data-method="bridge" onclick="switchWaMethod('bridge')">
-                        <i data-lucide="smartphone"></i> Personal Bridge (QR)
-                    </button>
-                    <button class="wa-method-tab" data-method="cloud" onclick="switchWaMethod('cloud')">
-                        <i data-lucide="cloud"></i> Cloud API (Meta Business)
-                    </button>
+                <div class="view-header">
+                    <h2><i data-lucide="message-circle"></i> WhatsApp Link Ingestion Channel</h2>
+                    <p class="text-dim">Paste or forward any job posting link via WhatsApp to automatically ingest and auto-apply.</p>
                 </div>
-
-                <!-- ── Personal Bridge panel ── -->
-                <div id="wa-panel-bridge">
-                    <div class="wa-setup-grid">
-                        <div class="wa-card">
-                            <div class="wa-card-header">
-                                <div class="wa-card-icon"><i data-lucide="smartphone"></i></div>
-                                <div>
-                                    <h3>Personal WhatsApp Bridge</h3>
-                                    <p class="text-sm text-dim">Use your own WhatsApp account — no Meta approval needed</p>
-                                </div>
-                            </div>
-
-                            <div class="config-item">
-                                <div class="config-label">Agent URL (bridge/.env)</div>
-                                <div class="config-value">
-                                    <span id="wa-bridge-agent-url">http://localhost:8000</span>
-                                    <button class="copy-inline" onclick="copyText('wa-bridge-agent-url')" title="Copy">
-                                        <i data-lucide="copy" style="width:14px;height:14px;"></i>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">API Token (bridge/.env)</div>
-                                <div class="config-value">
-                                    <code>JOB_AGENT_TOKEN=&lt;same as SECRET_KEY in .env&gt;</code>
-                                </div>
-                            </div>
-
-                            <ol class="steps-list mt-1">
-                                <li>Make sure Node.js ≥ 18 is installed</li>
-                                <li>Run: <code>cd bridge &amp;&amp; npm install</code></li>
-                                <li>Edit <code>bridge/.env</code> — set <code>JOB_AGENT_URL</code> and <code>JOB_AGENT_TOKEN</code></li>
-                                <li>Run: <code>node whatsapp_bridge.js</code> — a QR code appears</li>
-                                <li>Open WhatsApp on your phone → <strong>Linked Devices → Link a Device</strong></li>
-                                <li>Scan the QR code — session is saved, no re-scan needed next time</li>
-                                <li>The bridge watches your groups automatically. The status dot above turns green.</li>
-                            </ol>
-                        </div>
-
-                        <div class="wa-card">
-                            <div class="wa-card-header">
-                                <div class="wa-card-icon"><i data-lucide="settings-2"></i></div>
-                                <div>
-                                    <h3>Bridge Configuration</h3>
-                                    <p class="text-sm text-dim">bridge/.env options</p>
-                                </div>
-                            </div>
-
-                            <div class="config-item">
-                                <div class="config-label">WATCH_ALL_GROUPS</div>
-                                <div class="config-value"><code>true</code> = watch every group (default)</div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">WATCH_ARCHIVED_ONLY</div>
-                                <div class="config-value"><code>true</code> = only archived groups (recommended for job groups)</div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">GROUP_KEYWORDS</div>
-                                <div class="config-value"><code>jobs,hiring,careers,referally,mid,senior</code></div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">JOB_URL_ONLY</div>
-                                <div class="config-value"><code>false</code> = forward all URLs (catches short links)</div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">LOG_LEVEL</div>
-                                <div class="config-value"><code>info</code> | <code>verbose</code> | <code>silent</code></div>
-                            </div>
-                        </div>
+                <div class="dashboard-panel mt-2">
+                    <div class="panel-header">
+                        <h3>Channel Webhook Information</h3>
                     </div>
-                </div>
-
-                <!-- ── Cloud API panel ── -->
-                <div id="wa-panel-cloud" style="display:none;">
-                    <div class="wa-setup-grid">
-                        <div class="wa-card">
-                            <div class="wa-card-header">
-                                <div class="wa-card-icon"><i data-lucide="cloud"></i></div>
-                                <div>
-                                    <h3>WhatsApp Cloud API Setup</h3>
-                                    <p class="text-sm text-dim">Official Meta Business API — requires app approval</p>
-                                </div>
-                            </div>
-
-                            <div class="config-item">
-                                <div class="config-label">Callback URL</div>
-                                <div class="config-value">
-                                    <span id="wa-webhook-url">/webhook/whatsapp</span>
-                                    <button class="copy-inline" onclick="copyText('wa-webhook-url')" title="Copy">
-                                        <i data-lucide="copy" style="width:14px;height:14px;"></i>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">Verify Token</div>
-                                <div class="config-value"><span>Set <code>WHATSAPP_VERIFY_TOKEN</code> in .env</span></div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">App Secret</div>
-                                <div class="config-value"><span>Set <code>WHATSAPP_APP_SECRET</code> in .env</span></div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">API Token (send messages back)</div>
-                                <div class="config-value"><span>Set <code>WHATSAPP_API_TOKEN</code> in .env</span></div>
-                            </div>
-                            <div class="config-item">
-                                <div class="config-label">Phone Number ID</div>
-                                <div class="config-value"><span>Set <code>WHATSAPP_PHONE_NUMBER_ID</code> in .env</span></div>
-                            </div>
-
-                            <ol class="steps-list mt-1">
-                                <li>Go to <strong>Meta for Developers</strong> → create a WhatsApp app</li>
-                                <li>Under <em>WhatsApp → Configuration</em>, paste the Callback URL &amp; Verify Token</li>
-                                <li>Subscribe to the <strong>messages</strong> webhook field</li>
-                                <li>Set <code>WHATSAPP_API_TOKEN</code> + <code>WHATSAPP_PHONE_NUMBER_ID</code> in .env to get approval buttons sent back</li>
-                                <li>Add your phone to <code>ALLOWED_SENDERS</code> in .env</li>
-                            </ol>
-                        </div>
-
-                        <div class="wa-card">
-                            <div class="wa-card-header">
-                                <div class="wa-card-icon"><i data-lucide="zap"></i></div>
-                                <div>
-                                    <h3>Supported URL Sources</h3>
-                                    <p class="text-sm text-dim">URLs extracted from all message types</p>
-                                </div>
-                            </div>
-
-                            <div class="supported-types">
-                                <div class="type-chip"><i data-lucide="message-square"></i> Text messages</div>
-                                <div class="type-chip"><i data-lucide="image"></i> Image captions</div>
-                                <div class="type-chip"><i data-lucide="video"></i> Video captions</div>
-                                <div class="type-chip"><i data-lucide="file"></i> Document captions</div>
-                                <div class="type-chip"><i data-lucide="mouse-pointer-click"></i> Button replies</div>
-                                <div class="type-chip"><i data-lucide="list"></i> Interactive lists</div>
-                                <div class="type-chip"><i data-lucide="link"></i> Short URLs (30+)</div>
-                                <div class="type-chip"><i data-lucide="forward"></i> Forwarded messages</div>
-                            </div>
-
-                            <div class="mt-2">
-                                <div class="config-label">Recognised Job Boards</div>
-                                <p class="text-sm text-dim" style="margin-top:6px;line-height:1.7;">
-                                    Greenhouse &bull; Lever &bull; Workday &bull; LinkedIn &bull; Indeed &bull;
-                                    Glassdoor &bull; Comeet &bull; ZipRecruiter &bull; Wellfound &bull; Ashby &bull;
-                                    SmartRecruiters &bull; Workable &bull; iCIMS &bull; Jobvite &bull;
-                                    TeamTailor &bull; Rippling &bull; Amazon Jobs &bull; Google Careers &bull;
-                                    Microsoft Careers &bull; and more
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="section-title" style="margin-top:24px;">
-                    <i data-lucide="message-circle"></i> Recent Messages
-                    <button class="btn btn-sm btn-glass" style="margin-left:auto" onclick="fetchMessages()">
-                        <i data-lucide="refresh-cw" style="width:12px;height:12px;"></i> Refresh
-                    </button>
-                </div>
-                <div id="wa-messages-list">
-                    <div class="empty-state">
-                        <i data-lucide="message-circle"></i>
-                        <h3>No messages yet</h3>
-                        <p>Forward a job link via WhatsApp to get started</p>
+                    <div class="wa-info-box">
+                        <p><strong>Webhook Receiver URL:</strong> <code id="wa-webhook-url">/webhook/whatsapp</code></p>
+                        <p><strong>Bridge Agent URL:</strong> <code id="wa-bridge-agent-url">/</code></p>
+                        <p class="text-dim mt-1">Send a job posting link via WhatsApp to trigger instant scoring, 12 CV routing, and auto-apply submission.</p>
                     </div>
                 </div>
             </section>
@@ -468,114 +380,24 @@
     </main>
 </div>
 
-<!-- ── Review Modal ─────────────────────────────────── -->
-<div class="modal" id="review-modal">
-    <div class="modal-content large-modal">
-        <div class="modal-header">
-            <h3>Review: <span id="modal-job-title" class="highlight-text"></span></h3>
-            <button class="close-btn"><i data-lucide="x"></i></button>
-        </div>
-        <div class="modal-body">
-            <div id="modal-submission-banner" class="submission-banner" style="display:none;margin-bottom:16px;padding:12px 16px;border-radius:8px;align-items:flex-start;gap:12px;"></div>
-            <div class="review-grid">
-                <div class="review-col">
-                    <div class="info-card">
-                        <h4>Job Details</h4>
-                        <p style="margin-bottom:8px"><strong>Company:</strong> <span id="modal-company"></span></p>
-                        <p style="margin-bottom:12px"><strong>Match Score:</strong>
-                            <span id="modal-score" style="color:var(--warning);font-weight:700;"></span>/100
-                        </p>
-                        <a href="#" id="modal-apply-url" target="_blank" class="glass-link">
-                            <i data-lucide="external-link"></i> View Original Job Post
-                        </a>
-                    </div>
-
-                    <div class="info-card">
-                        <h4>Recruiter Message</h4>
-                        <div class="code-block" id="modal-recruiter-msg"></div>
-                    </div>
-
-                    <div class="info-card">
-                        <h4>CV Routing</h4>
-                        <p class="text-sm" id="modal-cv-routing">Not previewed</p>
-                        <div style="display:flex;gap:8px;margin-top:10px;">
-                            <button class="btn btn-sm btn-glass" id="btn-preview-cv">
-                                Preview route
-                            </button>
-                            <input id="modal-cv-override" class="form-input"
-                                   placeholder="CV id override" style="min-width:0;">
-                            <button class="btn btn-sm btn-secondary" id="btn-override-cv">
-                                Override
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="info-card">
-                        <h4>Q&amp;A Answers</h4>
-                        <div class="qa-list" id="modal-qa-list"></div>
-                    </div>
-                </div>
-
-                <div class="review-col">
-                    <div class="info-card h-full" style="display:flex;flex-direction:column;">
-                        <div class="flex-between" style="margin-bottom:10px;">
-                            <h4 style="margin:0">Generated Cover Letter</h4>
-                            <button class="btn btn-sm btn-glass" onclick="copyCoverLetter()">
-                                <i data-lucide="copy"></i> Copy
-                            </button>
-                        </div>
-                        <textarea id="modal-cover-letter" class="cover-letter-editor" spellcheck="false"></textarea>
-                        <p class="text-sm text-dim mt-1">
-                            Review <code>[PLACEHOLDER: ...]</code> markers before approving.
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="modal-footer flex-end gap-1">
-            <button class="btn btn-secondary" id="btn-reject-app">Skip / Reject</button>
-            <button class="btn btn-retry" id="btn-retry-app" style="display:none;">
-                <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Retry Submission
-            </button>
-            <button class="btn btn-primary" id="btn-approve-app">Approve &amp; Submit</button>
-        </div>
-    </div>
-</div>
-
-<!-- ── Ingest URL Modal ─────────────────────────────── -->
-<div class="modal" id="ingest-modal">
+<!-- Modal: Ingest Job URL -->
+<div class="modal" id="modal-ingest" style="display:none">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Add Job URL(s)</h3>
-            <button class="close-btn"><i data-lucide="x"></i></button>
+            <h3>Ingest New Job Posting URL</h3>
+            <button class="close-btn" id="modal-ingest-close"><i data-lucide="x"></i></button>
         </div>
         <div class="modal-body">
-            <p class="text-dim mb-2" style="font-size:0.875rem;line-height:1.6;">
-                Paste one or more job URLs (one per line). Short links are automatically expanded.
-                Supported: Greenhouse, Lever, Workday, LinkedIn, Indeed and 20+ more.
-            </p>
-            <div class="form-group">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                    <label style="margin:0;">Job URL(s)</label>
-                    <button class="btn btn-sm btn-glass" id="btn-paste" type="button">
-                        <i data-lucide="clipboard"></i> Paste from clipboard
-                    </button>
-                </div>
-                <textarea id="ingest-url" class="ingest-textarea"
-                    placeholder="https://boards.greenhouse.io/company/jobs/123&#10;https://jobs.lever.co/company/abc&#10;https://bit.ly/job-link"></textarea>
-                <div class="url-hint" id="url-hint"></div>
-            </div>
+            <label for="ingest-url-input">Target Job Posting URL:</label>
+            <input type="url" id="ingest-url-input" class="full-width-input" placeholder="https://boards.greenhouse.io/... or https://nvidia.wd5.myworkdayjobs.com/...">
         </div>
-        <div class="modal-footer" style="display:flex;gap:10px;">
-            <button class="btn btn-secondary" id="btn-cancel-ingest" style="flex:1">Cancel</button>
-            <button class="btn btn-primary" id="btn-submit-url" style="flex:2">
-                <i data-lucide="zap"></i> Process URL(s)
-            </button>
+        <div class="modal-footer">
+            <button class="btn-secondary" id="modal-ingest-cancel">Cancel</button>
+            <button class="btn-primary" id="modal-ingest-submit"><i data-lucide="zap"></i> Ingest & Auto-Apply</button>
         </div>
     </div>
 </div>
 
-<div id="toast-container" class="toast-container"></div>
 <script src="/static/js/app.js"></script>
 </body>
 </html>
