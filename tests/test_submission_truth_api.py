@@ -171,6 +171,7 @@ async def test_multi_url_ingest_reports_accept_reject_and_duplicate(
         dashboard_route.ManualIngestRequest(
             urls=[
                 "https://boards.greenhouse.io/example/jobs/123",
+                "http://[::1",
                 "not-a-url",
             ]
         ),
@@ -181,7 +182,11 @@ async def test_multi_url_ingest_reports_accept_reject_and_duplicate(
         db,
     )
 
-    assert [result.state for result in first.results] == ["accepted", "rejected"]
+    assert [result.state for result in first.results] == [
+        "accepted",
+        "rejected",
+        "rejected",
+    ]
     assert second.results[0].state == "duplicate"
     assert len(queued) == 1
     db.close()

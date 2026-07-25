@@ -401,8 +401,12 @@ async def dashboard_insights(
 
 
 def _valid_http_url(value: str) -> bool:
-    parsed = urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+    try:
+        parsed = urlparse(value)
+        hostname = parsed.hostname
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(hostname)
 
 
 @router.post("/dashboard/ingest", response_model=ManualIngestResponse, status_code=202)

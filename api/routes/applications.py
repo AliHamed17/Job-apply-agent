@@ -13,6 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from core.application_state import (
+    application_semantic_status,
+    prepared_applications_query,
+    reviewable_applications_query,
+)
 from core.config import get_settings
 from core.submission_truth import is_employer_verified
 from db.models import Application, JobStatus, Submission, SubmissionStatus
@@ -256,14 +261,21 @@ async def list_applications(
     db: Session = Depends(get_db),
 ):
     """List all applications with job details."""
-    query = db.query(Application)
-
     if status:
-        try:
-            status_enum = JobStatus(status)
-            query = query.filter(Application.status == status_enum)
-        except ValueError:
-            pass
+        normalized_status = status.strip().lower()
+        if normalized_status == JobStatus.DRAFT.value:
+            query = reviewable_applications_query(db)
+        elif normalized_status in {"prepared", JobStatus.APPROVED.value}:
+            query = prepared_applications_query(db)
+        else:
+            query = db.query(Application)
+            try:
+                status_enum = JobStatus(normalized_status)
+                query = query.filter(Application.status == status_enum)
+            except ValueError:
+                pass
+    else:
+        query = db.query(Application)
 
     apps = query.order_by(Application.created_at.desc()).limit(100).all()
 
@@ -282,7 +294,7 @@ async def list_applications(
                 cover_letter=app.cover_letter or "",
                 recruiter_message=app.recruiter_message or "",
                 qa_answers=_json_dict(app.qa_answers),
-                status=app.status.value if app.status else "",
+                status=application_semantic_status(app),
                 apply_url=job.apply_url if job else "",
                 approved_at=app.approved_at.isoformat() if app.approved_at else None,
                 created_at=app.created_at.isoformat() if app.created_at else "",
@@ -332,7 +344,7 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         cover_letter=app.cover_letter or "",
         recruiter_message=app.recruiter_message or "",
         qa_answers=_json_dict(app.qa_answers),
-        status=app.status.value if app.status else "",
+        status=application_semantic_status(app),
         apply_url=job.apply_url if job else "",
         approved_at=app.approved_at.isoformat() if app.approved_at else None,
         created_at=app.created_at.isoformat() if app.created_at else "",

@@ -12,6 +12,15 @@ from sqlalchemy import and_, or_
 from db.models import Application, JobStatus
 
 
+def application_semantic_status(application: Application) -> str:
+    """Return the public review state without reviving worker-eligible approval."""
+    if application.status == JobStatus.APPROVED or (
+        application.status == JobStatus.DRAFT and application.approved_at is not None
+    ):
+        return "prepared"
+    return application.status.value if application.status else ""
+
+
 def reviewable_applications_query(db):
     """Return drafts that have not yet been prepared by an operator."""
     return db.query(Application).filter(

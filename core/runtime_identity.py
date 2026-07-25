@@ -22,6 +22,7 @@ from typing import Any
 from core.config import Settings
 
 PROTOCOL_VERSION = "submission-control.v1"
+SUBMIT_COMMAND_PROTOCOL_AVAILABLE = False
 
 _BUILD_ENV_KEYS = (
     "APP_BUILD_SHA",
@@ -57,6 +58,7 @@ class SubmissionBlockReason(StrEnum):
     WORKER_IDENTITY_UNAVAILABLE = "WORKER_IDENTITY_UNAVAILABLE"
     BUILD_MISMATCH = "BUILD_MISMATCH"
     PROTOCOL_MISMATCH = "PROTOCOL_MISMATCH"
+    SUBMIT_COMMAND_UNAVAILABLE = "SUBMIT_COMMAND_UNAVAILABLE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +308,8 @@ def build_runtime_capabilities(
             reasons.append(SubmissionBlockReason.BUILD_MISMATCH)
         if worker_protocol != release.protocol_version:
             reasons.append(SubmissionBlockReason.PROTOCOL_MISMATCH)
+    if not SUBMIT_COMMAND_PROTOCOL_AVAILABLE:
+        reasons.append(SubmissionBlockReason.SUBMIT_COMMAND_UNAVAILABLE)
 
     return {
         "release": {
@@ -326,7 +330,12 @@ def build_runtime_capabilities(
             "checks": checks,
         },
         "submission": {
-            "allowed": live_submit_enabled and readiness_status == "ready" and worker_compatible,
+            "allowed": (
+                live_submit_enabled
+                and readiness_status == "ready"
+                and worker_compatible
+                and SUBMIT_COMMAND_PROTOCOL_AVAILABLE
+            ),
             "reasons": [reason.value for reason in reasons],
         },
         "worker": {

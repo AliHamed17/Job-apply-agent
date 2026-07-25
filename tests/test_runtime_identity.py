@@ -116,7 +116,7 @@ def test_ui_asset_digest_is_deterministic_and_content_sensitive(tmp_path: Path) 
     assert compute_ui_asset_digest(tmp_path) != first
 
 
-def test_capabilities_allow_only_ready_compatible_explicit_live_runtime() -> None:
+def test_capabilities_keep_send_blocked_until_command_protocol_exists() -> None:
     result = build_runtime_capabilities(
         _live_settings(),
         _ready_report(),
@@ -129,7 +129,10 @@ def test_capabilities_allow_only_ready_compatible_explicit_live_runtime() -> Non
         "draft_only": False,
         "live_submit_enabled": True,
     }
-    assert result["submission"] == {"allowed": True, "reasons": []}
+    assert result["submission"] == {
+        "allowed": False,
+        "reasons": ["SUBMIT_COMMAND_UNAVAILABLE"],
+    }
     assert result["worker"]["compatible"] is True
     assert set(result["readiness"]["checks"]) == {
         "database",
@@ -171,6 +174,7 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         "RUNTIME_NOT_READY",
         "BUILD_MISMATCH",
         "PROTOCOL_MISMATCH",
+        "SUBMIT_COMMAND_UNAVAILABLE",
     ]
     serialized = json.dumps(result)
     assert "person@example.com" not in serialized
@@ -190,6 +194,7 @@ def test_unknown_build_identity_never_enables_submission() -> None:
         "reasons": [
             "BUILD_IDENTITY_UNAVAILABLE",
             "WORKER_IDENTITY_UNAVAILABLE",
+            "SUBMIT_COMMAND_UNAVAILABLE",
         ],
     }
     assert result["worker"]["compatible"] is False

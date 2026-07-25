@@ -173,6 +173,38 @@ def test_prepare_routes_are_idempotent_and_create_no_attempt(
     assert not paths["/api/applications/{app_id}/prepare"]["post"].get("deprecated", False)
 
 
+def test_application_filters_preserve_reviewable_and_prepared_semantics(
+    tmp_path,
+    monkeypatch,
+):
+    factory = _factory(tmp_path)
+    prepared_id, _job_id, _attempt_id = _application(factory)
+    reviewable_id, _job_id, _attempt_id = _application(factory)
+    legacy_prepared_id, _job_id, _attempt_id = _application(
+        factory,
+        status=JobStatus.APPROVED,
+    )
+    _api, client = _client(factory, _settings(tmp_path), monkeypatch)
+
+    assert client.post(f"/api/applications/{prepared_id}/prepare").status_code == 202
+
+    reviewable = client.get("/api/applications", params={"status": "draft"})
+    prepared = client.get("/api/applications", params={"status": "prepared"})
+    legacy_alias = client.get("/api/applications", params={"status": "approved"})
+
+    assert reviewable.status_code == 200
+    assert [(item["id"], item["status"]) for item in reviewable.json()] == [
+        (reviewable_id, "draft")
+    ]
+    assert prepared.status_code == 200
+    assert {(item["id"], item["status"]) for item in prepared.json()} == {
+        (prepared_id, "prepared"),
+        (legacy_prepared_id, "prepared"),
+    }
+    assert legacy_alias.json() == prepared.json()
+    assert client.get(f"/api/applications/{prepared_id}").json()["status"] == "prepared"
+
+
 def test_submit_requires_permit_without_mutating_application(
     tmp_path,
     monkeypatch,
