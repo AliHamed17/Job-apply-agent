@@ -698,6 +698,18 @@ def submit_application_task(self, application_id: int):
                     # Keep best result seen (prefer draft_only over failed)
                     result = sub_result
 
+        # abort-don't-lie: a blocked required field is surfaced as
+        # NEEDS_REVIEW rather than silently drafted or failed.
+        #
+        # Read this BEFORE the draft fallback below. The fallback replaces
+        # `result` wholesale with DraftOnlySubmitter's (error=None), so
+        # extracting afterwards silently dropped the reason for any submitter
+        # that reported the block as status="failed" — the application landed
+        # in DRAFT with no record of which question stopped it.
+        needs_review_reason = None
+        if result is not None and result.error and result.error.startswith("NEEDS_REVIEW:"):
+            needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
+
         # Always fall back to draft_only if no real submission succeeded
         if result is None or result.status == "failed":
             result = run_async(
@@ -705,12 +717,6 @@ def submit_application_task(self, application_id: int):
                     job_ref, generated, profile_dict, resume_path
                 )
             )
-
-        # abort-don't-lie: a blocked required field is surfaced as
-        # NEEDS_REVIEW rather than silently drafted or failed.
-        needs_review_reason = None
-        if result.error and result.error.startswith("NEEDS_REVIEW:"):
-            needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
         # Finalize the pre-committed attempt. No external action can run before
         # this attempt exists, so task redelivery cannot duplicate the action.

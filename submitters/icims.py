@@ -146,7 +146,7 @@ class IcimsSubmitter(BaseSubmitter):
             if blocked:
                 logger.warning("icims_unanswered_required", url=job_url, fields=blocked[:5])
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="failed",
+                    success=True, platform=self.platform_name, status="draft_only",
                     error=needs_review_error(blocked),
                 )
 

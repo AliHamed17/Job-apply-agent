@@ -206,7 +206,7 @@ class SmartRecruitersSubmitter(BaseSubmitter):
                 # application to a human instead of submitting a lie.
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="failed",
+                    success=True, platform=self.platform_name, status="draft_only",
                     error=needs_review_error(blocked)
                 )
 

@@ -283,9 +283,9 @@ class LinkedInSubmitter(BaseSubmitter):
             if blocked:
                 logger.info("linkedin_needs_review", blocked=blocked)
                 return SubmissionResult(
-                    success=False,
+                    success=True,
                     platform=self.platform_name,
-                    status="failed",
+                    status="draft_only",
                     error=needs_review_error(blocked),
                 )
 

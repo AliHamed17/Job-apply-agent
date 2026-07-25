@@ -256,7 +256,7 @@ class IndeedSubmitter(BaseSubmitter):
             if blocked:
                 logger.warning("indeed_unanswered_required", questions=blocked[:3])
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="failed",
+                    success=True, platform=self.platform_name, status="draft_only",
                     error=needs_review_error(blocked),
                 )
 

@@ -180,7 +180,7 @@ class AshbySubmitter(BaseSubmitter):
                 logger.warning("ashby_needs_review", questions=blocked[:5])
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="failed",
+                    success=True, platform=self.platform_name, status="draft_only",
                     error=needs_review_error(blocked)
                 )
 

@@ -193,7 +193,7 @@ class GreenhouseSubmitter(BaseSubmitter):
                 logger.info("greenhouse_needs_review", blocked=blocked)
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform="greenhouse", status="failed",
+                    success=True, platform="greenhouse", status="draft_only",
                     error=needs_review_error(blocked)
                 )
 

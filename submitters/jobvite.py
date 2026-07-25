@@ -201,7 +201,7 @@ class JobviteSubmitter(BaseSubmitter):
                 logger.warning("jobvite_needs_review", url=job_url, questions=blocked[:5])
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="failed",
+                    success=True, platform=self.platform_name, status="draft_only",
                     error=needs_review_error(blocked)
                 )
 

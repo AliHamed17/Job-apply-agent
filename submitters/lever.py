@@ -196,7 +196,7 @@ class LeverSubmitter(BaseSubmitter):
             if blocked:
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform="lever", status="failed",
+                    success=True, platform="lever", status="draft_only",
                     error=needs_review_error(blocked)
                 )
 
