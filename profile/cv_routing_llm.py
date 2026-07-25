@@ -10,13 +10,6 @@ fallback: when the deterministic router doesn't confidently match, it reads
 each CV's real content (not just hand-tagged keywords) and lets the LLM
 judge across all candidates at once.
 
-This is distinct from validate_cv_alignment() in profile/cv_routing.py,
-which re-checks a single already-selected CV against short tag summaries of
-the alternatives, and runs on every confident selection too (cheap — one
-CV's full text). This module runs only on low-confidence/fallback routing
-and reads every candidate CV's full text before choosing — more thorough,
-reserved for the case where the keyword matcher had nothing to go on.
-
 Never invoked when the deterministic router already found a confident
 match — that result is authoritative and free; there's no reason to spend
 LLM tokens re-confirming it.
