@@ -129,7 +129,6 @@ SALARY_UNSET_GUIDANCE = (
     "candidate is happy to align with the band for the position."
 )
 
-
 def build_salary_guidance(salary_min: int, salary_max: int, currency: str) -> str:
     """Describe the salary expectation, or say it is unset — never '0–0'."""
     if not salary_min and not salary_max:

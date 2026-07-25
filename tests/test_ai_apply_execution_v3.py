@@ -23,7 +23,7 @@ def test_captcha_detector():
     assert rep_cf.challenge_type == "cloudflare"
 
 
-def test_dry_run_endpoint(client):
+def test_dry_run_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -50,7 +50,7 @@ def test_dry_run_endpoint(client):
         db_session.commit()
         db_session.refresh(app_rec)
 
-        resp = client.post(f"/api/applications/{app_rec.id}/dry-run")
+        resp = client.post(f"/api/applications/{app_rec.id}/dry-run", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["application_id"] == app_rec.id
@@ -59,8 +59,12 @@ def test_dry_run_endpoint(client):
         db_session.close()
 
 
-def test_batch_apply_endpoint(client):
-    resp = client.post("/api/control/batch-apply", json={"min_score": 80.0, "max_batch_size": 5})
+def test_batch_apply_endpoint(client, auth_headers):
+    resp = client.post(
+        "/api/control/batch-apply",
+        json={"min_score": 80.0, "max_batch_size": 5},
+        headers=auth_headers,
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "triggered_count" in data

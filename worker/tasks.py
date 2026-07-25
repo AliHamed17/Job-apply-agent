@@ -341,12 +341,14 @@ def generate_application_task(self, job_id: int):
         if routing_path.exists():
             routing_config = load_routing_config(routing_path)
             routing = route_cv(routing_job, routing_config)
-            # The keyword matcher only scores what it has signal for - a
-            # posting with no scraped description gives it nothing to match
-            # skills against. When it can't confidently pick a CV, let the
-            # LLM actually read every candidate CV's real content and judge,
-            # instead of silently shipping the generic fallback CV.
-            if settings.llm_cv_alignment and routing.fallback_reason:
+            if (
+                settings.llm_cv_routing
+                and not routing.overridden
+                and routing.fallback_reason in {
+                    "confidence_below_threshold",
+                    "abstained_low_confidence",
+                }
+            ):
                 from profile.cv_routing_llm import load_cv_excerpts, select_cv_via_llm
 
                 try:
@@ -357,6 +359,10 @@ def generate_application_task(self, job_id: int):
                         select_cv_via_llm(routing_job, routing_config, excerpts)
                     )
                     if llm_routing.selected_cv_id is not None:
+                        llm_routing.matched_evidence = [
+                            *routing.matched_evidence,
+                            *llm_routing.matched_evidence,
+                        ]
                         routing = llm_routing
                 except Exception as exc:
                     logger.warning("llm_cv_routing_unavailable", error=str(exc))
@@ -373,7 +379,11 @@ def generate_application_task(self, job_id: int):
         cv_text = None
         if routing.selected_cv_id:
             from profile.cv_content_cache import get_cv_text_by_id
-            cv_text = get_cv_text_by_id(routing.selected_cv_id)
+            cv_text = get_cv_text_by_id(
+                routing.selected_cv_id,
+                cv_routing_path=settings.cv_routing_path,
+                cv_directory=settings.cv_directory,
+            )
 
         # Run async generation in sync context using the selected CV text
         generated = run_async(generate_full_application(job_data, profile, cv_text=cv_text))
@@ -389,13 +399,12 @@ def generate_application_task(self, job_id: int):
             threshold=settings.auto_apply_threshold,
             min_apply_score=settings.min_apply_score,
         )
-        # Unfilled [PLACEHOLDER: ...] markers must never reach an employer.
-        # has_placeholders was previously computed and logged but gated
-        # nothing, so a letter still reading "[PLACEHOLDER: notice period]"
-        # could auto-approve and submit verbatim.
+        # Unfilled [PLACEHOLDER: ...] markers and uncertain CV routes must
+        # never reach an employer without review.
         auto_approve = (
             action == Action.AUTO_APPLY
             and routing.selected_cv_id is not None
+            and routing.fallback_reason is None
             and not generated.has_placeholders
         )
 
@@ -428,7 +437,7 @@ def generate_application_task(self, job_id: int):
         app.cv_routing_confidence = routing.confidence
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
         app.cv_routing_fallback_reason = routing.fallback_reason
-        if routing.selected_cv_id is None:
+        if routing.selected_cv_id is None or routing.fallback_reason:
             app.needs_review_reason = "CV_ROUTING_REVIEW_REQUIRED"
         elif generated.has_placeholders:
             fields = ", ".join(generated.placeholder_fields[:3]) or "unspecified"

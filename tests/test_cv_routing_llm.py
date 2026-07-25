@@ -1,10 +1,4 @@
-"""LLM-based CV selection (profile/cv_routing_llm.py).
-
-Covers the fallback path used when the deterministic keyword matcher
-(profile/cv_routing.py::route_cv) can't confidently pick a CV — e.g. a job
-posting with no scraped description. The LLM here actually reads each CV's
-extracted PDF text rather than matching hand-tagged keywords.
-"""
+"""Tests for the evidence-bounded LLM CV routing fallback."""
 
 from __future__ import annotations
 
@@ -29,9 +23,6 @@ def _job() -> RoutingJob:
     return RoutingJob(title="AI Engineer", description="Build LLM pipelines")
 
 
-# ── load_cv_excerpts ──────────────────────────────────────────────────
-
-
 def test_load_cv_excerpts_extracts_and_truncates(tmp_path):
     config = _config()
     long_text = "x" * 3000
@@ -47,32 +38,20 @@ def test_load_cv_excerpts_extracts_and_truncates(tmp_path):
     assert excerpts["cv_b"] == "short bio for b"
 
 
-def test_load_cv_excerpts_skips_unreadable_file(tmp_path):
+def test_load_cv_excerpts_skips_unreadable_and_blank_files(tmp_path):
     config = _config()
 
     def fake_get_text(cv_id, cv_routing_path=None, cv_directory=None):
-        return "" if cv_id == "cv_a" else "b content"
+        return "" if cv_id == "cv_a" else "   "
 
     with patch("profile.cv_routing_llm.get_cv_text_by_id", side_effect=fake_get_text):
         excerpts = load_cv_excerpts(config, tmp_path)
 
-    assert excerpts == {"cv_b": "b content"}
-
-
-def test_load_cv_excerpts_skips_blank_text(tmp_path):
-    config = _config()
-
-    with patch("profile.cv_routing_llm.get_cv_text_by_id", side_effect=["   ", "real text"]):
-        excerpts = load_cv_excerpts(config, tmp_path)
-
-    assert excerpts == {"cv_b": "real text"}
-
-
-# ── select_cv_via_llm ─────────────────────────────────────────────────
+    assert excerpts == {}
 
 
 @pytest.mark.asyncio
-async def test_select_cv_via_llm_returns_selection():
+async def test_select_cv_via_llm_returns_supported_selection():
     client = MagicMock()
     client.generate_json = AsyncMock(
         return_value={
@@ -94,9 +73,17 @@ async def test_select_cv_via_llm_returns_selection():
 
 
 @pytest.mark.asyncio
-async def test_select_cv_via_llm_abstains_on_unknown_id():
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"selected_cv_id": "cv_z", "confidence": 0.5},
+        {"selected_cv_id": None, "confidence": 0.1},
+        {"selected_cv_id": ["cv_b"], "confidence": 0.9},
+    ],
+)
+async def test_select_cv_via_llm_rejects_unsupported_selection(result):
     client = MagicMock()
-    client.generate_json = AsyncMock(return_value={"selected_cv_id": "cv_z", "confidence": 0.5})
+    client.generate_json = AsyncMock(return_value=result)
 
     decision = await select_cv_via_llm(_job(), _config(), {"cv_a": "text"}, client=client)
 
@@ -105,34 +92,52 @@ async def test_select_cv_via_llm_abstains_on_unknown_id():
 
 
 @pytest.mark.asyncio
-async def test_select_cv_via_llm_abstains_on_null_selection():
+async def test_select_cv_via_llm_marks_low_confidence_for_review():
     client = MagicMock()
-    client.generate_json = AsyncMock(return_value={"selected_cv_id": None, "confidence": 0.1})
+    client.generate_json = AsyncMock(
+        return_value={
+            "selected_cv_id": "cv_b",
+            "confidence": 0.2,
+            "reasoning": "Only weak overlap",
+        }
+    )
 
-    decision = await select_cv_via_llm(_job(), _config(), {"cv_a": "text"}, client=client)
+    decision = await select_cv_via_llm(
+        _job(), _config(), {"cv_a": "generic text", "cv_b": "some text"}, client=client
+    )
 
-    assert decision.selected_cv_id is None
-    assert decision.fallback_reason == "llm_abstained"
+    assert decision.selected_cv_id == "cv_b"
+    assert decision.fallback_reason == "llm_confidence_below_threshold"
 
 
 @pytest.mark.asyncio
-async def test_select_cv_via_llm_abstains_on_client_error():
+async def test_select_cv_via_llm_rejects_non_finite_confidence():
+    client = MagicMock()
+    client.generate_json = AsyncMock(
+        return_value={
+            "selected_cv_id": "cv_b",
+            "confidence": "NaN",
+            "reasoning": "Malformed provider confidence",
+        }
+    )
+
+    decision = await select_cv_via_llm(
+        _job(), _config(), {"cv_a": "generic text", "cv_b": "some text"}, client=client
+    )
+
+    assert decision.selected_cv_id == "cv_b"
+    assert decision.confidence == 0.0
+    assert decision.fallback_reason == "llm_confidence_below_threshold"
+
+
+@pytest.mark.asyncio
+async def test_select_cv_via_llm_abstains_on_provider_error_or_missing_text():
     client = MagicMock()
     client.generate_json = AsyncMock(side_effect=RuntimeError("ollama unreachable"))
 
-    decision = await select_cv_via_llm(_job(), _config(), {"cv_a": "text"}, client=client)
+    error_decision = await select_cv_via_llm(_job(), _config(), {"cv_a": "text"}, client=client)
+    empty_decision = await select_cv_via_llm(_job(), _config(), {}, client=client)
 
-    assert decision.selected_cv_id is None
-    assert decision.fallback_reason == "llm_routing_error"
-
-
-@pytest.mark.asyncio
-async def test_select_cv_via_llm_short_circuits_on_empty_excerpts():
-    client = MagicMock()
-    client.generate_json = AsyncMock()
-
-    decision = await select_cv_via_llm(_job(), _config(), {}, client=client)
-
-    assert decision.selected_cv_id is None
-    assert decision.fallback_reason == "no_cv_text_available"
-    client.generate_json.assert_not_called()
+    assert error_decision.fallback_reason == "llm_routing_error"
+    assert empty_decision.fallback_reason == "no_cv_text_available"
+    client.generate_json.assert_awaited_once()
