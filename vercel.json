@@ -1,0 +1,31 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "builds": [
+    {
+      "src": "api/vercel.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/vercel.py"
+    }
+  ],
+  "env": {
+    "APP_ENV": "production",
+    "AUTO_APPLY": "false",
+    "DRAFT_ONLY": "true",
+    "DRY_RUN": "true",
+    "LIVE_AUTOMATION_ACKNOWLEDGED": "false",
+    "LLM_PROVIDER": "mock",
+    "DATABASE_URL": "sqlite:////tmp/job-agent.db",
+    "APPLICATION_DATA_DIR": "/tmp/job-agent-data",
+    "USER_PROFILE_PATH": "/tmp/user_profile.yaml",
+    "CV_ROUTING_PATH": "/tmp/cv_routing.yaml",
+    "CV_DIRECTORY": "/tmp/cvs"
+  }
+}
