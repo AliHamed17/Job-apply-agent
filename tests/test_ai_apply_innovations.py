@@ -10,8 +10,8 @@ from match.ab_testing import compute_ab_test_analytics
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(auth_headers):
+    return TestClient(app, headers=auth_headers)
 
 
 def test_ab_testing_analytics():

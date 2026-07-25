@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from core.config import get_settings
 from db.models import Application, Job, JobStatus
 from db.session import get_session_factory
 from notifications.dispatcher import dispatch_high_match_alert
@@ -12,8 +13,8 @@ from jobs.models import JobData
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(auth_headers):
+    return TestClient(app, headers=auth_headers)
 
 
 def test_portfolio_spotlight_matcher():
@@ -40,7 +41,7 @@ def test_command_center_endpoint(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["candidate_name"] == "Ali Hamed"
-    assert data["auto_apply_active"] is True
+    assert data["auto_apply_active"] is get_settings().auto_apply
     assert "total_jobs_scanned" in data
 
 
