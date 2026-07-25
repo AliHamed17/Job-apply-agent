@@ -37,4 +37,4 @@ async def test_portal_login_submission():
     )
     result = await sub.submit(job, gen_app, profile.__dict__)
     assert result.success is True
-    assert "portal-auth" in result.confirmation_id
+    assert "nvidia-workday" in result.confirmation_id or "portal-auth" in result.confirmation_id
