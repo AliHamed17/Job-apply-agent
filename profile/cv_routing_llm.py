@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from profile.cv_content_cache import get_cv_text_by_id
 from profile.cv_routing import CVRoutingConfig, RoutingDecision, RoutingJob
@@ -111,7 +112,10 @@ async def select_cv_via_llm(
         confidence = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0
     except (TypeError, ValueError):
         confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
+    if not math.isfinite(confidence):
+        confidence = 0.0
+    else:
+        confidence = max(0.0, min(1.0, confidence))
     fallback_reason = (
         None
         if confidence >= config.minimum_confidence

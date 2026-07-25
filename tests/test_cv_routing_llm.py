@@ -111,6 +111,26 @@ async def test_select_cv_via_llm_marks_low_confidence_for_review():
 
 
 @pytest.mark.asyncio
+async def test_select_cv_via_llm_rejects_non_finite_confidence():
+    client = MagicMock()
+    client.generate_json = AsyncMock(
+        return_value={
+            "selected_cv_id": "cv_b",
+            "confidence": "NaN",
+            "reasoning": "Malformed provider confidence",
+        }
+    )
+
+    decision = await select_cv_via_llm(
+        _job(), _config(), {"cv_a": "generic text", "cv_b": "some text"}, client=client
+    )
+
+    assert decision.selected_cv_id == "cv_b"
+    assert decision.confidence == 0.0
+    assert decision.fallback_reason == "llm_confidence_below_threshold"
+
+
+@pytest.mark.asyncio
 async def test_select_cv_via_llm_abstains_on_provider_error_or_missing_text():
     client = MagicMock()
     client.generate_json = AsyncMock(side_effect=RuntimeError("ollama unreachable"))

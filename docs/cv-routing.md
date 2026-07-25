@@ -13,9 +13,8 @@ missing text, malformed IDs, and low confidence remain explicitly reviewable.
 An abstained or low-confidence application cannot be auto-approved until the
 operator previews the route or selects an override in the dashboard.
 
-`LLM_CV_ALIGNMENT` separately controls the post-selection content check. Both
-features are evidence-bounded: no CV text means no LLM selection, and the
-fallback never invents a CV or candidate fact.
+The fallback is evidence-bounded: no CV text means no LLM selection, and it
+never invents a CV or candidate fact.
 
 Every application and submission attempt records the selected CV id and profile
 version. Applications also retain confidence, matched evidence, fallback

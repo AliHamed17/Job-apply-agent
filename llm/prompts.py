@@ -129,54 +129,6 @@ SALARY_UNSET_GUIDANCE = (
     "candidate is happy to align with the band for the position."
 )
 
-CV_ALIGNMENT_PROMPT = """\
-## Job Details
-- Title: {job_title}
-- Seniority: {seniority}
-- Description: {job_description}
-
-## Selected CV ({cv_id})
-{cv_text}
-
-## All Available CV Options
-{available_cvs_info}
-
-## Task
-Evaluate if the selected CV ({cv_id}) is a strong match for this job, or if
-another CV option would be significantly better aligned.
-
-Respond ONLY with a JSON object in this format:
-{{
-    "is_good_match": true/false,
-    "alignment_score": float between 0.0 and 1.0,
-    "reasoning": "Concise summary explaining why this CV matches or doesn't match",
-    "suggested_cv_id": "cv-id-string" (or null if the selected CV is best)
-}}
-"""
-
-# ── CV Routing Prompt ─────────────────────────────────────────────────────
-CV_ROUTING_PROMPT = """\
-Select the single best candidate CV for this job using only the supplied CV
-excerpts. Prefer a strong match to the actual responsibilities and required
-skills, not a generic CV. If the excerpts do not support a reliable choice,
-return null for selected_cv_id.
-
-## Job
-- Title: {job_title}
-- Seniority: {seniority}
-- Description: {job_description}
-
-## Candidate CV Options
-{cv_options}
-
-Respond ONLY with a JSON object in this format:
-{{
-    "selected_cv_id": "configured-cv-id" or null,
-    "confidence": float between 0.0 and 1.0,
-    "reasoning": "One concise evidence-based sentence"
-}}
-"""
-
 def build_salary_guidance(salary_min: int, salary_max: int, currency: str) -> str:
     """Describe the salary expectation, or say it is unset — never '0–0'."""
     if not salary_min and not salary_max:
