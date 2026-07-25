@@ -74,8 +74,6 @@ class RoutingDecision(BaseModel):
     matched_evidence: list[str]
     fallback_reason: str | None = None
     overridden: bool = False
-    alignment_score: float | None = None
-    alignment_reasoning: str | None = None
 
 
 
@@ -155,62 +153,3 @@ def route_cv(job: RoutingJob, config: CVRoutingConfig) -> RoutingDecision:
         matched_evidence=evidence,
         fallback_reason="abstained_low_confidence",
     )
-
-
-async def validate_cv_alignment(
-    job: RoutingJob,
-    decision: RoutingDecision,
-    config: CVRoutingConfig,
-    client=None,
-) -> RoutingDecision:
-    """LLM-based verification to ensure the selected CV genuinely matches the role."""
-    if not decision.selected_cv_id:
-        return decision
-
-    from profile.cv_content_cache import get_cv_text_by_id
-    from llm.client import get_llm_client
-    from llm.prompts import CV_ALIGNMENT_PROMPT
-
-    cv_text = get_cv_text_by_id(decision.selected_cv_id)
-    if not cv_text:
-        return decision
-
-    llm = client or get_llm_client()
-
-    cv_summary_lines = [f"- {cv.id}: {cv.file} (terms: {', '.join(cv.title_terms)})" for cv in config.cvs]
-    available_cvs_info = "\n".join(cv_summary_lines)
-
-    prompt = CV_ALIGNMENT_PROMPT.format(
-        job_title=job.title,
-        seniority=job.seniority or "unspecified",
-        job_description=job.description[:3000],
-        cv_id=decision.selected_cv_id,
-        cv_text=cv_text[:4000],
-        available_cvs_info=available_cvs_info,
-    )
-
-    try:
-        result = await llm.generate_json(prompt=prompt, system="You are an expert technical recruiter matching CVs to job postings.")
-        is_good_match = result.get("is_good_match", True)
-        alignment_score = float(result.get("alignment_score", 1.0))
-        reasoning = str(result.get("reasoning", ""))
-        suggested_id = result.get("suggested_cv_id")
-
-        decision.alignment_score = alignment_score
-        decision.alignment_reasoning = reasoning
-
-        if suggested_id and suggested_id != decision.selected_cv_id:
-            better_cv = next((cv for cv in config.cvs if cv.id == suggested_id), None)
-            if better_cv:
-                decision.selected_cv_id = better_cv.id
-                decision.selected_file = better_cv.file
-                decision.matched_evidence.append(f"llm_suggested_realign:{suggested_id}")
-                decision.overridden = True
-
-        return decision
-    except Exception as exc:
-        import structlog
-        structlog.get_logger(__name__).warning("cv_alignment_llm_failed", error=str(exc))
-        return decision
-
-

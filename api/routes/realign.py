@@ -4,27 +4,25 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import structlog
+from profile.cv_content_cache import get_cv_text_by_id
+from profile.cv_routing import (
+    RoutingJob,
+    load_routing_config,
+    parse_required_skills,
+    route_cv,
+)
+from profile.cv_routing_llm import load_cv_excerpts, select_cv_via_llm
+from profile.loader import get_profile
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
-from db.models import Application, Job, JobStatus
-
+from db.models import Application
 from db.session import get_db
 from jobs.models import JobData as JobDataModel
-from profile.cv_content_cache import get_cv_text_by_id
-from profile.cv_routing import (
-    RoutingDecision,
-    RoutingJob,
-    load_routing_config,
-    parse_required_skills,
-    route_cv,
-    validate_cv_alignment,
-)
-from profile.loader import get_profile
 from llm.generation import generate_full_application
 
 logger = structlog.get_logger(__name__)
@@ -33,7 +31,9 @@ router = APIRouter(tags=["applications"])
 
 class RealignRequest(BaseModel):
     forced_cv_id: str | None = Field(default=None, description="Optional CV ID to force align")
-    user_guidance: str | None = Field(default=None, description="Optional steering instructions for LLM generation")
+    user_guidance: str | None = Field(
+        default=None, description="Optional steering instructions for LLM generation"
+    )
 
 
 class RealignResponse(BaseModel):
@@ -79,8 +79,13 @@ async def realign_application(
             required_skills=parse_required_skills(db_job.keywords),
         )
         decision = route_cv(rjob, routing_config)
-        if settings.llm_cv_alignment and decision.selected_cv_id:
-            decision = await validate_cv_alignment(rjob, decision, routing_config)
+        if settings.llm_cv_alignment and decision.fallback_reason:
+            excerpts = load_cv_excerpts(
+                routing_config, settings.cv_directory, settings.cv_routing_path
+            )
+            llm_decision = await select_cv_via_llm(rjob, routing_config, excerpts)
+            if llm_decision.selected_cv_id is not None:
+                decision = llm_decision
 
         selected_cv_id = decision.selected_cv_id
         confidence = decision.confidence
