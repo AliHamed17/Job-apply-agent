@@ -14,6 +14,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -56,9 +58,6 @@ class AshbySubmitter(BaseSubmitter):
             )
 
         personal = user_profile.get("personal", {})
-        name_parts = (personal.get("name") or "").split(maxsplit=1)
-        first = name_parts[0] if name_parts else ""
-        last = name_parts[1] if len(name_parts) > 1 else ""
 
         # Build field submissions — Ashby uses a flexible form field system
         field_submissions = [
@@ -147,10 +146,6 @@ class AshbySubmitter(BaseSubmitter):
                 )
 
             personal = user_profile.get("personal", {})
-            links = user_profile.get("links", {})
-            name_parts = (personal.get("name") or "").split(maxsplit=1)
-            first_name = name_parts[0] if name_parts else ""
-            last_name = name_parts[1] if len(name_parts) > 1 else ""
 
             # Check if there is an "Apply" button instead of the form directly
             apply_btn = page.locator('a:has-text("Apply"), button:has-text("Apply")').first
@@ -170,38 +165,24 @@ class AshbySubmitter(BaseSubmitter):
                     await file_input.set_input_files(resume_path)
                     await page.wait_for_timeout(1000)
 
-            # Custom questions (Ashby custom fields)
-            if application.qa_answers:
-                text_inputs = page.locator('input[type="text"]:visible, textarea:visible')
-                for i in range(await text_inputs.count()):
-                    el = text_inputs.nth(i)
-                    if not await el.is_editable(): continue
-                    current = await el.input_value()
-                    if current: continue
-                    el_id = await el.get_attribute("id") or ""
-                    label_text = ""
-                    if el_id:
-                        lbl = page.locator(f'label[for="{el_id}"]')
-                        if await lbl.count() > 0:
-                            label_text = (await lbl.inner_text()).strip().lower()
-                    if not label_text:
-                        label_text = (await el.get_attribute("aria-label") or "").lower()
-                    if not label_text: continue
-                    best_answer = next((str(v) for k, v in application.qa_answers.items() if any(kw in label_text for kw in k.lower().split("_"))), next((str(v) for v in application.qa_answers.values() if v), ""))
-                    if best_answer:
-                        await el.fill(best_answer[:500])
+            # Custom questions (Ashby custom fields) — resolved through
+            # FormBrain, which abstains rather than guessing. Nothing is typed
+            # into a field whose question we could not actually answer.
+            from profile.models import UserProfile
 
-            # Select dropdowns
-            selects = page.locator('select:visible')
-            for i in range(await selects.count()):
-                sel = selects.nth(i)
-                options = await sel.locator('option').all_text_contents()
-                options_lower = [o.lower() for o in options]
-                if "yes" in options_lower and "no" in options_lower:
-                    try:
-                        await sel.select_option(label=next(o for o in options if o.lower() == "yes"))
-                    except Exception:
-                        pass
+            profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+            brain = FormBrain(profile_obj)
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
+
+            # A required question we cannot answer truthfully means no
+            # submission — hand it to a human instead of inventing an answer.
+            if blocked:
+                logger.warning("ashby_needs_review", questions=blocked[:5])
+                await browser.close()
+                return SubmissionResult(
+                    success=True, platform=self.platform_name, status="draft_only",
+                    error=needs_review_error(blocked)
+                )
 
             # Submit
             submit_btn = page.locator('button[type="submit"]').first
@@ -209,9 +190,13 @@ class AshbySubmitter(BaseSubmitter):
                 await submit_btn.click()
                 await page.wait_for_timeout(3000)
 
-            success = "confirmation" in page.url or "success" in page.url.lower() or "applied" in page.url.lower()
+            success = (
+                "confirmation" in page.url
+                or "success" in page.url.lower()
+                or "applied" in page.url.lower()
+            )
             await browser.close()
-            
+
             return SubmissionResult(
                 success=success, platform=self.platform_name,
                 status="submitted" if success else "failed",

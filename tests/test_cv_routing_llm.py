@@ -27,10 +27,10 @@ def test_load_cv_excerpts_extracts_and_truncates(tmp_path):
     config = _config()
     long_text = "x" * 3000
 
-    def fake_extract(path):
-        return long_text if "a.pdf" in str(path) else "short bio for b"
+    def fake_get_text(cv_id, cv_routing_path=None, cv_directory=None):
+        return long_text if cv_id == "cv_a" else "short bio for b"
 
-    with patch("profile.cv_routing_llm.extract_text_from_pdf", side_effect=fake_extract):
+    with patch("profile.cv_routing_llm.get_cv_text_by_id", side_effect=fake_get_text):
         excerpts = load_cv_excerpts(config, tmp_path)
 
     assert set(excerpts) == {"cv_a", "cv_b"}
@@ -41,12 +41,10 @@ def test_load_cv_excerpts_extracts_and_truncates(tmp_path):
 def test_load_cv_excerpts_skips_unreadable_and_blank_files(tmp_path):
     config = _config()
 
-    def fake_extract(path):
-        if "a.pdf" in str(path):
-            raise FileNotFoundError("missing")
-        return "   "
+    def fake_get_text(cv_id, cv_routing_path=None, cv_directory=None):
+        return "" if cv_id == "cv_a" else "   "
 
-    with patch("profile.cv_routing_llm.extract_text_from_pdf", side_effect=fake_extract):
+    with patch("profile.cv_routing_llm.get_cv_text_by_id", side_effect=fake_get_text):
         excerpts = load_cv_excerpts(config, tmp_path)
 
     assert excerpts == {}
@@ -76,20 +74,21 @@ async def test_select_cv_via_llm_returns_supported_selection():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("result", "expected_reason"),
+    "result",
     [
-        ({"selected_cv_id": "cv_z", "confidence": 0.5}, "llm_abstained"),
-        ({"selected_cv_id": None, "confidence": 0.1}, "llm_abstained"),
+        {"selected_cv_id": "cv_z", "confidence": 0.5},
+        {"selected_cv_id": None, "confidence": 0.1},
+        {"selected_cv_id": ["cv_b"], "confidence": 0.9},
     ],
 )
-async def test_select_cv_via_llm_rejects_unsupported_selection(result, expected_reason):
+async def test_select_cv_via_llm_rejects_unsupported_selection(result):
     client = MagicMock()
     client.generate_json = AsyncMock(return_value=result)
 
     decision = await select_cv_via_llm(_job(), _config(), {"cv_a": "text"}, client=client)
 
     assert decision.selected_cv_id is None
-    assert decision.fallback_reason == expected_reason
+    assert decision.fallback_reason == "llm_abstained"
 
 
 @pytest.mark.asyncio

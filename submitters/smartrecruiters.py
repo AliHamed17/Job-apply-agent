@@ -19,6 +19,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -134,6 +136,10 @@ class SmartRecruitersSubmitter(BaseSubmitter):
                 error="Playwright not installed for browser fallback"
             )
 
+        from profile.models import UserProfile
+
+        profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+        brain = FormBrain(profile_obj)
         job_url = job.apply_url or job.source_url or ""
 
         async with async_playwright() as pw:
@@ -171,7 +177,7 @@ class SmartRecruitersSubmitter(BaseSubmitter):
             await page.fill('input[name="firstName"], input[id*="firstName"]', first_name)
             await page.fill('input[name="lastName"], input[id*="lastName"]', last_name)
             await page.fill('input[type="email"]', personal.get("email", ""))
-            
+
             phone_input = page.locator('input[type="tel"], input[name="phoneNumber"]').first
             if await phone_input.count() > 0:
                 await phone_input.fill(personal.get("phone", ""))
@@ -189,36 +195,20 @@ class SmartRecruitersSubmitter(BaseSubmitter):
                 if await msg_input.count() > 0 and await msg_input.is_visible():
                     await msg_input.fill(application.cover_letter)
 
-            # Custom Q&A answers
-            if application.qa_answers:
-                text_inputs = page.locator('input[type="text"]:visible')
-                for i in range(await text_inputs.count()):
-                    el = text_inputs.nth(i)
-                    if not await el.is_editable(): continue
-                    current = await el.input_value()
-                    if current: continue
-                    label_text = (await el.get_attribute("aria-label") or "").lower()
-                    el_id = await el.get_attribute("id") or ""
-                    if not label_text and el_id:
-                        lbl = page.locator(f'label[for="{el_id}"]')
-                        if await lbl.count() > 0:
-                            label_text = (await lbl.inner_text()).strip().lower()
-                    if not label_text: continue
-                    best_answer = next((str(v) for k, v in application.qa_answers.items() if any(kw in label_text for kw in k.lower().split("_"))), next((str(v) for v in application.qa_answers.values() if v), ""))
-                    if best_answer:
-                        await el.fill(best_answer[:500])
-
-            # Select dropdowns
-            selects = page.locator('select:visible')
-            for i in range(await selects.count()):
-                sel = selects.nth(i)
-                options = await sel.locator('option').all_text_contents()
-                options_lower = [o.lower() for o in options]
-                if "yes" in options_lower and "no" in options_lower:
-                    try:
-                        await sel.select_option(label=next(o for o in options if o.lower() == "yes"))
-                    except Exception:
-                        pass
+            # Custom Q&A: text, numeric and dropdown questions all go through
+            # FormBrain, which abstains instead of guessing. Anything it can't
+            # answer confidently is left blank rather than filled with a false
+            # value ("Yes" to every yes/no, "0" years of experience, or an
+            # unrelated qa_answer dropped into a field whose label didn't match).
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
+            if blocked:
+                # A *required* question we can't answer truthfully — hand the
+                # application to a human instead of submitting a lie.
+                await browser.close()
+                return SubmissionResult(
+                    success=True, platform=self.platform_name, status="draft_only",
+                    error=needs_review_error(blocked)
+                )
 
             # Acknowledge / Checkboxes
             checkboxes = page.locator('input[type="checkbox"]:visible')
@@ -230,7 +220,9 @@ class SmartRecruitersSubmitter(BaseSubmitter):
                     pass
 
             # Submit application
-            submit_btn = page.locator('button[type="submit"]:has-text("Submit"), button:has-text("Submit")').first
+            submit_btn = page.locator(
+                'button[type="submit"]:has-text("Submit"), button:has-text("Submit")'
+            ).first
             if await submit_btn.is_visible():
                 await submit_btn.click()
                 await page.wait_for_timeout(3000)
@@ -238,8 +230,10 @@ class SmartRecruitersSubmitter(BaseSubmitter):
             # Check success
             success_indicators = ["success", "applied", "thank", "confirmation"]
             final_content = (await page.content()).lower()
-            success = any(ind in page.url.lower() or ind in final_content for ind in success_indicators)
-            
+            success = any(
+                ind in page.url.lower() or ind in final_content for ind in success_indicators
+            )
+
             await browser.close()
             return SubmissionResult(
                 success=success, platform=self.platform_name,

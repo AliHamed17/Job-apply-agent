@@ -14,6 +14,7 @@ from llm.prompts import (
     QA_ANSWERS_PROMPT,
     RECRUITER_MESSAGE_PROMPT,
     SYSTEM_PROMPT,
+    build_salary_guidance,
     build_system_prompt,
 )
 
@@ -90,7 +91,27 @@ async def generate_cover_letter(
 
     system = build_system_prompt(few_shot_examples) if few_shot_examples else SYSTEM_PROMPT
 
+    from llm.language import detect_language
+    lang = detect_language(f"{job.title} {job.description}")
+    if lang == "he":
+        system += (
+            "\nCRITICAL LANGUAGE INSTRUCTION: The job posting is in Hebrew. "
+            "Write the cover letter in professional, fluent Hebrew."
+        )
+
     resume_content = (cv_text if cv_text and cv_text.strip() else profile.resume.text)[:4000]
+
+
+    raw_projects = getattr(profile, "projects", []) or []
+    if isinstance(raw_projects, list) and raw_projects:
+        project_spotlights = "\n".join(
+            f"- {p.get('name', '')}: {p.get('impact', '')}"
+            if isinstance(p, dict)
+            else f"- {getattr(p, 'name', '')}: {getattr(p, 'impact', '')}"
+            for p in raw_projects
+        )
+    else:
+        project_spotlights = "None specified."
 
     prompt = COVER_LETTER_PROMPT.format(
         job_title=job.title,
@@ -103,8 +124,10 @@ async def generate_cover_letter(
             "work authorization", "[CONFIRMED EVIDENCE REQUIRED]"
         ),
         resume_text=resume_content,
+        project_spotlights=project_spotlights,
         cover_letter_style=profile.cover_letter.style,
     )
+
 
     result = await client.generate(prompt=prompt, system=system)
     logger.info(
@@ -161,9 +184,7 @@ async def generate_qa_answers(
         user_location=profile.personal.location,
         work_authorization=profile.personal.work_authorization,
         resume_text=resume_content,
-        salary_min=salary.min,
-        salary_max=salary.max,
-        currency=salary.currency,
+        salary_guidance=build_salary_guidance(salary.min, salary.max, salary.currency),
     )
 
     try:
@@ -195,7 +216,9 @@ async def generate_full_application(
     # Load once and pass into cover letter generation
     few_shot_examples = _load_few_shot_examples()
 
-    cover_letter = await generate_cover_letter(job, profile, client, few_shot_examples, cv_text=cv_text)
+    cover_letter = await generate_cover_letter(
+        job, profile, client, few_shot_examples, cv_text=cv_text
+    )
     recruiter_msg = await generate_recruiter_message(job, profile, client)
     qa_answers = await generate_qa_answers(job, profile, client, cv_text=cv_text)
 

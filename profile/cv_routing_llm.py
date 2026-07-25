@@ -1,88 +1,63 @@
-"""LLM-assisted CV selection for low-confidence deterministic routes.
-
-The deterministic router remains the first decision-maker. This module is
-only used when it cannot confidently select a CV, and it fails closed when
-the provider, CV text, or returned ID is unusable.
-"""
+"""LLM-based CV selection for low-confidence deterministic routes."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from profile.cv_content_cache import get_cv_text_by_id
 from profile.cv_routing import CVRoutingConfig, RoutingDecision, RoutingJob
-from profile.pdf_loader import extract_text_from_pdf
 
 import structlog
 
-from llm.prompts import CV_ROUTING_PROMPT
+from llm.client import LLMClient, get_llm_client
 
 logger = structlog.get_logger(__name__)
 
-MAX_CV_EXCERPT_CHARS = 1800
+_EXCERPT_CHARS = 1800
+_PROMPT = """You are matching a candidate's resume variants to a job posting.
+Read each resume excerpt below and pick the ONE that is the best fit for
+this specific job. Consider the actual skills, experience, and seniority
+described in each resume - not just keyword overlap.
+
+JOB:
+Title: {title}
+Description: {description}
+
+CANDIDATE RESUMES (id: excerpt):
+{cv_block}
+
+Respond with ONLY JSON:
+{{"selected_cv_id": "<one of the ids above, or null if truly none fit>",
+  "confidence": <0.0-1.0>,
+  "reasoning": "<one sentence citing specific evidence from the chosen resume>"}}
+"""
 
 
 def load_cv_excerpts(
     config: CVRoutingConfig,
     cv_directory: str | Path,
+    cv_routing_path: str | Path | None = None,
 ) -> dict[str, str]:
-    """Extract bounded text for every readable CV in the routing config."""
-    directory = Path(cv_directory)
+    """Fetch bounded extracted text for each readable configured CV."""
     excerpts: dict[str, str] = {}
-
     for cv in config.cvs:
-        path = (directory / cv.file).resolve()
-        try:
-            text = extract_text_from_pdf(path).strip()
-        except Exception as exc:
-            logger.warning(
-                "cv_routing_pdf_unreadable",
-                cv_id=cv.id,
-                path=str(path),
-                error=str(exc),
-            )
-            continue
-
-        if text:
-            excerpts[cv.id] = text[:MAX_CV_EXCERPT_CHARS]
-
-    return excerpts
-
-
-def _build_prompt(
-    job: RoutingJob,
-    config: CVRoutingConfig,
-    excerpts: dict[str, str],
-) -> str:
-    cv_sections = []
-    for cv in config.cvs:
-        excerpt = excerpts.get(cv.id)
-        if not excerpt:
-            continue
-        cv_sections.append(
-            "\n".join(
-                [
-                    f"### CV {cv.id} ({cv.file})",
-                    f"Configured focus: {', '.join(cv.title_terms + cv.skills)}",
-                    excerpt,
-                ]
-            )
+        text = get_cv_text_by_id(
+            cv.id,
+            cv_routing_path=cv_routing_path,
+            cv_directory=cv_directory,
         )
-
-    return CV_ROUTING_PROMPT.format(
-        job_title=job.title or "unspecified",
-        seniority=job.seniority or "unspecified",
-        job_description=(job.description or "")[:4000],
-        cv_options="\n\n".join(cv_sections),
-    )
+        if text.strip():
+            excerpts[cv.id] = text.strip()[:_EXCERPT_CHARS]
+    return excerpts
 
 
 async def select_cv_via_llm(
     job: RoutingJob,
     config: CVRoutingConfig,
-    excerpts: dict[str, str],
-    client=None,
+    cv_excerpts: dict[str, str],
+    client: LLMClient | None = None,
 ) -> RoutingDecision:
-    """Select one configured CV, or abstain with an auditable reason."""
-    if not excerpts:
+    """Select a configured CV, or abstain with an auditable reason."""
+    if not cv_excerpts:
         return RoutingDecision(
             selected_cv_id=None,
             selected_file=None,
@@ -91,20 +66,18 @@ async def select_cv_via_llm(
             fallback_reason="no_cv_text_available",
         )
 
-    from llm.client import get_llm_client
+    client = client or get_llm_client()
+    cv_block = "\n\n".join(f"[{cv_id}]\n{text}" for cv_id, text in cv_excerpts.items())
+    prompt = _PROMPT.format(
+        title=job.title or "(no title)",
+        description=(job.description or "(no description provided)")[:3000],
+        cv_block=cv_block,
+    )
 
-    llm = client or get_llm_client()
     try:
-        result = await llm.generate_json(
-            prompt=_build_prompt(job, config, excerpts),
-            system=(
-                "You are an expert technical recruiter. Select a CV using only "
-                "the supplied job and CV text. Never invent candidate evidence."
-            ),
-            max_tokens=800,
-        )
+        result = await client.generate_json(prompt=prompt, max_tokens=300)
     except Exception as exc:
-        logger.warning("cv_routing_llm_failed", error=str(exc))
+        logger.warning("llm_cv_routing_failed", error=str(exc))
         return RoutingDecision(
             selected_cv_id=None,
             selected_file=None,
@@ -113,34 +86,44 @@ async def select_cv_via_llm(
             fallback_reason="llm_routing_error",
         )
 
-    selected_id = result.get("selected_cv_id") if isinstance(result, dict) else None
+    if not isinstance(result, dict):
+        selected_id = None
+        reasoning = ""
+    else:
+        selected_id = result.get("selected_cv_id")
+        reasoning = str(result.get("reasoning") or "")[:300]
+
     if not isinstance(selected_id, str):
         selected_id = None
     configured = {cv.id: cv for cv in config.cvs}
     selected = configured.get(selected_id)
-
-    # A valid config ID is not enough: the selected CV must also have supplied
-    # text, otherwise the model did not have evidence for the choice.
-    if selected is None or selected_id not in excerpts:
+    if selected is None or selected_id not in cv_excerpts:
+        logger.info("llm_cv_routing_abstained", selected_id=selected_id, reasoning=reasoning)
         return RoutingDecision(
             selected_cv_id=None,
             selected_file=None,
             confidence=0.0,
-            matched_evidence=[],
+            matched_evidence=[f"llm:{reasoning}"] if reasoning else [],
             fallback_reason="llm_abstained",
         )
 
     try:
-        confidence = max(0.0, min(1.0, float(result.get("confidence", 0.0))))
+        confidence = float(result.get("confidence", 0.0)) if isinstance(result, dict) else 0.0
     except (TypeError, ValueError):
         confidence = 0.0
-    reasoning = str(result.get("reasoning", "")).strip()
+    confidence = max(0.0, min(1.0, confidence))
     fallback_reason = (
         None
         if confidence >= config.minimum_confidence
         else "llm_confidence_below_threshold"
     )
 
+    logger.info(
+        "llm_cv_routing_selected",
+        cv_id=selected.id,
+        confidence=confidence,
+        reasoning=reasoning,
+    )
     return RoutingDecision(
         selected_cv_id=selected.id,
         selected_file=selected.file,

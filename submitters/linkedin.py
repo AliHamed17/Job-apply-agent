@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from pathlib import Path
 
 import structlog
@@ -32,6 +31,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -84,7 +85,10 @@ class LinkedInSubmitter(BaseSubmitter):
                 success=True,
                 platform=self.platform_name,
                 status="draft_only",
-                error="Playwright not installed. Run: pip install 'job-apply-agent[browser]' && playwright install chromium",
+                error=(
+                    "Playwright not installed. Run: "
+                    "pip install 'job-apply-agent[browser]' && playwright install chromium"
+                ),
             )
 
         if not self.cookies_file and not (self.email and self.password):
@@ -92,7 +96,10 @@ class LinkedInSubmitter(BaseSubmitter):
                 success=True,
                 platform=self.platform_name,
                 status="draft_only",
-                error="LinkedIn credentials not configured. Set LINKEDIN_COOKIES_FILE or LINKEDIN_EMAIL+LINKEDIN_PASSWORD in .env",
+                error=(
+                    "LinkedIn credentials not configured. Set LINKEDIN_COOKIES_FILE or "
+                    "LINKEDIN_EMAIL+LINKEDIN_PASSWORD in .env"
+                ),
             )
 
         job_url = job.apply_url or job.source_url or ""
@@ -136,7 +143,9 @@ class LinkedInSubmitter(BaseSubmitter):
             page = await ctx.new_page()
 
             try:
-                result = await self._apply(page, job_url, application, user_profile, resume_path)
+                result = await self._apply(
+                    page, job_url, job, application, user_profile, resume_path
+                )
             except Exception as exc:
                 logger.error("linkedin_apply_error", error=str(exc))
                 result = SubmissionResult(
@@ -209,11 +218,9 @@ class LinkedInSubmitter(BaseSubmitter):
 
     # ── Application flow ──────────────────────────────────────────────────────
 
-    async def _apply(self, page, job_url: str, application: GeneratedApplication,
+    async def _apply(self, page, job_url: str, job: JobData, application: GeneratedApplication,
                      user_profile: dict, resume_path: str | None) -> SubmissionResult:
         """Navigate to the job and complete Easy Apply."""
-        personal = user_profile.get("personal", {})
-
         await page.goto(job_url, timeout=_NAV_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
 
@@ -244,6 +251,13 @@ class LinkedInSubmitter(BaseSubmitter):
         await easy_apply_btn.click(timeout=_ELEM_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
 
+        # Resolver for the custom questions — built once and reused across the
+        # form's steps. FormBrain abstains instead of guessing.
+        from profile.models import UserProfile  # noqa: PLC0415
+
+        profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+        brain = FormBrain(profile_obj)
+
         # Work through the multi-step form
         max_steps = 8
         for step in range(max_steps):
@@ -259,6 +273,21 @@ class LinkedInSubmitter(BaseSubmitter):
 
             # Fill visible form fields
             await self._fill_form_fields(page, application, user_profile, resume_path)
+
+            # Custom questions (text, number, yes/no <select>) — answered only
+            # where FormBrain is confident, never guessed.
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
+
+            # A required question we could not answer truthfully: hand off to a
+            # human rather than submit a made-up answer.
+            if blocked:
+                logger.info("linkedin_needs_review", blocked=blocked)
+                return SubmissionResult(
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error=needs_review_error(blocked),
+                )
 
             # Check if there's a "Submit application" button
             submit_btn = page.locator(
@@ -340,72 +369,12 @@ class LinkedInSubmitter(BaseSubmitter):
             '.jobs-easy-apply-content textarea'
         ).first
         if await cover_letter_textarea.count() > 0:
-            if await cover_letter_textarea.is_visible() and await cover_letter_textarea.is_editable():
+            visible = await cover_letter_textarea.is_visible()
+            if visible and await cover_letter_textarea.is_editable():
                 await cover_letter_textarea.fill(application.cover_letter or "")
 
-        # Work authorization — select "Yes" on any auth-related radio group
-        for auth_label in ["authorized to work", "legally authorized", "work authorization", "sponsorship"]:
-            yes_radio = page.locator(
-                f'label:has-text("Yes"):near(label:has-text("{auth_label}"))'
-            ).first
-            if await yes_radio.count() > 0 and await yes_radio.is_visible():
-                await yes_radio.click()
-
-        # Numeric inputs (years of experience) — fill with value from qa_answers or 0
-        exp_inputs = page.locator('input[type="number"]')
-        for i in range(await exp_inputs.count()):
-            el = exp_inputs.nth(i)
-            if await el.is_visible() and await el.is_editable():
-                current = await el.input_value()
-                if not current:
-                    await el.fill("0")
-
-        # Custom open-text questions — match labels to qa_answers
-        if application.qa_answers:
-            text_inputs = page.locator(
-                '.jobs-easy-apply-form-element input[type="text"], '
-                '.jobs-easy-apply-form-element textarea'
-            )
-            count = await text_inputs.count()
-            for i in range(count):
-                el = text_inputs.nth(i)
-                if not await el.is_visible():
-                    continue
-                if not await el.is_editable():
-                    continue
-                current = await el.input_value()
-                if current:
-                    continue
-                # Try to find the label text near this element
-                label_el = page.locator(f'label[for="{await el.get_attribute("id") or ""}"]').first
-                label_text = ""
-                if await label_el.count() > 0:
-                    label_text = (await label_el.inner_text()).strip().lower()
-                if not label_text:
-                    # Try aria-label
-                    label_text = (await el.get_attribute("aria-label") or "").lower()
-                if not label_text:
-                    continue
-                # Find the best matching answer from qa_answers
-                best_answer = ""
-                for q_key, q_val in application.qa_answers.items():
-                    if any(kw in label_text for kw in q_key.lower().split("_")):
-                        best_answer = str(q_val)
-                        break
-                if not best_answer:
-                    # Fallback: use the first non-empty answer
-                    best_answer = next((str(v) for v in application.qa_answers.values() if v), "")
-                if best_answer:
-                    await el.fill(best_answer[:500])
-
-        # Select dropdowns — handle common yes/no questions
-        selects = page.locator('select')
-        for i in range(await selects.count()):
-            sel = selects.nth(i)
-            if not await sel.is_visible():
-                continue
-            options = await sel.locator('option').all_text_contents()
-            options_lower = [o.lower() for o in options]
-            # For "Yes/No" dropdowns on authorization questions, pick "Yes"
-            if "yes" in options_lower and "no" in options_lower:
-                await sel.select_option(label=next(o for o in options if o.lower() == "yes"))
+        # Everything else on the form — work authorization, years of experience,
+        # yes/no dropdowns, open-text questions — is a question about the
+        # candidate, not identity data. It is answered by fill_form_safely() in
+        # _apply(), which resolves each question through FormBrain and abstains
+        # when it is not confident, rather than guessing here.

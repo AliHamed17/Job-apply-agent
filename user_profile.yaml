@@ -7,7 +7,8 @@ personal:
   email: "ali.h.10j@gmail.com"
   phone: "+972-53-339-2826"
   location: "Haifa District, Israel"
-  work_authorization: ""
+  work_authorization: "Israeli Citizen (Authorized to work in Israel without sponsorship)"
+
 
 links:
   linkedin: "https://www.linkedin.com/in/ali-hamed-1705-/"
@@ -115,3 +116,30 @@ preferences:
 attachments:
   - path: "./cvs/Ali_Hamed_CV_Software_Engineer.pdf"
     label: "Resume"
+
+evidence:
+  user_confirmed:
+    "work authorization": "Israeli Citizen (Authorized to work in Israel without sponsorship)"
+    "authorized to work": "Yes"
+    "visa sponsorship": "No, I do not require visa sponsorship"
+    "sponsorship": "No"
+    "citizenship": "Israeli Citizen"
+    "security clearance": "None"
+    "gender": "Male"
+    "race": "White / Middle Eastern"
+    "ethnicity": "Middle Eastern"
+    "veteran": "No, not a protected veteran"
+    "disability": "No, I do not have a disability"
+
+projects:
+  - name: "Parallel Wireless 4G/5G CI/CD Pipeline Redesign"
+    impact: "Cut build-to-deploy duration from 8h to 2h (~75% reduction) using Jenkins, Groovy, Docker, and KVM"
+    technologies: ["Python", "Jenkins", "Groovy", "Linux", "Docker", "KVM", "4G/5G Open RAN"]
+  - name: "Production AI Agents & Telemetry RAG"
+    impact: "Shipped 3 production LLM tools/agents using Python, LangChain, MCP, FAISS, and REST/WebSocket APIs for log summarization and telemetry semantic search"
+    technologies: ["Python", "LangChain", "LLMs", "RAG", "FAISS", "FastAPI", "HuggingFace"]
+  - name: "Automated Regression & Test Framework"
+    impact: "Automated end-to-end regression and integration testing across 200–500 test cases with PyTest and Robot Framework"
+    technologies: ["Python", "PyTest", "Robot Framework", "C/C++", "gdb", "Wireshark"]
+
+

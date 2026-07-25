@@ -326,7 +326,6 @@ def generate_application_task(self, job_id: int):
             load_routing_config,
             parse_required_skills,
             route_cv,
-            validate_cv_alignment,
         )
 
         routing_job = RoutingJob(
@@ -352,19 +351,21 @@ def generate_application_task(self, job_id: int):
             ):
                 from profile.cv_routing_llm import load_cv_excerpts, select_cv_via_llm
 
-                excerpts = load_cv_excerpts(routing_config, settings.cv_directory)
-                llm_routing = run_async(
-                    select_cv_via_llm(routing_job, routing_config, excerpts)
-                )
-                if llm_routing.selected_cv_id:
-                    llm_routing.matched_evidence = [
-                        *routing.matched_evidence,
-                        *llm_routing.matched_evidence,
-                    ]
-                    routing = llm_routing
-
-            if settings.llm_cv_alignment and routing.selected_cv_id:
-                routing = run_async(validate_cv_alignment(routing_job, routing, routing_config))
+                try:
+                    excerpts = load_cv_excerpts(
+                        routing_config, settings.cv_directory, settings.cv_routing_path
+                    )
+                    llm_routing = run_async(
+                        select_cv_via_llm(routing_job, routing_config, excerpts)
+                    )
+                    if llm_routing.selected_cv_id is not None:
+                        llm_routing.matched_evidence = [
+                            *routing.matched_evidence,
+                            *llm_routing.matched_evidence,
+                        ]
+                        routing = llm_routing
+                except Exception as exc:
+                    logger.warning("llm_cv_routing_unavailable", error=str(exc))
         else:
             routing = RoutingDecision(
                 selected_cv_id=None,
@@ -398,12 +399,14 @@ def generate_application_task(self, job_id: int):
             threshold=settings.auto_apply_threshold,
             min_apply_score=settings.min_apply_score,
         )
+        # Unfilled [PLACEHOLDER: ...] markers and uncertain CV routes must
+        # never reach an employer without review.
         auto_approve = (
             action == Action.AUTO_APPLY
             and routing.selected_cv_id is not None
             and routing.fallback_reason is None
+            and not generated.has_placeholders
         )
-
 
         from db.models import UserProfileVersion
 
@@ -434,11 +437,13 @@ def generate_application_task(self, job_id: int):
         app.cv_routing_confidence = routing.confidence
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
         app.cv_routing_fallback_reason = routing.fallback_reason
-        app.needs_review_reason = (
-            "CV_ROUTING_REVIEW_REQUIRED"
-            if routing.selected_cv_id is None or routing.fallback_reason
-            else None
-        )
+        if routing.selected_cv_id is None or routing.fallback_reason:
+            app.needs_review_reason = "CV_ROUTING_REVIEW_REQUIRED"
+        elif generated.has_placeholders:
+            fields = ", ".join(generated.placeholder_fields[:3]) or "unspecified"
+            app.needs_review_reason = f"UNFILLED_PLACEHOLDERS:{fields}"
+        else:
+            app.needs_review_reason = None
         app.profile_version = profile_version
         db.flush()
 
@@ -683,19 +688,36 @@ def submit_application_task(self, application_id: int):
                         # Leave the application APPROVED — the drainer
                         # (Task 3.6) will retry once the governor allows it.
                         return
-                attempt = run_async(sub.submit(job_ref, generated, profile_dict, resume_path))
+                # NOT `attempt` — that name holds the claimed Submission ORM
+                # row, and rebinding it here would leave the row unfinalized
+                # below (and break the except-handler's db.get on .id).
+                sub_result = run_async(
+                    sub.submit(job_ref, generated, profile_dict, resume_path)
+                )
                 logger.info(
                     "submitter_attempt",
                     platform=sub.platform_name,
-                    status=attempt.status,
-                    success=attempt.success,
+                    status=sub_result.status,
+                    success=sub_result.success,
                 )
-                if attempt.success and attempt.status == "submitted":
-                    result = attempt
+                if sub_result.success and sub_result.status == "submitted":
+                    result = sub_result
                     break
-                if result is None or attempt.status != "failed":
+                if result is None or sub_result.status != "failed":
                     # Keep best result seen (prefer draft_only over failed)
-                    result = attempt
+                    result = sub_result
+
+        # abort-don't-lie: a blocked required field is surfaced as
+        # NEEDS_REVIEW rather than silently drafted or failed.
+        #
+        # Read this BEFORE the draft fallback below. The fallback replaces
+        # `result` wholesale with DraftOnlySubmitter's (error=None), so
+        # extracting afterwards silently dropped the reason for any submitter
+        # that reported the block as status="failed" — the application landed
+        # in DRAFT with no record of which question stopped it.
+        needs_review_reason = None
+        if result is not None and result.error and result.error.startswith("NEEDS_REVIEW:"):
+            needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
         # Always fall back to draft_only if no real submission succeeded
         if result is None or result.status == "failed":
@@ -704,12 +726,6 @@ def submit_application_task(self, application_id: int):
                     job_ref, generated, profile_dict, resume_path
                 )
             )
-
-        # abort-don't-lie: a blocked required field is surfaced as
-        # NEEDS_REVIEW rather than silently drafted or failed.
-        needs_review_reason = None
-        if result.error and result.error.startswith("NEEDS_REVIEW:"):
-            needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
         # Finalize the pre-committed attempt. No external action can run before
         # this attempt exists, so task redelivery cannot duplicate the action.

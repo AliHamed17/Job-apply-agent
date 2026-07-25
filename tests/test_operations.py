@@ -45,9 +45,11 @@ def test_live_production_requires_explicit_acknowledgement() -> None:
         cors_origins="https://jobs.example.test",
         draft_only=False,
         dry_run=False,
+        live_automation_acknowledged=False,
     )
     with pytest.raises(ValueError, match="LIVE_AUTOMATION_ACKNOWLEDGED"):
         settings.validate_runtime()
+
 
 
 def test_redis_rate_limit_is_atomic() -> None:
