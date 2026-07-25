@@ -17,11 +17,10 @@ _STALE_STATUSES = (JobStatus.EXTRACTED, JobStatus.SCORED, JobStatus.DRAFT)
 def select_next_application(db) -> int | None:
     """Highest Job.score among APPROVED applications; ties → lowest job id.
 
-    Defensive belt-and-suspenders: excludes any Application that already
-    has a Submission row, even if it is (incorrectly) still APPROVED —
-    e.g. a stray status left by a bug elsewhere. Without this, such a
-    row would be re-selected and re-submitted on every drain tick,
-    tripping the Submission.application_id UNIQUE constraint.
+    Defensive belt-and-suspenders: excludes applications whose latest
+    lifecycle could have produced an external action. Definitively failed or
+    draft-only attempts remain eligible only after an explicit retry has put
+    the application back in APPROVED.
     """
     row = (
         db.query(Application)
@@ -50,11 +49,7 @@ def select_next_application(db) -> int | None:
 
 def expire_stale_jobs(db, now: datetime, ttl_days: int) -> int:
     cutoff = now - timedelta(days=ttl_days)
-    rows = (
-        db.query(Job)
-        .filter(Job.status.in_(_STALE_STATUSES), Job.created_at < cutoff)
-        .all()
-    )
+    rows = db.query(Job).filter(Job.status.in_(_STALE_STATUSES), Job.created_at < cutoff).all()
     for j in rows:
         j.status = JobStatus.SKIPPED
     db.commit()
@@ -64,8 +59,8 @@ def expire_stale_jobs(db, now: datetime, ttl_days: int) -> int:
 
 @shared_task(name="worker.drainer.drain_apply_queue_task")
 def drain_apply_queue_task() -> int:
-    from core.governor import get_governor          # noqa: PLC0415
-    from db.session import get_session_factory      # noqa: PLC0415
+    from core.governor import get_governor  # noqa: PLC0415
+    from db.session import get_session_factory  # noqa: PLC0415
     from worker.tasks import submit_application_task  # noqa: PLC0415
 
     gov = get_governor()
@@ -89,8 +84,8 @@ def drain_apply_queue_task() -> int:
 
 @shared_task(name="worker.drainer.expire_stale_jobs_task")
 def expire_stale_jobs_task() -> int:
-    from core.config import get_settings            # noqa: PLC0415
-    from db.session import get_session_factory       # noqa: PLC0415
+    from core.config import get_settings  # noqa: PLC0415
+    from db.session import get_session_factory  # noqa: PLC0415
 
     db = get_session_factory()()
     try:

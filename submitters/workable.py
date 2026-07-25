@@ -19,6 +19,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -80,17 +81,12 @@ class WorkableSubmitter(BaseSubmitter):
         }
 
         if links.get("linkedin"):
-            candidate["socialProfiles"].append(
-                {"type": "linkedin", "url": links["linkedin"]}
-            )
+            candidate["socialProfiles"].append({"type": "linkedin", "url": links["linkedin"]})
         if links.get("github"):
-            candidate["socialProfiles"].append(
-                {"type": "github", "url": links["github"]}
-            )
+            candidate["socialProfiles"].append({"type": "github", "url": links["github"]})
         if links.get("portfolio") or links.get("website"):
             candidate["socialProfiles"].append(
-                {"type": "website",
-                 "url": links.get("portfolio") or links.get("website", "")}
+                {"type": "website", "url": links.get("portfolio") or links.get("website", "")}
             )
 
         payload = {"candidate": candidate, "sourced": False}
@@ -106,20 +102,37 @@ class WorkableSubmitter(BaseSubmitter):
                 )
 
             if resp.status_code in (200, 201):
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = {}
                 return SubmissionResult(
                     success=True,
                     platform=self.platform_name,
                     status="submitted",
                     confirmation_id=str(data.get("id", "")),
+                    reason_code="SUBMITTED",
                 )
-            else:
+            if 400 <= resp.status_code < 500:
                 logger.warning("workable_api_failed_trying_browser", status=resp.status_code)
                 return await self._submit_via_browser(job, application, user_profile, resume_path)
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="WORKABLE_API_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
+            )
 
         except Exception as exc:
-            logger.warning("workable_api_error_trying_browser", error=str(exc))
-            return await self._submit_via_browser(job, application, user_profile, resume_path)
+            logger.warning("workable_api_outcome_unknown", error=type(exc).__name__)
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="WORKABLE_API_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
+            )
 
     async def _submit_via_browser(
         self,
@@ -133,8 +146,10 @@ class WorkableSubmitter(BaseSubmitter):
             from playwright.async_api import async_playwright
         except ImportError:
             return SubmissionResult(
-                success=False, platform=self.platform_name, status="failed",
-                error="Playwright not installed for browser fallback"
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error="Playwright not installed for browser fallback",
             )
 
         from profile.models import UserProfile
@@ -158,8 +173,10 @@ class WorkableSubmitter(BaseSubmitter):
             if self.detect_captcha(await page.content()):
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="captcha_blocked",
-                    error="CAPTCHA detected on Workable page"
+                    success=False,
+                    platform=self.platform_name,
+                    status="captcha_blocked",
+                    error="CAPTCHA detected on Workable page",
                 )
 
             # Wait a moment for Workable React app to mount
@@ -212,30 +229,41 @@ class WorkableSubmitter(BaseSubmitter):
             if blocked:
                 await browser.close()
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
-                    error=needs_review_error(blocked)
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error=needs_review_error(blocked),
                 )
 
             # Submit application
             submit_btn = page.locator('button[type="submit"]').first
-            if await submit_btn.is_visible():
+            if not await submit_btn.is_visible():
+                await browser.close()
+                return SubmissionResult(
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error="NEEDS_REVIEW:SUBMIT_BUTTON_UNAVAILABLE",
+                    reason_code="SELECTOR_DRIFT",
+                )
+            try:
                 await submit_btn.click()
                 await page.wait_for_timeout(3000)
-
-            # Check success
-            success_indicators = ["success", "applied", "thank"]
-            final_content = (await page.content()).lower()
-            success = any(
-                ind in page.url.lower() or ind in final_content for ind in success_indicators
-            )
-
+                result = browser_submission_result(
+                    platform=self.platform_name,
+                    page_url=page.url,
+                    html=await page.content(),
+                )
+            except Exception:
+                result = SubmissionResult(
+                    success=False,
+                    platform=self.platform_name,
+                    status="unknown",
+                    error="SUBMIT_OUTCOME_UNKNOWN",
+                    reason_code="SUBMIT_UNCONFIRMED",
+                )
             await browser.close()
-            return SubmissionResult(
-                success=success, platform=self.platform_name,
-                status="submitted" if success else "failed",
-                error=None if success else "Workable browser submission failed"
-            )
-
+            return result
 
     @staticmethod
     def _parse_url(url: str) -> tuple[str, str]:

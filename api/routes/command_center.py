@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from profile.loader import get_profile
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -33,7 +35,9 @@ async def get_command_center_summary(db: Session = Depends(get_db)):
     total_jobs = db.query(Job).count()
     total_apps = db.query(Application).count()
     submitted = db.query(Application).filter(Application.status == JobStatus.SUBMITTED).count()
-    needs_review = db.query(Application).filter(Application.status == JobStatus.NEEDS_REVIEW).count()
+    needs_review = (
+        db.query(Application).filter(Application.status == JobStatus.NEEDS_REVIEW).count()
+    )
 
     top_jobs_db = db.query(Job).order_by(Job.score.desc()).limit(5).all()
     top_jobs = [
@@ -48,14 +52,13 @@ async def get_command_center_summary(db: Session = Depends(get_db)):
     ]
 
     return CommandCenterSummary(
-        candidate_name="Ali Hamed",
+        candidate_name=get_profile().personal.name or "Candidate",
         auto_apply_active=settings.auto_apply,
         score_threshold=settings.auto_apply_threshold,
-        governor_cap=45,
+        governor_cap=settings.linkedin_daily_cap,
         total_jobs_scanned=total_jobs,
         total_applications=total_apps,
         submitted_count=submitted,
         needs_review_count=needs_review,
         top_matched_jobs=top_jobs,
     )
-

@@ -14,6 +14,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -24,9 +25,7 @@ logger = structlog.get_logger(__name__)
 #   {company}.ashbyhq.com/jobs/{posting-id}
 #   greenhouse-hosted pages that redirect to ashby (skip those)
 _ASHBY_HOSTS = re.compile(r"ashbyhq\.com", re.IGNORECASE)
-_POSTING_ID_RE = re.compile(
-    r"ashbyhq\.com/(?:[^/]+/)?(?:jobs?/)?([0-9a-f\-]{36})", re.IGNORECASE
-)
+_POSTING_ID_RE = re.compile(r"ashbyhq\.com/(?:[^/]+/)?(?:jobs?/)?([0-9a-f\-]{36})", re.IGNORECASE)
 
 _API_BASE = "https://api.ashbyhq.com/posting-public"
 
@@ -66,19 +65,17 @@ class AshbySubmitter(BaseSubmitter):
             {"path": "_systemfield_phone", "value": personal.get("phone", "")},
         ]
         if application.cover_letter:
-            field_submissions.append(
-                {"path": "coverLetter", "value": application.cover_letter}
-            )
+            field_submissions.append({"path": "coverLetter", "value": application.cover_letter})
 
         links = user_profile.get("links", {})
         if links.get("linkedin"):
-            field_submissions.append(
-                {"path": "_systemfield_linkedin", "value": links["linkedin"]}
-            )
+            field_submissions.append({"path": "_systemfield_linkedin", "value": links["linkedin"]})
         if links.get("portfolio") or links.get("website"):
             field_submissions.append(
-                {"path": "_systemfield_website",
-                 "value": links.get("portfolio") or links.get("website", "")}
+                {
+                    "path": "_systemfield_website",
+                    "value": links.get("portfolio") or links.get("website", ""),
+                }
             )
 
         payload = {
@@ -97,20 +94,37 @@ class AshbySubmitter(BaseSubmitter):
                 )
 
             if resp.status_code in (200, 201):
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = {}
                 return SubmissionResult(
                     success=True,
                     platform=self.platform_name,
                     status="submitted",
                     confirmation_id=str(data.get("applicationId", "")),
+                    reason_code="SUBMITTED",
                 )
-            else:
+            if 400 <= resp.status_code < 500:
                 logger.warning("ashby_api_failed_trying_browser", status=resp.status_code)
                 return await self._submit_via_browser(job, application, user_profile, resume_path)
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="ASHBY_API_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
+            )
 
         except Exception as exc:
-            logger.warning("ashby_api_error_trying_browser", error=str(exc))
-            return await self._submit_via_browser(job, application, user_profile, resume_path)
+            logger.warning("ashby_api_outcome_unknown", error=type(exc).__name__)
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="ASHBY_API_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
+            )
 
     async def _submit_via_browser(
         self,
@@ -124,8 +138,10 @@ class AshbySubmitter(BaseSubmitter):
             from playwright.async_api import async_playwright
         except ImportError:
             return SubmissionResult(
-                success=False, platform=self.platform_name, status="failed",
-                error="Playwright not installed for browser fallback"
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error="Playwright not installed for browser fallback",
             )
 
         job_url = job.apply_url or job.source_url or ""
@@ -141,8 +157,10 @@ class AshbySubmitter(BaseSubmitter):
             if self.detect_captcha(await page.content()):
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="captcha_blocked",
-                    error="CAPTCHA detected on Ashby page"
+                    success=False,
+                    platform=self.platform_name,
+                    status="captcha_blocked",
+                    error="CAPTCHA detected on Ashby page",
                 )
 
             personal = user_profile.get("personal", {})
@@ -180,29 +198,41 @@ class AshbySubmitter(BaseSubmitter):
                 logger.warning("ashby_needs_review", questions=blocked[:5])
                 await browser.close()
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
-                    error=needs_review_error(blocked)
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error=needs_review_error(blocked),
                 )
 
             # Submit
             submit_btn = page.locator('button[type="submit"]').first
-            if await submit_btn.is_visible():
+            if not await submit_btn.is_visible():
+                await browser.close()
+                return SubmissionResult(
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error="NEEDS_REVIEW:SUBMIT_BUTTON_UNAVAILABLE",
+                    reason_code="SELECTOR_DRIFT",
+                )
+            try:
                 await submit_btn.click()
                 await page.wait_for_timeout(3000)
-
-            success = (
-                "confirmation" in page.url
-                or "success" in page.url.lower()
-                or "applied" in page.url.lower()
-            )
+                result = browser_submission_result(
+                    platform=self.platform_name,
+                    page_url=page.url,
+                    html=await page.content(),
+                )
+            except Exception:
+                result = SubmissionResult(
+                    success=False,
+                    platform=self.platform_name,
+                    status="unknown",
+                    error="SUBMIT_OUTCOME_UNKNOWN",
+                    reason_code="SUBMIT_UNCONFIRMED",
+                )
             await browser.close()
-
-            return SubmissionResult(
-                success=success, platform=self.platform_name,
-                status="submitted" if success else "failed",
-                error=None if success else "Ashby browser submission failed"
-            )
-
+            return result
 
     @staticmethod
     def _extract_posting_id(url: str) -> str | None:

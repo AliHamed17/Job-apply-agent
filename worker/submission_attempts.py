@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -45,6 +46,62 @@ def redacted_diagnostics(error: str | None) -> str | None:
     )
 
 
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:+-]{1,80}$")
+_TRACE_KEYS = {
+    "event",
+    "selector_version",
+    "step",
+    "field_types",
+    "resolver_sources",
+    "terminal_reason",
+    "timestamp",
+}
+
+
+def _safe_trace_event(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    event: dict = {}
+    for key, value in raw.items():
+        if key not in _TRACE_KEYS:
+            continue
+        if key == "step" and isinstance(value, int) and 0 <= value <= 100:
+            event[key] = value
+        elif key in {"field_types", "resolver_sources"} and isinstance(value, list):
+            event[key] = [
+                item for item in value[:20] if isinstance(item, str) and _SAFE_TOKEN.fullmatch(item)
+            ]
+        elif isinstance(value, str) and _SAFE_TOKEN.fullmatch(value):
+            event[key] = value
+    return event
+
+
+def redacted_result_diagnostics(
+    error: str | None,
+    details: dict | None,
+) -> str | None:
+    """Serialize only structural browser trace metadata from a submitter."""
+    safe: dict = {}
+    details = details or {}
+    selector_version = details.get("selector_version")
+    terminal_reason = details.get("terminal_reason")
+    step_count = details.get("step_count")
+    if isinstance(selector_version, str) and _SAFE_TOKEN.fullmatch(selector_version):
+        safe["selector_version"] = selector_version
+    if isinstance(terminal_reason, str) and _SAFE_TOKEN.fullmatch(terminal_reason):
+        safe["terminal_reason"] = terminal_reason
+    if isinstance(step_count, int) and 0 <= step_count <= 100:
+        safe["step_count"] = step_count
+    if isinstance(details.get("events"), list):
+        events = [_safe_trace_event(item) for item in details["events"][-30:]]
+        safe["events"] = [event for event in events if event]
+    if not safe and error:
+        safe["error_type"] = classify_reason(error, "failed") or "UNCLASSIFIED"
+    if not safe:
+        return None
+    return json.dumps(safe, separators=(",", ":"), sort_keys=True)
+
+
 def latest_attempt(db, application_id: int) -> Submission | None:
     return (
         db.query(Submission)
@@ -62,9 +119,7 @@ def mark_stale_attempts_unknown(
     rows = (
         db.query(Submission)
         .filter(
-            Submission.status.in_(
-                (SubmissionStatus.PENDING, SubmissionStatus.RUNNING)
-            ),
+            Submission.status.in_((SubmissionStatus.PENDING, SubmissionStatus.RUNNING)),
             Submission.started_at < cutoff,
         )
         .all()
@@ -128,9 +183,9 @@ def claim_attempt(db, application_id: int) -> Submission | None:
 
 def mark_attempt_unknown(db, attempt: Submission, reason: str) -> None:
     now = datetime.now(UTC).replace(tzinfo=None)
-    attempt.status = SubmissionStatus.UNKNOWN
-    attempt.reason_code = reason
-    attempt.finished_at = now
+    attempt.status = SubmissionStatus.UNKNOWN  # type: ignore[assignment]
+    attempt.reason_code = reason  # type: ignore[assignment]
+    attempt.finished_at = now  # type: ignore[assignment]
     app = attempt.application
     app.status = JobStatus.NEEDS_REVIEW
     app.needs_review_reason = "Submission outcome is unknown; reconcile manually."

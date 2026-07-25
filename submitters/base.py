@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import structlog
 
@@ -19,10 +20,12 @@ class SubmissionResult:
 
     success: bool
     platform: str
-    status: str  # "submitted", "draft_only", "failed", "captcha_blocked"
+    status: str  # submitted|draft_only|failed|unknown|captcha_blocked
     confirmation_id: str | None = None
     confirmation_url: str | None = None
     error: str | None = None
+    reason_code: str | None = None
+    diagnostic_details: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseSubmitter(ABC):
@@ -49,8 +52,12 @@ class BaseSubmitter(ABC):
     def detect_captcha(self, content: str) -> bool:
         """Check for CAPTCHA indicators — never bypass, switch to draft-only."""
         indicators = [
-            "captcha", "recaptcha", "hcaptcha", "challenge",
-            "verify you are human", "i'm not a robot",
+            "captcha",
+            "recaptcha",
+            "hcaptcha",
+            "challenge",
+            "verify you are human",
+            "i'm not a robot",
         ]
         content_lower = content.lower()
         return any(ind in content_lower for ind in indicators)

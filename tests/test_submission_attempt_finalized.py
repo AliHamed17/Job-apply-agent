@@ -46,18 +46,26 @@ def _factory(tmp_path):
 def _approved_application(factory):
     db = factory()
     job = Job(
-        title="AI Engineer", company="Greenhouse Co",
+        title="AI Engineer",
+        company="Greenhouse Co",
         apply_url="https://boards.greenhouse.io/acme/jobs/1",
         source_url="https://boards.greenhouse.io/acme/jobs/1",
-        status=JobStatus.APPROVED, score=90.0,
-        location="", employment_type="", seniority="", description="",
+        status=JobStatus.APPROVED,
+        score=90.0,
+        location="",
+        employment_type="",
+        seniority="",
+        description="",
         requirements="",
     )
     db.add(job)
     db.flush()
     app = Application(
-        job_id=job.id, cover_letter="letter", recruiter_message="msg",
-        qa_answers="{}", status=JobStatus.APPROVED,
+        job_id=job.id,
+        cover_letter="letter",
+        recruiter_message="msg",
+        qa_answers="{}",
+        status=JobStatus.APPROVED,
     )
     db.add(app)
     db.commit()
@@ -69,7 +77,7 @@ def _approved_application(factory):
 def _settings(**kw):
     return Settings(
         _env_file=None,
-        draft_only=False,          # the only mode that reaches the cascade
+        draft_only=False,  # the only mode that reaches the cascade
         auto_apply=True,
         cv_routing_path="does-not-exist.yaml",
         **kw,
@@ -81,7 +89,9 @@ def _settings(**kw):
     [
         (
             SubmissionResult(
-                success=True, platform="greenhouse", status="submitted",
+                success=True,
+                platform="greenhouse",
+                status="submitted",
                 confirmation_id="abc123",
                 confirmation_url="https://boards.greenhouse.io/confirm/abc123",
             ),
@@ -89,10 +99,22 @@ def _settings(**kw):
         ),
         (
             SubmissionResult(
-                success=False, platform="greenhouse", status="failed",
+                success=False,
+                platform="greenhouse",
+                status="failed",
                 error="boom",
             ),
-            SubmissionStatus.DRAFT_ONLY,  # cascade falls back to a draft
+            SubmissionStatus.FAILED,
+        ),
+        (
+            SubmissionResult(
+                success=False,
+                platform="greenhouse",
+                status="unknown",
+                error="Submit clicked but no success confirmation appeared",
+                reason_code="SUBMIT_UNCONFIRMED",
+            ),
+            SubmissionStatus.UNKNOWN,
         ),
     ],
 )
@@ -100,14 +122,17 @@ def test_claimed_submission_row_is_finalized(tmp_path, submit_result, expected_s
     factory = _factory(tmp_path)
     app_id = _approved_application(factory)
 
-    with patch("worker.tasks.get_session_factory", return_value=factory), \
-         patch("worker.tasks.get_settings", return_value=_settings()), \
-         patch("profile.loader.get_profile"), \
-         patch(
-             "submitters.greenhouse.GreenhouseSubmitter.submit",
-             new=AsyncMock(return_value=submit_result),
-         ):
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("profile.loader.get_profile"),
+        patch(
+            "submitters.greenhouse.GreenhouseSubmitter.submit",
+            new=AsyncMock(return_value=submit_result),
+        ),
+    ):
         from worker.tasks import submit_application_task
+
         submit_application_task.apply(args=[app_id])
 
     db = factory()
@@ -117,6 +142,10 @@ def test_claimed_submission_row_is_finalized(tmp_path, submit_result, expected_s
         f"claimed Submission row not finalized (still {row.status})"
     )
     assert row.finished_at is not None, "finished_at never written to the DB row"
+    if expected_status == SubmissionStatus.UNKNOWN:
+        application = db.get(Application, app_id)
+        assert application.status == JobStatus.NEEDS_REVIEW
+        assert "unknown" in (application.needs_review_reason or "").lower()
     db.close()
 
 
@@ -126,19 +155,24 @@ def test_successful_submission_persists_confirmation(tmp_path):
     app_id = _approved_application(factory)
 
     ok = SubmissionResult(
-        success=True, platform="greenhouse", status="submitted",
+        success=True,
+        platform="greenhouse",
+        status="submitted",
         confirmation_id="conf-42",
         confirmation_url="https://boards.greenhouse.io/confirm/conf-42",
     )
 
-    with patch("worker.tasks.get_session_factory", return_value=factory), \
-         patch("worker.tasks.get_settings", return_value=_settings()), \
-         patch("profile.loader.get_profile"), \
-         patch(
-             "submitters.greenhouse.GreenhouseSubmitter.submit",
-             new=AsyncMock(return_value=ok),
-         ):
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("profile.loader.get_profile"),
+        patch(
+            "submitters.greenhouse.GreenhouseSubmitter.submit",
+            new=AsyncMock(return_value=ok),
+        ),
+    ):
         from worker.tasks import submit_application_task
+
         submit_application_task.apply(args=[app_id])
 
     db = factory()
@@ -147,4 +181,32 @@ def test_successful_submission_persists_confirmation(tmp_path):
     assert row.confirmation_url == "https://boards.greenhouse.io/confirm/conf-42"
     assert row.submitted_at is not None
     assert row.submitter_name == "greenhouse"
+    db.close()
+
+
+def test_dry_run_never_invokes_an_external_submitter(tmp_path):
+    factory = _factory(tmp_path)
+    app_id = _approved_application(factory)
+
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch(
+            "worker.tasks.get_settings",
+            return_value=_settings(dry_run=True),
+        ),
+        patch("profile.loader.get_profile"),
+        patch(
+            "submitters.greenhouse.GreenhouseSubmitter.submit",
+            new=AsyncMock(),
+        ) as submit,
+    ):
+        from worker.tasks import submit_application_task
+
+        submit_application_task.apply(args=[app_id])
+
+    submit.assert_not_awaited()
+    db = factory()
+    row = db.query(Submission).filter(Submission.application_id == app_id).one()
+    assert row.status == SubmissionStatus.DRAFT_ONLY
+    assert row.reason_code == "DRY_RUN_DISCARDED"
     db.close()

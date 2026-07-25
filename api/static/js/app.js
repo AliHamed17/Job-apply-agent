@@ -24,6 +24,7 @@ const state = {
     authToken: '',
     dashboardData: null,
     applications: [],
+    selectedApplications: new Set(),
     jobs: [],
     urls: [],
     messages: [],
@@ -78,8 +79,11 @@ function setupListeners() {
         appFilters().forEach(b => b.classList.remove('active'));
         e.currentTarget.classList.add('active');
         state.filters.applications = e.currentTarget.dataset.status;
+        state.selectedApplications.clear();
         renderApplications();
     }));
+    const batchApproveBtn = $('btn-batch-approve');
+    if (batchApproveBtn) batchApproveBtn.addEventListener('click', handleBatchApprove);
 
     // Job filters
     jobFilters().forEach(btn => btn.addEventListener('click', e => {
@@ -109,41 +113,6 @@ function setupListeners() {
         sessionStorage.setItem('job_agent_token', state.authToken);
         refreshAllData();
     });
-
-    // Command Hub Handlers
-    const btnDaemon = $('cmd-btn-daemon');
-    if (btnDaemon) {
-        btnDaemon.addEventListener('click', async () => {
-            const output = $('command-console-output');
-            if (output) output.textContent += '\n[ACTION] Launching Autonomous Auto-Apply Daemon...\n[STATUS] Running score_job & 12 CV routing across high-tech positions...';
-            try {
-                const res = await fetch('/api/batch-apply', { method: 'POST' });
-                const data = await res.json();
-                if (output) output.textContent += `\n[SUCCESS] Batch Auto-Apply Completed: ${data.submitted_count || 10} Applications Submitted!`;
-            } catch (err) {
-                if (output) output.textContent += '\n[SUCCESS] Daemon Active & Executing Submissions.';
-            }
-            refreshAllData();
-        });
-    }
-
-    const btnPlaywright = $('cmd-btn-playwright');
-    if (btnPlaywright) {
-        btnPlaywright.addEventListener('click', () => {
-            const output = $('command-console-output');
-            if (output) output.textContent += '\n[ACTION] Launching Playwright Visible Browser Engine...\n[STATUS] Navigating Workday/Greenhouse/Lever live portals...';
-        });
-    }
-
-    const btnVerifyDb = $('cmd-btn-verify-db');
-    if (btnVerifyDb) {
-        btnVerifyDb.addEventListener('click', async () => {
-            const output = $('command-console-output');
-            if (output) output.textContent += '\n[ACTION] Querying Database job_agent.db...\n[STATUS] Fetching real submitted application records...';
-            refreshAllData();
-        });
-    }
-
 
     // Governor kill / resume
     $('btn-kill').addEventListener('click', handleKill);
@@ -811,6 +780,7 @@ function renderActivityFeed() {
 function renderApplications() {
     const filtered = state.applications.filter(a => a.status === state.filters.applications);
     const container = $('applications-list');
+    updateBatchApproveButton();
 
     if (!filtered.length) {
         container.innerHTML = `
@@ -847,8 +817,19 @@ function renderApplications() {
                     <span class="status ${app.status}">${app.status.replace('_', ' ')}</span>
                     <span class="text-sm">${fmtDate(app.created_at)}</span>
                 </div>
+                ${isPending ? `<label class="batch-select">
+                    <input type="checkbox"
+                           ${state.selectedApplications.has(app.id) ? 'checked' : ''}
+                           onchange="toggleApplicationSelection(${app.id}, this.checked)">
+                    Select for batch approval
+                </label>` : ''}
                 <h3 class="app-title" title="${esc(app.job_title)}">${esc(app.job_title)}</h3>
                 <div class="text-dim mb-1" style="font-size:0.85rem;">${esc(app.job_company)}</div>
+                <div class="text-dim mb-1" style="font-size:0.78rem;">
+                    ${esc((app.platform || 'unknown').replace(/_/g, ' '))}
+                    ${app.portal_session_ready === true ? ' · Session ready' : ''}
+                    ${app.portal_session_ready === false ? ' · Sign-in needed' : ''}
+                </div>
                 <div class="app-score mb-1">
                     <i data-lucide="target" style="width:14px;height:14px;"></i>
                     ${app.job_score}/100
@@ -879,6 +860,39 @@ function renderApplications() {
     }).join('');
 
     lucide.createIcons();
+}
+
+window.toggleApplicationSelection = (applicationId, selected) => {
+    if (selected) state.selectedApplications.add(applicationId);
+    else state.selectedApplications.delete(applicationId);
+    updateBatchApproveButton();
+};
+
+function updateBatchApproveButton() {
+    const btn = $('btn-batch-approve');
+    if (!btn) return;
+    const count = state.selectedApplications.size;
+    btn.style.display = state.filters.applications === 'draft' && count > 0
+        ? 'inline-flex'
+        : 'none';
+    btn.innerHTML = `<i data-lucide="check-check" style="width:16px"></i> Approve selected (${count})`;
+    if (count > 0) lucide.createIcons();
+}
+
+async function handleBatchApprove() {
+    const ids = [...state.selectedApplications];
+    if (!ids.length) return;
+    if (!window.confirm(
+        `Approve and queue exactly ${ids.length} reviewed application${ids.length === 1 ? '' : 's'}?`
+    )) return;
+    const result = await apiCall('/api/applications/batch-approve', 'POST', {
+        application_ids: ids,
+        acknowledgement: 'APPROVE_SELECTED_APPLICATIONS',
+    });
+    if (!result) return;
+    state.selectedApplications.clear();
+    showToast(`${result.queued_application_ids.length} application(s) queued`, 'success');
+    await refreshAllData();
 }
 
 // ── Rendering: Jobs Table ──────────────────────────────────────────────────────
@@ -1080,6 +1094,27 @@ window.openReviewModal = async appId => {
         qaHtml = '<div class="text-dim text-sm">No Q&amp;A generated</div>';
     }
     $('modal-qa-list').innerHTML = qaHtml;
+
+    const events = app.events || [];
+    const attempts = app.attempts || [];
+    const history = [
+        ...events.map(event => ({
+            time: event.created_at,
+            title: event.event_type.replace(/_/g, ' '),
+            detail: `${event.actor}${event.details?.reason_code ? ' · ' + event.details.reason_code : ''}`,
+        })),
+        ...attempts.map(attempt => ({
+            time: attempt.finished_at || attempt.started_at,
+            title: `attempt ${attempt.attempt_number} · ${attempt.status}`,
+            detail: `${attempt.platform || 'unresolved'}${attempt.reason_code ? ' · ' + attempt.reason_code : ''}`,
+        })),
+    ].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+    $('modal-audit-list').innerHTML = history.length
+        ? history.map(item => `<div class="qa-item">
+            <div class="qa-q">${esc(item.title)}</div>
+            <div class="qa-a">${esc(item.detail)} · ${fmtDate(item.time)}</div>
+        </div>`).join('')
+        : '<div class="text-dim text-sm">No automation events yet</div>';
 
     // Submission result (if exists)
     if (app.submission_status) {

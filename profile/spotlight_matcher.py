@@ -1,14 +1,35 @@
-"""Ali Hamed's Autonomous Portfolio & Project Spotlight Matcher."""
+"""Evidence-bounded CV spotlight matching."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-import structlog
-
-from jobs.models import JobData
 from profile.models import UserProfile
 
-logger = structlog.get_logger(__name__)
+from jobs.models import JobData
+
+_TECH_TERMS = (
+    "AI",
+    "machine learning",
+    "LLM",
+    "RAG",
+    "PyTorch",
+    "LangChain",
+    "Python",
+    "Java",
+    "C++",
+    "Docker",
+    "Kubernetes",
+    "AWS",
+    "Azure",
+    "CI/CD",
+    "Jenkins",
+    "PyTest",
+    "Robot Framework",
+    "QA",
+    "embedded",
+    "infrastructure",
+)
 
 
 @dataclass
@@ -18,35 +39,43 @@ class ProjectSpotlightMatch:
     showcase_text: str = ""
 
 
-def match_portfolio_spotlight(job: JobData, profile: UserProfile) -> ProjectSpotlightMatch:
-    """Match job technical requirements to Ali's specific project spotlights."""
-    text = (f"{job.title} {job.description} {job.requirements}").lower()
+def _contains(text: str, term: str) -> bool:
+    optional_plural = "s?" if term.isalpha() and len(term) >= 3 and not term.endswith("s") else ""
+    pattern = rf"(?<![a-z0-9]){re.escape(term.casefold())}{optional_plural}(?![a-z0-9])"
+    return re.search(pattern, text.casefold()) is not None
 
-    if any(kw in text for kw in ["ai", "llm", "rag", "pytorch", "langchain", "faiss", "agent"]):
+
+def match_portfolio_spotlight(
+    job: JobData,
+    profile: UserProfile,
+) -> ProjectSpotlightMatch:
+    """Return only role terms that appear in both the job and CV evidence."""
+    job_text = " ".join(part for part in (job.title, job.description, job.requirements) if part)
+    cv_text = " ".join(
+        [
+            profile.resume.text,
+            *profile.evidence.cv_extracted.keys(),
+            *profile.evidence.cv_extracted.values(),
+        ]
+    )
+    overlap = [
+        term for term in _TECH_TERMS if _contains(job_text, term) and _contains(cv_text, term)
+    ]
+    if not overlap:
         return ProjectSpotlightMatch(
-            spotlight_title="Production AI Agent Tools",
-            relevant_keywords=["AI", "LLM", "RAG", "PyTorch", "Python"],
+            spotlight_title="No verified CV spotlight",
             showcase_text=(
-                "Architected and deployed 3 production AI agent tools using Python, PyTorch, and RAG architectures, "
-                "improving automated candidate-job alignment accuracy and data processing efficiency."
+                "No CV-backed project claim was generated for this role. "
+                "Review the selected CV before adding a spotlight."
             ),
         )
 
-    if any(kw in text for kw in ["devops", "docker", "kubernetes", "k8s", "aws", "ci/cd", "pipeline", "jenkins"]):
-        return ProjectSpotlightMatch(
-            spotlight_title="75% Build-to-Deploy CI/CD Acceleration",
-            relevant_keywords=["Docker", "Kubernetes", "CI/CD", "Jenkins", "AWS"],
-            showcase_text=(
-                "Engineered containerized build-to-deploy pipelines with Docker and Kubernetes, achieving a "
-                "75% speedup in deployment cycles and ensuring robust infrastructure scalability."
-            ),
-        )
-
+    shown = ", ".join(overlap[:8])
     return ProjectSpotlightMatch(
-        spotlight_title="200-500 PyTest & Robot Test Suites",
-        relevant_keywords=["PyTest", "Robot Framework", "Python", "Automation", "QA"],
+        spotlight_title=f"Verified CV overlap: {shown}",
+        relevant_keywords=overlap,
         showcase_text=(
-            "Designed and implemented automated test suites encompassing 200-500 PyTest and Robot Framework test cases, "
-            "guaranteeing continuous software reliability and zero-regression releases."
+            f"The selected CV explicitly contains these role-relevant terms: {shown}. "
+            "No additional achievement or metric is inferred."
         ),
     )

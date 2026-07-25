@@ -19,6 +19,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -27,9 +28,7 @@ logger = structlog.get_logger(__name__)
 _JOBVITE_RE = re.compile(r"jobvite\.com", re.IGNORECASE)
 
 # Extract company slug and job ID
-_JOB_PARSE_RE = re.compile(
-    r"jobvite\.com/([^/]+)/(?:job|jobs)/([^/?#]+)", re.IGNORECASE
-)
+_JOB_PARSE_RE = re.compile(r"jobvite\.com/([^/]+)/(?:job|jobs)/([^/?#]+)", re.IGNORECASE)
 
 _API_BASE = "https://api.jobvite.com/api/v2"
 
@@ -106,28 +105,32 @@ class JobviteSubmitter(BaseSubmitter):
             ) as client:
                 resp = await client.post(submit_url, data=form_data)
 
-            if self.detect_captcha(resp.text):
-                logger.warning("jobvite_captcha_detected", url=submit_url)
-                return await self._submit_via_browser(
-                    job_url, application, user_profile, resume_path, job=job
-                )
-
             if resp.status_code in (200, 201, 302):
-                return SubmissionResult(
-                    success=True,
+                return browser_submission_result(
                     platform=self.platform_name,
-                    status="submitted",
-                    confirmation_url=str(resp.url),
+                    page_url=str(resp.url),
+                    html=resp.text,
                 )
-            else:
+            if 400 <= resp.status_code < 500:
                 return await self._submit_via_browser(
                     job_url, application, user_profile, resume_path, job=job
                 )
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="JOBVITE_FORM_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
+            )
 
         except Exception as exc:
-            logger.warning("jobvite_submit_error_trying_browser", error=str(exc))
-            return await self._submit_via_browser(
-                job_url, application, user_profile, resume_path, job=job
+            logger.warning("jobvite_form_outcome_unknown", error=type(exc).__name__)
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="JOBVITE_FORM_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
             )
 
     async def _submit_via_browser(
@@ -143,8 +146,10 @@ class JobviteSubmitter(BaseSubmitter):
             from playwright.async_api import async_playwright
         except ImportError:
             return SubmissionResult(
-                success=False, platform=self.platform_name, status="failed",
-                error="Playwright not installed for browser fallback"
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error="Playwright not installed for browser fallback",
             )
 
         if not job_url.endswith("/apply"):
@@ -158,8 +163,10 @@ class JobviteSubmitter(BaseSubmitter):
             if self.detect_captcha(await page.content()):
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="captcha_blocked",
-                    error="CAPTCHA detected on Jobvite page"
+                    success=False,
+                    platform=self.platform_name,
+                    status="captcha_blocked",
+                    error="CAPTCHA detected on Jobvite page",
                 )
 
             # Wait a moment for form to load
@@ -201,41 +208,43 @@ class JobviteSubmitter(BaseSubmitter):
                 logger.warning("jobvite_needs_review", url=job_url, questions=blocked[:5])
                 await browser.close()
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
-                    error=needs_review_error(blocked)
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error=needs_review_error(blocked),
                 )
-
-            # Acknowledge / Checkboxes
-            checkboxes = page.locator('input[type="checkbox"]:visible')
-            for i in range(await checkboxes.count()):
-                cb = checkboxes.nth(i)
-                try:
-                    await cb.check()
-                except Exception:
-                    pass
 
             # Submit application
             submit_btn = page.locator(
-                'button[type="submit"]:has-text("Submit"), '
-                'button[type="submit"]:has-text("Apply")'
+                'button[type="submit"]:has-text("Submit"), button[type="submit"]:has-text("Apply")'
             ).first
-            if await submit_btn.is_visible():
+            if not await submit_btn.is_visible():
+                await browser.close()
+                return SubmissionResult(
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error="NEEDS_REVIEW:SUBMIT_BUTTON_UNAVAILABLE",
+                    reason_code="SELECTOR_DRIFT",
+                )
+            try:
                 await submit_btn.click()
                 await page.wait_for_timeout(3000)
-
-            # Check success (Jobvite usually redirects or shows a confirmation)
-            success_indicators = ["success", "applied", "thank", "confirmation"]
-            final_content = (await page.content()).lower()
-            success = any(
-                ind in page.url.lower() or ind in final_content for ind in success_indicators
-            )
-
+                result = browser_submission_result(
+                    platform=self.platform_name,
+                    page_url=page.url,
+                    html=await page.content(),
+                )
+            except Exception:
+                result = SubmissionResult(
+                    success=False,
+                    platform=self.platform_name,
+                    status="unknown",
+                    error="SUBMIT_OUTCOME_UNKNOWN",
+                    reason_code="SUBMIT_UNCONFIRMED",
+                )
             await browser.close()
-            return SubmissionResult(
-                success=success, platform=self.platform_name,
-                status="submitted" if success else "failed",
-                error=None if success else "Jobvite browser submission failed"
-            )
+            return result
 
     @staticmethod
     def _parse_url(url: str) -> tuple[str, str]:

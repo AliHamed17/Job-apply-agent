@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     llm_cv_alignment: bool = True
 
     # ── Application Modes ───────────────────────────────
-    draft_only: bool = False
+    draft_only: bool = True
     auto_apply: bool = False
     auto_apply_threshold: float = 80.0
     tasks_always_eager: bool = True  # If True, runs tasks synchronously (no Redis needed)
@@ -62,6 +62,8 @@ class Settings(BaseSettings):
 
     # ── Allowed Senders ─────────────────────────────────
     allowed_senders: str = ""  # comma-separated phone numbers
+    notification_recipient_email: str = ""
+    notification_recipient_phone: str = ""
 
     # ── Job Board API Keys ───────────────────────────────
     greenhouse_api_key: str = ""
@@ -96,6 +98,15 @@ class Settings(BaseSettings):
     active_hours: str = "09:00-21:00"
     linkedin_browser_profile_dir: str = ".linkedin_profile"
     dry_run: bool = False
+
+    # ── Authenticated employer portals ──────────────────
+    # Dedicated Playwright profiles are used instead of password extraction.
+    portal_browser_profile_root: str = ".portal_profiles"
+    portal_browser_headless: bool = True
+    portal_final_submit_enabled: bool = False
+    portal_reuse_last_application: bool = True
+    portal_session_lock_minutes: int = 30
+    employer_workflow_path: str = "employer_workflows.yaml"
 
     # ── Discovery ───────────────────────────────────────
     discovery_interval_h: int = 3
@@ -143,11 +154,20 @@ class Settings(BaseSettings):
             errors.append("WHATSAPP_APP_SECRET is required for webhook signatures")
         if "*" in self.cors_origin_list:
             errors.append("CORS_ORIGINS cannot contain '*'")
-        live_requested = self.auto_apply or not self.draft_only or not self.dry_run
+        live_requested = (
+            self.auto_apply
+            or not self.draft_only
+            or not self.dry_run
+            or self.portal_final_submit_enabled
+        )
         if live_requested and not self.live_automation_acknowledged:
             errors.append(
                 "LIVE_AUTOMATION_ACKNOWLEDGED=true is required for non-dry-run automation"
             )
+        if self.portal_final_submit_enabled and self.dry_run:
+            errors.append("PORTAL_FINAL_SUBMIT_ENABLED cannot be used with DRY_RUN=true")
+        if self.portal_final_submit_enabled and self.draft_only:
+            errors.append("PORTAL_FINAL_SUBMIT_ENABLED cannot be used with DRAFT_ONLY=true")
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
 

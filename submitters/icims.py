@@ -23,6 +23,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -30,9 +31,9 @@ logger = structlog.get_logger(__name__)
 
 _ICIMS_RE = re.compile(r"icims\.com", re.IGNORECASE)
 
-_NAV_TIMEOUT  = 20_000
+_NAV_TIMEOUT = 20_000
 _ELEM_TIMEOUT = 10_000
-_SHORT_WAIT   = 1_500
+_SHORT_WAIT = 1_500
 
 
 class IcimsSubmitter(BaseSubmitter):
@@ -101,15 +102,24 @@ class IcimsSubmitter(BaseSubmitter):
 
         return result
 
-    async def _apply(self, page, job_url: str, job: JobData, brain: FormBrain,
-                     application: GeneratedApplication, user_profile: dict,
-                     resume_path: str | None) -> SubmissionResult:
+    async def _apply(
+        self,
+        page,
+        job_url: str,
+        job: JobData,
+        brain: FormBrain,
+        application: GeneratedApplication,
+        user_profile: dict,
+        resume_path: str | None,
+    ) -> SubmissionResult:
         await page.goto(job_url, timeout=_NAV_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
 
         if self.detect_captcha(await page.content()):
             return SubmissionResult(
-                success=True, platform=self.platform_name, status="draft_only",
+                success=True,
+                platform=self.platform_name,
+                status="draft_only",
                 error="CAPTCHA detected on iCIMS page",
             )
 
@@ -133,7 +143,9 @@ class IcimsSubmitter(BaseSubmitter):
 
             if self.detect_captcha(content):
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
                     error="CAPTCHA appeared during iCIMS application",
                 )
 
@@ -146,7 +158,9 @@ class IcimsSubmitter(BaseSubmitter):
             if blocked:
                 logger.warning("icims_unanswered_required", url=job_url, fields=blocked[:5])
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
                     error=needs_review_error(blocked),
                 )
 
@@ -159,30 +173,25 @@ class IcimsSubmitter(BaseSubmitter):
             ).first
 
             if await submit_btn.is_visible(timeout=2000):
-                await submit_btn.click(timeout=_ELEM_TIMEOUT)
-                await page.wait_for_timeout(3000)
-
-                final_content = (await page.content()).lower()
-                if any(k in final_content for k in [
-                    "thank you", "application received", "successfully submitted", "confirmation",
-                ]):
-                    logger.info("icims_application_submitted", url=job_url)
-                    return SubmissionResult(
-                        success=True, platform=self.platform_name, status="submitted",
-                        confirmation_url=page.url,
+                try:
+                    await submit_btn.click(timeout=_ELEM_TIMEOUT)
+                    await page.wait_for_timeout(3000)
+                    result = browser_submission_result(
+                        platform=self.platform_name,
+                        page_url=page.url,
+                        html=await page.content(),
                     )
-                if self.detect_captcha(final_content):
+                    if result.status == "submitted":
+                        logger.info("icims_application_submitted", url=job_url)
+                    return result
+                except Exception:
                     return SubmissionResult(
-                        success=True, platform=self.platform_name, status="draft_only",
-                        error="CAPTCHA appeared during iCIMS submission",
+                        success=False,
+                        platform=self.platform_name,
+                        status="unknown",
+                        error="SUBMIT_OUTCOME_UNKNOWN",
+                        reason_code="SUBMIT_UNCONFIRMED",
                     )
-                # If we clicked submit and didn't get success or captcha, assume
-                # success if URL changed? iCIMS often redirects.
-                logger.info("icims_application_submitted_assumed", url=job_url)
-                return SubmissionResult(
-                    success=True, platform=self.platform_name, status="submitted",
-                    confirmation_url=page.url,
-                )
 
             # Click Continue / Next if present
             next_btn = page.locator(
@@ -198,12 +207,15 @@ class IcimsSubmitter(BaseSubmitter):
                 break
 
         return SubmissionResult(
-            success=True, platform=self.platform_name, status="draft_only",
+            success=True,
+            platform=self.platform_name,
+            status="draft_only",
             error="iCIMS apply form did not reach submission step",
         )
 
-    async def _fill_icims_fields(self, page, application: GeneratedApplication,
-                                 user_profile: dict, resume_path: str | None) -> None:
+    async def _fill_icims_fields(
+        self, page, application: GeneratedApplication, user_profile: dict, resume_path: str | None
+    ) -> None:
         """Fill the identity fields we know deterministically from the profile.
 
         Question-answering (free text, numbers, dropdowns) is handled by
@@ -214,13 +226,13 @@ class IcimsSubmitter(BaseSubmitter):
 
         field_map = {
             "iims-firstname": name_parts[0] if name_parts else "",
-            "iims-lastname":  " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
-            "iims-email":     personal.get("email", ""),
-            "iims-phone":     personal.get("phone", ""),
+            "iims-lastname": " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
+            "iims-email": personal.get("email", ""),
+            "iims-phone": personal.get("phone", ""),
             "applicant.firstname": name_parts[0] if name_parts else "",
-            "applicant.lastname":  " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
-            "applicant.email":     personal.get("email", ""),
-            "applicant.phone":     personal.get("phone", ""),
+            "applicant.lastname": " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
+            "applicant.email": personal.get("email", ""),
+            "applicant.phone": personal.get("phone", ""),
         }
 
         for name_attr, value in field_map.items():

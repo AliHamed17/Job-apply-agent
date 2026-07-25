@@ -1,9 +1,11 @@
-"""Automated Email & WhatsApp alert notification dispatcher."""
+"""Privacy-safe notification preparation for high-match alerts."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import structlog
+
 from core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -17,25 +19,35 @@ class AlertNotificationResult:
     dispatched: bool
 
 
-def dispatch_high_match_alert(job_title: str, company: str, score: float, event_type: str = "auto_applied") -> AlertNotificationResult:
-    """Format and record instant notification dispatch to candidate Ali Hamed."""
+def dispatch_high_match_alert(
+    job_title: str,
+    company: str,
+    score: float,
+    event_type: str = "application_prepared",
+) -> AlertNotificationResult:
+    """Prepare an alert without claiming that an external delivery occurred."""
     settings = get_settings()
 
-    email = "ali.h.10j@gmail.com"
-    phone = "+972-53-339-2826"
+    email = settings.notification_recipient_email
+    phone = settings.notification_recipient_phone
 
     message = (
         f"🚀 [Job Apply Alert - {event_type.upper()}]\n"
         f"Job: {job_title} at {company}\n"
-        f"Match Score: {score}/100\n"
-        f"Recipient: Ali Hamed ({email})"
+        f"Match Score: {score}/100"
     )
 
-    logger.info("alert_dispatched", email=email, phone=phone, job=job_title, score=score)
+    logger.info(
+        "alert_prepared",
+        email_configured=bool(email),
+        phone_configured=bool(phone),
+        job=job_title,
+        score=score,
+    )
 
     return AlertNotificationResult(
         recipient_email=email,
         recipient_phone=phone,
         message=message,
-        dispatched=True,
+        dispatched=False,
     )

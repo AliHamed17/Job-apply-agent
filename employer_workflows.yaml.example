@@ -1,0 +1,21 @@
+version: 1
+employers:
+  # Public workflow metadata only. Do not put names, answers, passwords,
+  # cookies, CV text, or other personal data in this file.
+  - id: nvidia_workday
+    domains:
+      - nvidia.wd5.myworkdayjobs.com
+    platform: workday
+    prefer_last_application: true
+    source_path:
+      - Website
+      - NVIDIA.COM
+
+  # Add another employer by hostname. If source_path is unknown, leave it
+  # empty; the application will stop for review instead of guessing.
+  - id: example_workday
+    domains:
+      - example.wd5.myworkdayjobs.com
+    platform: workday
+    prefer_last_application: true
+    source_path: []
