@@ -100,22 +100,45 @@ class PortalLoginSubmitter(BaseSubmitter):
                     await file_input.set_input_files(cv_path)
                     await asyncio.sleep(2)
 
-                await browser.close()
-
-                return SubmissionResult(
-                    success=True,
-                    platform="portal_login",
-                    status="submitted",
-                    confirmation_id=f"nvidia-workday-{job.title[:10]}",
-                    confirmation_url=apply_url,
+                # Check for explicit confirmation URL or element
+                current_url = page.url.lower()
+                is_confirmed = (
+                    "confirmation" in current_url
+                    or "submitted" in current_url
+                    or "thank" in current_url
+                    or "success" in current_url
                 )
 
+                confirm_elem = page.locator("h1:has-text('Submitted'), h1:has-text('Thank'), div:has-text('Application Received')").first
+                if await confirm_elem.is_visible(timeout=3000):
+                    is_confirmed = True
+
+                await browser.close()
+
+                if is_confirmed:
+                    return SubmissionResult(
+                        success=True,
+                        platform="portal_login",
+                        status="submitted",
+                        confirmation_id=f"workday-submitted-{job.title[:10]}",
+                        confirmation_url=apply_url,
+                    )
+                else:
+                    logger.info("portal_requires_verification_or_mfa", url=current_url)
+                    return SubmissionResult(
+                        success=False,
+                        platform="portal_login",
+                        status="requires_verification",
+                        error="Portal requires candidate login/MFA or multi-page submission verification",
+                        confirmation_url=apply_url,
+                    )
+
         except Exception as exc:
-            logger.warning("portal_live_submit_fallback", error=str(exc))
+            logger.warning("portal_live_submit_failed", error=str(exc))
             return SubmissionResult(
-                success=True,
+                success=False,
                 platform="portal_login",
-                status="submitted",
-                confirmation_id=f"portal-auth-{job.title[:10]}",
+                status="failed",
+                error=f"Live portal submission incomplete: {str(exc)}",
                 confirmation_url=apply_url,
             )
