@@ -26,6 +26,20 @@ def _create_tables():
 
     init_db()
 
+
+@pytest.fixture
+def auth_headers():
+    """Bearer token for authenticated API calls.
+
+    Locally the middleware short-circuits on the default dev secret, so a
+    missing header goes unnoticed; CI sets a real SECRET_KEY and returns
+    401. Shared here so new test files get it by default instead of each
+    rediscovering the convention.
+    """
+    from core.config import get_settings
+
+    return {"Authorization": f"Bearer {get_settings().secret_key}"}
+
 try:
     import pytest_asyncio  # noqa: F401
 except ImportError:

@@ -18,7 +18,7 @@ def test_detect_language():
     assert detect_language("דרוש מהנדס תוכנה בעל ניסיון ב-Python ופיתוח אלגוריתמים") == "he"
 
 
-def test_interview_prep_endpoint(client):
+def test_interview_prep_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -51,7 +51,7 @@ def test_interview_prep_endpoint(client):
             mock_prep.return_value.star_story_talking_points = ["75% deployment speedup using Jenkins"]
             mock_prep.return_value.interviewer_questions = ["What is the AI roadmap?"]
 
-            resp = client.get(f"/api/applications/{app_rec.id}/interview-prep")
+            resp = client.get(f"/api/applications/{app_rec.id}/interview-prep", headers=auth_headers)
             assert resp.status_code == 200
             data = resp.json()
             assert data["application_id"] == app_rec.id
@@ -61,8 +61,8 @@ def test_interview_prep_endpoint(client):
         db_session.close()
 
 
-def test_widget_summary_endpoint(client):
-    resp = client.get("/api/widgets/summary")
+def test_widget_summary_endpoint(client, auth_headers):
+    resp = client.get("/api/widgets/summary", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "total_applications" in data

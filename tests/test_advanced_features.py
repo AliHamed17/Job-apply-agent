@@ -33,7 +33,7 @@ def test_ghost_posting_detector():
     assert len(res_ghost.reasons) > 0
 
 
-def test_salary_brief_endpoint(client):
+def test_salary_brief_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -66,7 +66,7 @@ def test_salary_brief_endpoint(client):
             mock_brief.return_value.negotiation_talking_points = ["75% speedup metric"]
             mock_brief.return_value.counter_offer_script = "Thank you for the offer."
 
-            resp = client.get(f"/api/applications/{app_rec.id}/salary-brief")
+            resp = client.get(f"/api/applications/{app_rec.id}/salary-brief", headers=auth_headers)
             assert resp.status_code == 200
             data = resp.json()
             assert data["application_id"] == app_rec.id
@@ -76,8 +76,8 @@ def test_salary_brief_endpoint(client):
         db_session.close()
 
 
-def test_batch_rescore_endpoint(client):
-    resp = client.post("/api/jobs/rescore")
+def test_batch_rescore_endpoint(client, auth_headers):
+    resp = client.post("/api/jobs/rescore", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "total_evaluated" in data
