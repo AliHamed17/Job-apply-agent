@@ -1,6 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -32,23 +32,23 @@ def test_audit_event_buffer():
     assert rec["level"] == "info"
 
 
-def test_analytics_endpoint(client):
-    resp = client.get("/api/analytics/summary")
+def test_analytics_endpoint(client, auth_headers):
+    resp = client.get("/api/analytics/summary", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "total_jobs" in data
     assert "top_matched_skills" in data
 
 
-def test_audit_endpoint(client):
-    resp = client.get("/api/audit/logs")
+def test_audit_endpoint(client, auth_headers):
+    resp = client.get("/api/audit/logs", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "total" in data
     assert isinstance(data["logs"], list)
 
 
-def test_followup_plan_endpoint(client):
+def test_followup_plan_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -75,12 +75,16 @@ def test_followup_plan_endpoint(client):
         db_session.commit()
         db_session.refresh(app_rec)
 
-        with patch("api.routes.followup.generate_followup_plan", new_callable=AsyncMock) as mock_plan:
+        with patch(
+            "api.routes.followup.generate_followup_plan", new_callable=AsyncMock
+        ) as mock_plan:
             mock_plan.return_value.stage1_day3_checkin = "Stage 1 message"
             mock_plan.return_value.stage2_day7_value_add = "Stage 2 message"
             mock_plan.return_value.stage3_day14_inquiry = "Stage 3 message"
 
-            resp = client.get(f"/api/applications/{app_rec.id}/followup-plan")
+            resp = client.get(
+                f"/api/applications/{app_rec.id}/followup-plan", headers=auth_headers
+            )
             assert resp.status_code == 200
             data = resp.json()
             assert data["application_id"] == app_rec.id
