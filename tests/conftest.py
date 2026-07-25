@@ -40,6 +40,63 @@ def auth_headers():
 
     return {"Authorization": f"Bearer {get_settings().secret_key}"}
 
+
+@pytest.fixture(scope="session")
+def _rate_limit_redis():
+    """A reachable Redis for rate-limit resets, or None.
+
+    Probed once per session: without Redis (a typical dev box) every
+    connection attempt blocks on the socket timeout, and paying that on all
+    ~250 tests stalls the suite.
+    """
+    try:
+        import redis
+
+        from core.config import get_settings
+
+        client = redis.Redis.from_url(
+            get_settings().redis_url,
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+        client.ping()
+        return client
+    except Exception:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_bucket(_rate_limit_redis):
+    """Clear this minute's rate-limit counter before each test.
+
+    The limiter keys on client IP and Starlette's TestClient reports its
+    host as "testclient", so every test in the suite shares one bucket.
+    They accumulate against a 10/min cap until it trips, failing whichever
+    tests happen to run last with 429. It only shows up where Redis is
+    actually reachable (CI); locally the middleware swallows the connection
+    error and allows the request, which is why the suite passes on a dev box.
+
+    Resetting per test isolates them without weakening the limiter: it stays
+    fully active in production and still enforces the cap within any single
+    test (no test here makes more than 6 requests). core/operations.py
+    buckets by wall-clock minute, so both the current and next bucket are
+    cleared to cover a test that straddles the boundary.
+    """
+    if _rate_limit_redis is not None:
+        import time
+
+        bucket = int(time.time() // 60)
+        try:
+            _rate_limit_redis.delete(
+                f"job-agent:rate:testclient:{bucket}",
+                f"job-agent:rate:testclient:{bucket + 1}",
+            )
+        except Exception:
+            pass
+    yield
+
+
 try:
     import pytest_asyncio  # noqa: F401
 except ImportError:
