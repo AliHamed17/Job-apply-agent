@@ -28,8 +28,14 @@ from submitters.safe_fill import (
 
 class FakeElement:
     def __init__(
-        self, label="", value="", options=None, required=False,
-        editable=True, visible=True, attrs=None,
+        self,
+        label="",
+        value="",
+        options=None,
+        required=False,
+        editable=True,
+        visible=True,
+        attrs=None,
     ):
         self.label = label
         self.value = value
@@ -165,7 +171,8 @@ async def test_felony_question_is_not_auto_answered_yes():
     """The exact behavior that made the old code dangerous."""
     sel = FakeElement(
         label="Have you ever been convicted of a felony?",
-        options=["Yes", "No"], required=True,
+        options=["Yes", "No"],
+        required=True,
     )
     page = FakePage(selects=[sel])
     blocked = await fill_selects(page, brain_returning({}), job=None)
@@ -188,9 +195,7 @@ async def test_visa_sponsorship_not_auto_answered_yes():
 
 @pytest.mark.asyncio
 async def test_select_answered_when_brain_is_confident():
-    sel = FakeElement(
-        label="Are you authorized to work in Israel?", options=["Yes", "No"]
-    )
+    sel = FakeElement(label="Are you authorized to work in Israel?", options=["Yes", "No"])
     page = FakePage(selects=[sel])
     blocked = await fill_selects(page, brain_returning({"authorized to work": "Yes"}), job=None)
 
@@ -207,6 +212,24 @@ async def test_only_offered_options_are_chosen():
 
     assert sel.selected is None
     assert blocked == []  # not required, so skipped rather than blocking
+
+
+@pytest.mark.asyncio
+async def test_short_or_ambiguous_select_answer_is_not_fuzzy_matched():
+    sel = FakeElement(
+        label="Choose an availability preference",
+        options=["No preference", "Not currently available"],
+        required=True,
+    )
+    page = FakePage(selects=[sel])
+    blocked = await fill_selects(
+        page,
+        brain_returning({"availability": "No"}),
+        job=None,
+    )
+
+    assert sel.selected is None
+    assert blocked == ["Choose an availability preference"]
 
 
 @pytest.mark.asyncio
@@ -258,6 +281,19 @@ async def test_numeric_strips_prose_to_digits():
     await fill_numeric(page, brain_returning({"years": "about 5 years"}), job=None)
 
     assert el.filled == "5"
+
+
+@pytest.mark.asyncio
+async def test_numeric_uses_one_number_instead_of_concatenating_all_digits():
+    el = FakeElement(label="Years of experience")
+    page = FakePage(numbers=[el])
+    await fill_numeric(
+        page,
+        brain_returning({"years": "10 years across 2 roles"}),
+        job=None,
+    )
+
+    assert el.filled == "10"
 
 
 # ── Text ──────────────────────────────────────────────────────────────

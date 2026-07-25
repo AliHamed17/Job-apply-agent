@@ -18,11 +18,17 @@ _SENSITIVE_TERMS = (
     "authorized to work",
     "visa",
     "sponsorship",
+    "nationality",
     "citizen",
     "citizenship",
     "security clearance",
     "certification",
     "license",
+    "terms",
+    "consent",
+    "attest",
+    "certify",
+    "privacy policy",
     "gender",
     "race",
     "ethnicity",
@@ -42,6 +48,12 @@ def question_hash(q: str) -> str:
     return hashlib.sha256(normalize_question(q).encode()).hexdigest()
 
 
+def is_sensitive_question(label: str) -> bool:
+    """Whether a question requires explicit user-confirmed evidence."""
+    normalized = normalize_question(label)
+    return any(term in normalized for term in _SENSITIVE_TERMS)
+
+
 @dataclass
 class FieldSpec:
     label: str
@@ -53,7 +65,7 @@ class FieldSpec:
 @dataclass
 class AnswerResult:
     value: str | None
-    source: str          # deterministic | cache | llm
+    source: str  # deterministic | cache | llm
     confident: bool
 
 
@@ -100,7 +112,7 @@ class FormBrain:
 
     def _confirmed_sensitive(self, label: str) -> AnswerResult | None:
         normalized = normalize_question(label)
-        if not any(term in normalized for term in _SENSITIVE_TERMS):
+        if not is_sensitive_question(label):
             return None
         confirmed = self.profile.evidence.user_confirmed
         for key, value in confirmed.items():
@@ -114,6 +126,7 @@ class FormBrain:
         if self.db is None:
             return None
         from db.models import AnswerCache  # noqa: PLC0415
+
         row = self.db.query(AnswerCache).filter(AnswerCache.question_hash == qh).first()
         return row.answer if row else None
 
@@ -121,10 +134,12 @@ class FormBrain:
         if self.db is None:
             return
         from db.models import AnswerCache  # noqa: PLC0415
+
         if self.db.query(AnswerCache).filter(AnswerCache.question_hash == qh).first():
             return
-        self.db.add(AnswerCache(question_hash=qh, question_text=label,
-                                answer=answer, source=source))
+        self.db.add(
+            AnswerCache(question_hash=qh, question_text=label, answer=answer, source=source)
+        )
         self.db.commit()
 
     # ── layer 3: LLM ──────────────────────────────────
@@ -132,14 +147,13 @@ class FormBrain:
         client = self.client or get_llm_client()
         opts = f"\nChoose exactly one of: {fspec.options}" if fspec.options else ""
         job_ctx = (
-            f"\nJob: {getattr(job, 'title', '')} at {getattr(job, 'company', '')}"
-            if job
-            else ""
+            f"\nJob: {getattr(job, 'title', '')} at {getattr(job, 'company', '')}" if job else ""
         )
         if self._cv_text and self._cv_text.strip():
             cv_text = self._cv_text
         elif self.selected_cv_id:
             from profile.cv_content_cache import get_cv_text_by_id
+
             cv_text = get_cv_text_by_id(self.selected_cv_id)
         else:
             cv_text = self.profile.resume.text
@@ -151,7 +165,6 @@ class FormBrain:
             f"Question: {fspec.label}{opts}{job_ctx}\n\nCV:\n{cv_text[:4000]}"
         )
         return (await client.generate(prompt=prompt, max_tokens=120, temperature=0.0)).strip()
-
 
     async def answer(self, field: FieldSpec, job) -> AnswerResult:
         qh = question_hash(field.label)

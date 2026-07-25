@@ -11,6 +11,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -82,29 +83,68 @@ class ComeetSubmitter(BaseSubmitter):
             if self.detect_captcha(await page.content()):
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name,
+                    success=False,
+                    platform=self.platform_name,
                     status="captcha_blocked",
                     error="CAPTCHA detected on Comeet application page",
                 )
 
             # ── Fill form fields ─────────────────────────────────────────────
             # Name fields — try split first name/last name, then full name
-            await self._try_fill(page, 'input[name*="first"], input[id*="first"]', first_name)
-            await self._try_fill(page, 'input[name*="last"], input[id*="last"]', last_name)
-            await self._try_fill(page, 'input[name*="full"], input[name*="name"]:not([name*="first"]):not([name*="last"])', full_name)
+            await self._try_fill(
+                page,
+                'input[name*="first"], input[id*="first"]',
+                first_name,
+            )
+            await self._try_fill(
+                page,
+                'input[name*="last"], input[id*="last"]',
+                last_name,
+            )
+            await self._try_fill(
+                page,
+                (
+                    'input[name*="full"], '
+                    'input[name*="name"]:not([name*="first"]):not([name*="last"])'
+                ),
+                full_name,
+            )
 
             # Contact
-            await self._try_fill(page, 'input[type="email"], input[name*="email"]', personal.get("email", ""))
-            await self._try_fill(page, 'input[type="tel"], input[name*="phone"]', personal.get("phone", ""))
+            await self._try_fill(
+                page,
+                'input[type="email"], input[name*="email"]',
+                personal.get("email", ""),
+            )
+            await self._try_fill(
+                page,
+                'input[type="tel"], input[name*="phone"]',
+                personal.get("phone", ""),
+            )
 
             # Links
             if links.get("linkedin"):
-                await self._try_fill(page, 'input[name*="linkedin"], input[placeholder*="LinkedIn"]', links["linkedin"])
+                await self._try_fill(
+                    page,
+                    'input[name*="linkedin"], input[placeholder*="LinkedIn"]',
+                    links["linkedin"],
+                )
             if links.get("github"):
-                await self._try_fill(page, 'input[name*="github"], input[placeholder*="GitHub"]', links["github"])
+                await self._try_fill(
+                    page,
+                    'input[name*="github"], input[placeholder*="GitHub"]',
+                    links["github"],
+                )
             if links.get("portfolio") or links.get("website"):
                 url_val = links.get("portfolio") or links.get("website", "")
-                await self._try_fill(page, 'input[name*="portfolio"], input[name*="website"], input[placeholder*="website"]', url_val)
+                await self._try_fill(
+                    page,
+                    (
+                        'input[name*="portfolio"], input[name*="website"], '
+                        'input[placeholder*="website"]'
+                    ),
+                    url_val,
+                )
 
             # Resume
             if resume_path:
@@ -117,7 +157,11 @@ class ComeetSubmitter(BaseSubmitter):
             if application.cover_letter:
                 await self._try_fill(
                     page,
-                    'textarea[name*="cover"], textarea[name*="letter"], textarea[name*="message"], textarea[placeholder*="cover"], textarea',
+                    (
+                        'textarea[name*="cover"], textarea[name*="letter"], '
+                        'textarea[name*="message"], textarea[placeholder*="cover"], '
+                        "textarea"
+                    ),
                     application.cover_letter,
                 )
 
@@ -130,7 +174,8 @@ class ComeetSubmitter(BaseSubmitter):
                 # made-up one; hand the application to a human instead.
                 await browser.close()
                 return SubmissionResult(
-                    success=True, platform=self.platform_name,
+                    success=True,
+                    platform=self.platform_name,
                     status="draft_only",
                     error=needs_review_error(blocked),
                 )
@@ -152,26 +197,21 @@ class ComeetSubmitter(BaseSubmitter):
             if not submit_clicked:
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name,
+                    success=False,
+                    platform=self.platform_name,
                     status="failed",
                     error="Could not find submit button on Comeet form",
                 )
 
             await page.wait_for_timeout(3000)
 
-            final_url = page.url
-            page_content = (await page.content()).lower()
-            success = any(kw in final_url + page_content for kw in (
-                "thank", "success", "submitted", "confirmation", "applied",
-            ))
-
-            await browser.close()
-            return SubmissionResult(
-                success=success,
+            result = browser_submission_result(
                 platform=self.platform_name,
-                status="submitted" if success else "failed",
-                error=None if success else "Redirected to unknown page after Comeet submit",
+                page_url=page.url,
+                html=await page.content(),
             )
+            await browser.close()
+            return result
 
     @staticmethod
     async def _try_fill(page, selector: str, value: str) -> None:

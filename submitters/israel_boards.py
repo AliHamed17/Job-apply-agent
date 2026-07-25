@@ -12,7 +12,7 @@ logger = structlog.get_logger(__name__)
 
 
 class DrushimSubmitter(BaseSubmitter):
-    """Automates application submission on Drushim / Jobs IL platforms."""
+    """Recognizes Israeli boards and creates a reviewable handoff."""
 
     platform_name = "drushim"
 
@@ -27,10 +27,11 @@ class DrushimSubmitter(BaseSubmitter):
         user_profile: dict,
         resume_path: str | None = None,
     ) -> SubmissionResult:
-        logger.info("drushim_submit_started", job_title=job.title, company=job.company)
+        logger.info("drushim_manual_handoff", job_title=job.title, company=job.company)
         return SubmissionResult(
             success=True,
             platform="drushim",
-            status="submitted",
-            confirmation_id=f"drushim-{job.title[:10]}",
+            status="draft_only",
+            error="NEEDS_REVIEW:DRUSHIM_BROWSER_ADAPTER_REQUIRED",
+            reason_code="PORTAL_ADAPTER_REQUIRED",
         )

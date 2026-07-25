@@ -1,0 +1,50 @@
+# Copy this file to user_profile.yaml and keep the personal copy outside Git.
+personal:
+  name: Your Name
+  email: you@example.com
+  phone: "+10000000000"
+  location: City, Country
+  work_authorization: ""
+
+links:
+  linkedin: https://www.linkedin.com/in/your-profile
+  github: https://github.com/your-account
+  portfolio: https://example.com
+
+resume:
+  text: ""
+  pdf_path: ""
+
+cover_letter:
+  style: professional, personable, and concise
+
+preferences:
+  roles:
+    - Software Engineer
+  locations:
+    - Your preferred location
+  remote_ok: true
+  hybrid_ok: true
+  onsite_ok: true
+  salary:
+    min: 0
+    max: 0
+    currency: USD
+  keywords:
+    - Python
+  blacklist_companies: []
+  seniority:
+    - mid
+
+attachments: []
+
+evidence:
+  # CV-extracted facts may inform matching but never legal/demographic answers.
+  cv_extracted: {}
+  # Add sensitive answers only after checking them yourself. Do not guess.
+  user_confirmed:
+    work authorization: ""
+    visa sponsorship: ""
+    citizenship: ""
+    security clearance: ""
+  inferred_preferences: {}

@@ -31,6 +31,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -40,9 +41,9 @@ _LI_URL_RE = re.compile(r"linkedin\.com/jobs", re.IGNORECASE)
 _JOB_ID_RE = re.compile(r"(?:view|currentJobId)[=/](\d+)", re.IGNORECASE)
 
 # Timeouts (ms)
-_NAV_TIMEOUT  = 20_000
+_NAV_TIMEOUT = 20_000
 _ELEM_TIMEOUT = 10_000
-_SHORT_WAIT   = 1_500
+_SHORT_WAIT = 1_500
 
 
 class LinkedInSubmitter(BaseSubmitter):
@@ -64,7 +65,7 @@ class LinkedInSubmitter(BaseSubmitter):
         password: str = "",
     ):
         self.cookies_file = cookies_file or os.getenv("LINKEDIN_COOKIES_FILE", "")
-        self.email    = email    or os.getenv("LINKEDIN_EMAIL", "")
+        self.email = email or os.getenv("LINKEDIN_EMAIL", "")
         self.password = password or os.getenv("LINKEDIN_PASSWORD", "")
 
     def can_submit(self, job: JobData) -> bool:
@@ -171,14 +172,16 @@ class LinkedInSubmitter(BaseSubmitter):
             cookies = []
             for c in cookies_data:
                 if isinstance(c, dict):
-                    cookies.append({
-                        "name":   c.get("name", ""),
-                        "value":  c.get("value", ""),
-                        "domain": c.get("domain", ".linkedin.com"),
-                        "path":   c.get("path", "/"),
-                        "httpOnly": c.get("httpOnly", False),
-                        "secure":   c.get("secure", True),
-                    })
+                    cookies.append(
+                        {
+                            "name": c.get("name", ""),
+                            "value": c.get("value", ""),
+                            "domain": c.get("domain", ".linkedin.com"),
+                            "path": c.get("path", "/"),
+                            "httpOnly": c.get("httpOnly", False),
+                            "secure": c.get("secure", True),
+                        }
+                    )
 
             await ctx.add_cookies(cookies)
             logger.info("linkedin_cookies_loaded", count=len(cookies))
@@ -218,8 +221,15 @@ class LinkedInSubmitter(BaseSubmitter):
 
     # ── Application flow ──────────────────────────────────────────────────────
 
-    async def _apply(self, page, job_url: str, job: JobData, application: GeneratedApplication,
-                     user_profile: dict, resume_path: str | None) -> SubmissionResult:
+    async def _apply(
+        self,
+        page,
+        job_url: str,
+        job: JobData,
+        application: GeneratedApplication,
+        user_profile: dict,
+        resume_path: str | None,
+    ) -> SubmissionResult:
         """Navigate to the job and complete Easy Apply."""
         await page.goto(job_url, timeout=_NAV_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
@@ -235,7 +245,7 @@ class LinkedInSubmitter(BaseSubmitter):
 
         # Find the Easy Apply button
         easy_apply_btn = page.locator(
-            'button.jobs-apply-button, '
+            "button.jobs-apply-button, "
             'button[aria-label*="Easy Apply"], '
             'button[data-control-name="jobdetails_topcard_inapply"]'
         ).first
@@ -291,20 +301,29 @@ class LinkedInSubmitter(BaseSubmitter):
 
             # Check if there's a "Submit application" button
             submit_btn = page.locator(
-                'button[aria-label*="Submit application"], '
-                'button[data-control-name="submit_unify"]'
+                'button[aria-label*="Submit application"], button[data-control-name="submit_unify"]'
             ).first
 
             if await submit_btn.is_visible(timeout=2000):
-                await submit_btn.click(timeout=_ELEM_TIMEOUT)
-                await page.wait_for_timeout(2000)
-                logger.info("linkedin_application_submitted", url=job_url)
-                return SubmissionResult(
-                    success=True,
-                    platform=self.platform_name,
-                    status="submitted",
-                    confirmation_url=job_url,
-                )
+                try:
+                    await submit_btn.click(timeout=_ELEM_TIMEOUT)
+                    await page.wait_for_timeout(2000)
+                    result = browser_submission_result(
+                        platform=self.platform_name,
+                        page_url=page.url,
+                        html=await page.content(),
+                    )
+                    if result.status == "submitted":
+                        logger.info("linkedin_application_submitted", url=job_url)
+                    return result
+                except Exception:
+                    return SubmissionResult(
+                        success=False,
+                        platform=self.platform_name,
+                        status="unknown",
+                        error="SUBMIT_OUTCOME_UNKNOWN",
+                        reason_code="SUBMIT_UNCONFIRMED",
+                    )
 
             # Click Next / Continue / Review
             next_btn = page.locator(
@@ -326,24 +345,25 @@ class LinkedInSubmitter(BaseSubmitter):
             error="Easy Apply form did not reach submission step",
         )
 
-    async def _fill_form_fields(self, page, application: GeneratedApplication,
-                                user_profile: dict, resume_path: str | None) -> None:
+    async def _fill_form_fields(
+        self, page, application: GeneratedApplication, user_profile: dict, resume_path: str | None
+    ) -> None:
         """Fill all visible form inputs with profile data and Q&A answers."""
         personal = user_profile.get("personal", {})
-        links    = user_profile.get("links", {})
+        links = user_profile.get("links", {})
         name_parts = (personal.get("name", "") or "").split()
 
         field_map = {
-            "phone":       personal.get("phone", ""),
+            "phone": personal.get("phone", ""),
             "phoneNumber": personal.get("phone", ""),
-            "city":        personal.get("location", "").split(",")[0].strip(),
-            "email":       personal.get("email", ""),
-            "firstName":   name_parts[0] if name_parts else "",
-            "lastName":    " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
-            "linkedin":    links.get("linkedin", ""),
-            "website":     links.get("portfolio") or links.get("website", ""),
+            "city": personal.get("location", "").split(",")[0].strip(),
+            "email": personal.get("email", ""),
+            "firstName": name_parts[0] if name_parts else "",
+            "lastName": " ".join(name_parts[1:]) if len(name_parts) > 1 else "",
+            "linkedin": links.get("linkedin", ""),
+            "website": links.get("portfolio") or links.get("website", ""),
             "coverLetter": application.cover_letter or "",
-            "summary":     application.cover_letter or "",
+            "summary": application.cover_letter or "",
         }
 
         for name, value in field_map.items():
@@ -366,7 +386,7 @@ class LinkedInSubmitter(BaseSubmitter):
         cover_letter_textarea = page.locator(
             'textarea[name="coverLetter"], '
             'textarea[aria-label*="cover letter"], '
-            '.jobs-easy-apply-content textarea'
+            ".jobs-easy-apply-content textarea"
         ).first
         if await cover_letter_textarea.count() > 0:
             visible = await cover_letter_textarea.is_visible()

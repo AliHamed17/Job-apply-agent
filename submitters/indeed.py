@@ -34,6 +34,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -42,9 +43,9 @@ logger = structlog.get_logger(__name__)
 _INDEED_URL_RE = re.compile(r"indeed\.com", re.IGNORECASE)
 _JOB_ID_RE = re.compile(r"jk=([a-f0-9]+)", re.IGNORECASE)
 
-_NAV_TIMEOUT  = 20_000
+_NAV_TIMEOUT = 20_000
 _ELEM_TIMEOUT = 10_000
-_SHORT_WAIT   = 1_500
+_SHORT_WAIT = 1_500
 
 
 class IndeedSubmitter(BaseSubmitter):
@@ -59,7 +60,7 @@ class IndeedSubmitter(BaseSubmitter):
         password: str = "",
     ):
         self.cookies_file = cookies_file or os.getenv("INDEED_COOKIES_FILE", "")
-        self.email    = email    or os.getenv("INDEED_EMAIL", "")
+        self.email = email or os.getenv("INDEED_EMAIL", "")
         self.password = password or os.getenv("INDEED_PASSWORD", "")
 
     def can_submit(self, job: JobData) -> bool:
@@ -80,7 +81,10 @@ class IndeedSubmitter(BaseSubmitter):
                 success=True,
                 platform=self.platform_name,
                 status="draft_only",
-                error="Playwright not installed. Run: pip install 'job-apply-agent[browser]' && playwright install chromium",
+                error=(
+                    "Playwright not installed. Install the browser optional "
+                    "dependencies and Chromium."
+                ),
             )
 
         if not self.cookies_file and not (self.email and self.password):
@@ -88,7 +92,10 @@ class IndeedSubmitter(BaseSubmitter):
                 success=True,
                 platform=self.platform_name,
                 status="draft_only",
-                error="Indeed credentials not configured. Set INDEED_COOKIES_FILE or INDEED_EMAIL+INDEED_PASSWORD in .env",
+                error=(
+                    "Indeed session is not configured. Provide a cookie file "
+                    "or explicit environment credentials."
+                ),
             )
 
         from profile.models import UserProfile  # noqa: PLC0415
@@ -152,14 +159,15 @@ class IndeedSubmitter(BaseSubmitter):
             cookies_data = json.loads(raw)
             cookies = [
                 {
-                    "name":   c.get("name", ""),
-                    "value":  c.get("value", ""),
+                    "name": c.get("name", ""),
+                    "value": c.get("value", ""),
                     "domain": c.get("domain", ".indeed.com"),
-                    "path":   c.get("path", "/"),
+                    "path": c.get("path", "/"),
                     "httpOnly": c.get("httpOnly", False),
-                    "secure":   c.get("secure", True),
+                    "secure": c.get("secure", True),
                 }
-                for c in cookies_data if isinstance(c, dict)
+                for c in cookies_data
+                if isinstance(c, dict)
             ]
             await ctx.add_cookies(cookies)
             logger.info("indeed_cookies_loaded", count=len(cookies))
@@ -206,15 +214,24 @@ class IndeedSubmitter(BaseSubmitter):
 
     # ── Application flow ──────────────────────────────────────────────────────
 
-    async def _apply(self, page, job_url: str, job: JobData, application: GeneratedApplication,
-                     brain: FormBrain, user_profile: dict,
-                     resume_path: str | None) -> SubmissionResult:
+    async def _apply(
+        self,
+        page,
+        job_url: str,
+        job: JobData,
+        application: GeneratedApplication,
+        brain: FormBrain,
+        user_profile: dict,
+        resume_path: str | None,
+    ) -> SubmissionResult:
         await page.goto(job_url, timeout=_NAV_TIMEOUT)
         await page.wait_for_timeout(_SHORT_WAIT)
 
         if self.detect_captcha(await page.content()):
             return SubmissionResult(
-                success=True, platform=self.platform_name, status="draft_only",
+                success=True,
+                platform=self.platform_name,
+                status="draft_only",
                 error="CAPTCHA detected on Indeed job page",
             )
 
@@ -228,7 +245,9 @@ class IndeedSubmitter(BaseSubmitter):
 
         if not await apply_btn.is_visible(timeout=5000):
             return SubmissionResult(
-                success=True, platform=self.platform_name, status="draft_only",
+                success=True,
+                platform=self.platform_name,
+                status="draft_only",
                 error="Indeed apply button not found — job may redirect to external site",
             )
 
@@ -242,7 +261,9 @@ class IndeedSubmitter(BaseSubmitter):
 
             if self.detect_captcha(content):
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
                     error="CAPTCHA appeared during Indeed Apply",
                 )
 
@@ -256,23 +277,36 @@ class IndeedSubmitter(BaseSubmitter):
             if blocked:
                 logger.warning("indeed_unanswered_required", questions=blocked[:3])
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
                     error=needs_review_error(blocked),
                 )
 
             # Check for final submission
             submit_btn = page.locator(
-                'button:has-text("Submit your application"), '
-                'button[data-testid="SubmitButton"]'
+                'button:has-text("Submit your application"), button[data-testid="SubmitButton"]'
             ).first
             if await submit_btn.is_visible(timeout=2000):
-                await submit_btn.click(timeout=_ELEM_TIMEOUT)
-                await page.wait_for_timeout(2000)
-                logger.info("indeed_application_submitted", url=job_url)
-                return SubmissionResult(
-                    success=True, platform=self.platform_name, status="submitted",
-                    confirmation_url=job_url,
-                )
+                try:
+                    await submit_btn.click(timeout=_ELEM_TIMEOUT)
+                    await page.wait_for_timeout(2000)
+                    result = browser_submission_result(
+                        platform=self.platform_name,
+                        page_url=page.url,
+                        html=await page.content(),
+                    )
+                    if result.status == "submitted":
+                        logger.info("indeed_application_submitted", url=job_url)
+                    return result
+                except Exception:
+                    return SubmissionResult(
+                        success=False,
+                        platform=self.platform_name,
+                        status="unknown",
+                        error="SUBMIT_OUTCOME_UNKNOWN",
+                        reason_code="SUBMIT_UNCONFIRMED",
+                    )
 
             # Click Continue / Next
             continue_btn = page.locator(
@@ -287,23 +321,25 @@ class IndeedSubmitter(BaseSubmitter):
                 break
 
         return SubmissionResult(
-            success=True, platform=self.platform_name, status="draft_only",
+            success=True,
+            platform=self.platform_name,
+            status="draft_only",
             error="Indeed Apply form did not reach submission step",
         )
 
-    async def _fill_indeed_fields(self, page, application: GeneratedApplication,
-                                  user_profile: dict, resume_path: str | None) -> None:
+    async def _fill_indeed_fields(
+        self, page, application: GeneratedApplication, user_profile: dict, resume_path: str | None
+    ) -> None:
         """Fill visible Indeed form fields using profile data and Q&A answers."""
         personal = user_profile.get("personal", {})
-        links    = user_profile.get("links", {})
-        name_parts = (personal.get("name", "") or "").split()
+        links = user_profile.get("links", {})
 
         field_map = {
-            "name":        personal.get("name", ""),
-            "email":       personal.get("email", ""),
-            "phone":       personal.get("phone", ""),
-            "city":        personal.get("location", "").split(",")[0].strip(),
-            "website":     links.get("portfolio") or links.get("website", ""),
+            "name": personal.get("name", ""),
+            "email": personal.get("email", ""),
+            "phone": personal.get("phone", ""),
+            "city": personal.get("location", "").split(",")[0].strip(),
+            "website": links.get("portfolio") or links.get("website", ""),
             "linkedinUrl": links.get("linkedin", ""),
         }
 
@@ -311,7 +347,11 @@ class IndeedSubmitter(BaseSubmitter):
             if not value:
                 continue
             locator = page.locator(f'input[name="{name}"]').first
-            if await locator.count() > 0 and await locator.is_visible() and await locator.is_editable():
+            if (
+                await locator.count() > 0
+                and await locator.is_visible()
+                and await locator.is_editable()
+            ):
                 await locator.fill(value)
 
         # Resume upload
@@ -330,13 +370,6 @@ class IndeedSubmitter(BaseSubmitter):
         if await cl_field.count() > 0 and await cl_field.is_visible():
             if await cl_field.is_editable():
                 await cl_field.fill(application.cover_letter or "")
-
-        # Work authorization radios
-        auth_radios = page.locator('input[type="radio"][value="YES"], input[type="radio"][value="yes"]')
-        for i in range(await auth_radios.count()):
-            r = auth_radios.nth(i)
-            if await r.is_visible():
-                await r.check()
 
         # Number inputs, free-text questions and dropdowns are deliberately not
         # handled here — the caller runs fill_form_safely() for those so an

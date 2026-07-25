@@ -223,15 +223,18 @@ class LinkedInV2Submitter(BaseSubmitter):
             governor.trip_cooldown()
             await self._notify_challenge(settings)
             return SubmissionResult(
-                success=True, platform=self.platform_name,
-                status="draft_only", error="CAPTCHA",
+                success=True,
+                platform=self.platform_name,
+                status="draft_only",
+                error="CAPTCHA",
             )
 
         easy_apply_btn = page.locator(selectors.join(selectors.EASY_APPLY_BUTTON)).first
         if not await easy_apply_btn.is_visible(timeout=5000):
             self._trace("terminal", terminal_reason="EASY_APPLY_UNAVAILABLE")
             return SubmissionResult(
-                success=True, platform=self.platform_name,
+                success=True,
+                platform=self.platform_name,
                 status="draft_only",
                 error="Easy Apply button not found — job may require external application",
             )
@@ -250,8 +253,10 @@ class LinkedInV2Submitter(BaseSubmitter):
                 await self._notify_challenge(settings)
                 await self._discard(page)
                 return SubmissionResult(
-                    success=True, platform=self.platform_name,
-                    status="draft_only", error="CAPTCHA",
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error="CAPTCHA",
                 )
 
             # Resume/file inputs are uploaded directly — they never go
@@ -269,12 +274,11 @@ class LinkedInV2Submitter(BaseSubmitter):
                 discarded = await self._discard(page)
                 self._trace(
                     "terminal",
-                    terminal_reason=(
-                        "REQUIRED_FIELD_UNKNOWN" if discarded else "DISCARD_FAILED"
-                    ),
+                    terminal_reason=("REQUIRED_FIELD_UNKNOWN" if discarded else "DISCARD_FAILED"),
                 )
                 return SubmissionResult(
-                    success=True, platform=self.platform_name,
+                    success=True,
+                    platform=self.platform_name,
                     status="draft_only",
                     error=f"NEEDS_REVIEW:{plan.blocked_by}",
                 )
@@ -287,9 +291,7 @@ class LinkedInV2Submitter(BaseSubmitter):
                     discarded = await self._discard(page)
                     self._trace(
                         "terminal",
-                        terminal_reason=(
-                            "DRY_RUN_DISCARDED" if discarded else "DISCARD_FAILED"
-                        ),
+                        terminal_reason=("DRY_RUN_DISCARDED" if discarded else "DISCARD_FAILED"),
                     )
                     if not discarded:
                         return SubmissionResult(
@@ -299,8 +301,10 @@ class LinkedInV2Submitter(BaseSubmitter):
                             error="DRY_RUN_DISCARD_FAILED",
                         )
                     return SubmissionResult(
-                        success=True, platform=self.platform_name,
-                        status="draft_only", error="DRY_RUN",
+                        success=True,
+                        platform=self.platform_name,
+                        status="draft_only",
+                        error="DRY_RUN",
                     )
 
                 await submit_btn.click(timeout=_ELEM_TIMEOUT)
@@ -311,16 +315,20 @@ class LinkedInV2Submitter(BaseSubmitter):
                     self._trace("terminal", terminal_reason="SUBMITTED")
                     logger.info("linkedin_v2_submitted", url=job_url)
                     return SubmissionResult(
-                        success=True, platform=self.platform_name,
-                        status="submitted", confirmation_url=job_url,
+                        success=True,
+                        platform=self.platform_name,
+                        status="submitted",
+                        confirmation_url=job_url,
                     )
                 # Clicked submit but never saw confirmation — never claim
                 # success we can't verify (abort-don't-lie).
                 self._trace("terminal", terminal_reason="SUBMIT_UNCONFIRMED")
                 return SubmissionResult(
-                    success=False, platform=self.platform_name,
-                    status="failed",
+                    success=False,
+                    platform=self.platform_name,
+                    status="unknown",
                     error="Submit clicked but no success dialog appeared",
+                    reason_code="SUBMIT_UNCONFIRMED",
                 )
 
             advance_btn = page.locator(
@@ -338,7 +346,8 @@ class LinkedInV2Submitter(BaseSubmitter):
             terminal_reason="SELECTOR_DRIFT" if discarded else "DISCARD_FAILED",
         )
         return SubmissionResult(
-            success=True, platform=self.platform_name,
+            success=True,
+            platform=self.platform_name,
             status="draft_only",
             error="Easy Apply form did not reach submission step",
         )
@@ -366,7 +375,7 @@ class LinkedInV2Submitter(BaseSubmitter):
 
         input_id = await label_el.get_attribute("for")
         if input_id:
-            target = page.locator(f'#{input_id}')
+            target = page.locator(f"#{input_id}")
             if await target.count() > 0:
                 tag = await target.evaluate("el => el.tagName.toLowerCase()")
                 if tag == "select":
@@ -398,6 +407,7 @@ class LinkedInV2Submitter(BaseSubmitter):
         ``api.routes.webhook``).
         """
         from worker.alerts import notify_challenge  # noqa: PLC0415
+
         await notify_challenge(settings)
 
     # ── Discard chain ────────────────────────────────────────────────────

@@ -48,6 +48,7 @@ def process_message_task(self, message_id: int):
     db = _get_db()
     try:
         from db.models import Message
+
         msg = db.query(Message).filter(Message.id == message_id).first()
         if not msg:
             logger.warning("message_not_found", id=message_id)
@@ -61,9 +62,7 @@ def process_message_task(self, message_id: int):
             uhash = url_hash(normalized)
 
             # Dedup
-            existing = db.query(ExtractedURL).filter(
-                ExtractedURL.url_hash == uhash
-            ).first()
+            existing = db.query(ExtractedURL).filter(ExtractedURL.url_hash == uhash).first()
             if existing:
                 continue
 
@@ -137,6 +136,7 @@ def process_url_task(self, url_id: int):
         if not extraction.has_jobs:
             logger.info("try_vision_fallback", url=db_url.normalized_url)
             from jobs.extractor import extract_jobs_with_vision
+
             try:
                 extraction = run_async(extract_jobs_with_vision(db_url.normalized_url))
             except Exception as e:
@@ -149,9 +149,7 @@ def process_url_task(self, url_id: int):
 
         for job_data in extraction.jobs:
             # Dedup by job signature
-            sig = job_signature(
-                job_data.title, job_data.company, job_data.location
-            )
+            sig = job_signature(job_data.title, job_data.company, job_data.location)
             existing_job = db.query(Job).filter(Job.job_signature == sig).first()
             if existing_job:
                 logger.debug("duplicate_job", title=job_data.title)
@@ -160,9 +158,7 @@ def process_url_task(self, url_id: int):
             # Also dedup by apply_url
             apply_hash = url_hash(job_data.apply_url) if job_data.apply_url else None
             if apply_hash:
-                existing_apply = db.query(Job).filter(
-                    Job.apply_url_hash == apply_hash
-                ).first()
+                existing_apply = db.query(Job).filter(Job.apply_url_hash == apply_hash).first()
                 if existing_apply:
                     logger.debug("duplicate_apply_url", url=job_data.apply_url)
                     continue
@@ -261,8 +257,12 @@ def score_job_task(self, job_id: int):
         if action == Action.SKIP:
             db_job.status = JobStatus.SKIPPED
             db.commit()
-            logger.info("job_skipped", title=db_job.title, score=breakdown.total,
-                        reason=breakdown.skip_reason)
+            logger.info(
+                "job_skipped",
+                title=db_job.title,
+                score=breakdown.total,
+                reason=breakdown.skip_reason,
+            )
             return
 
         # Create application draft
@@ -275,8 +275,9 @@ def score_job_task(self, job_id: int):
         else:
             generate_application_task.delay(job_id)
 
-        logger.info("job_scored_and_queued", title=db_job.title,
-                     score=breakdown.total, action=action.value)
+        logger.info(
+            "job_scored_and_queued", title=db_job.title, score=breakdown.total, action=action.value
+        )
 
     except Exception as exc:
         db.rollback()
@@ -330,9 +331,7 @@ def generate_application_task(self, job_id: int):
 
         routing_job = RoutingJob(
             title=db_job.title or "",
-            description=" ".join(
-                filter(None, [db_job.description, db_job.requirements])
-            ),
+            description=" ".join(filter(None, [db_job.description, db_job.requirements])),
             seniority=db_job.seniority or "",
             required_skills=parse_required_skills(db_job.keywords),
         )
@@ -344,7 +343,8 @@ def generate_application_task(self, job_id: int):
             if (
                 settings.llm_cv_routing
                 and not routing.overridden
-                and routing.fallback_reason in {
+                and routing.fallback_reason
+                in {
                     "confidence_below_threshold",
                     "abstained_low_confidence",
                 }
@@ -379,6 +379,7 @@ def generate_application_task(self, job_id: int):
         cv_text = None
         if routing.selected_cv_id:
             from profile.cv_content_cache import get_cv_text_by_id
+
             cv_text = get_cv_text_by_id(
                 routing.selected_cv_id,
                 cv_routing_path=settings.cv_routing_path,
@@ -388,10 +389,8 @@ def generate_application_task(self, job_id: int):
         # Run async generation in sync context using the selected CV text
         generated = run_async(generate_full_application(job_data, profile, cv_text=cv_text))
 
-        # Decide whether to auto-approve immediately
-        from datetime import datetime
-
         from match.scoring import Action, decide_action
+
         action = decide_action(
             score=db_job.score or 0.0,
             auto_apply_enabled=settings.auto_apply,
@@ -401,7 +400,7 @@ def generate_application_task(self, job_id: int):
         )
         # Unfilled [PLACEHOLDER: ...] markers and uncertain CV routes must
         # never reach an employer without review.
-        auto_approve = (
+        auto_eligible = (
             action == Action.AUTO_APPLY
             and routing.selected_cv_id is not None
             and routing.fallback_reason is None
@@ -411,9 +410,7 @@ def generate_application_task(self, job_id: int):
         from db.models import UserProfileVersion
 
         latest_profile = (
-            db.query(UserProfileVersion)
-            .order_by(UserProfileVersion.version.desc())
-            .first()
+            db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
         )
         profile_version = latest_profile.version if latest_profile else None
 
@@ -431,8 +428,11 @@ def generate_application_task(self, job_id: int):
         app.cover_letter = generated.cover_letter
         app.recruiter_message = generated.recruiter_message
         app.qa_answers = json.dumps(generated.qa_answers)
-        app.status = JobStatus.APPROVED if auto_approve else JobStatus.DRAFT
-        app.approved_at = datetime.utcnow() if auto_approve else None
+        # A score can make an application eligible for a review batch, but
+        # never constitutes consent to send an employment application.
+        app.status = JobStatus.DRAFT
+        app.approved_at = None
+        app.approval_source = None
         app.selected_cv_id = routing.selected_cv_id
         app.cv_routing_confidence = routing.confidence
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
@@ -447,8 +447,7 @@ def generate_application_task(self, job_id: int):
         app.profile_version = profile_version
         db.flush()
 
-        if auto_approve:
-            db_job.status = JobStatus.APPROVED
+        db_job.status = JobStatus.DRAFT
 
         db.commit()
 
@@ -458,17 +457,17 @@ def generate_application_task(self, job_id: int):
             score=db_job.score,
             threshold=settings.auto_apply_threshold,
             has_placeholders=generated.has_placeholders,
-            auto_approved=auto_approve,
+            auto_eligible=auto_eligible,
             reason=(
-                "Score above threshold"
-                if auto_approve
+                "Eligible for explicit batch approval"
+                if auto_eligible
                 else "Score below threshold, draft-only, or CV routing review required"
             ),
         )
 
         # ── Notify originating WhatsApp sender (Cloud API) ────────────────
         # Only when draft (not auto-approved) and Cloud API is configured
-        if not auto_approve and settings.whatsapp_api_token and settings.whatsapp_phone_number_id:
+        if settings.whatsapp_api_token and settings.whatsapp_phone_number_id:
             try:
                 # Walk: Job → ExtractedURL → Message to get sender
                 url_record = (
@@ -480,14 +479,17 @@ def generate_application_task(self, job_id: int):
                     sender = url_record.message.sender_phone
                     if sender and sender not in ("manual", "whatsapp-bridge", "dashboard"):
                         from api.routes.webhook import _send_approval_buttons
-                        run_async(_send_approval_buttons(
-                            sender,
-                            job_id,
-                            db_job.title,
-                            db_job.company,
-                            db_job.score or 0.0,
-                            settings,
-                        ))
+
+                        run_async(
+                            _send_approval_buttons(
+                                sender,
+                                job_id,
+                                db_job.title,
+                                db_job.company,
+                                db_job.score or 0.0,
+                                settings,
+                            )
+                        )
                         logger.info(
                             "whatsapp_approval_sent",
                             job=db_job.title,
@@ -496,16 +498,12 @@ def generate_application_task(self, job_id: int):
             except Exception as notify_err:
                 logger.warning("whatsapp_notify_failed", error=str(notify_err))
 
-        # Immediately chain to submission only in local/eager dev mode.
-        # With a real broker, the application stays APPROVED and the
-        # priority drainer (Task 3.6, worker.drainer.drain_apply_queue_task)
-        # submits it highest-score-first under governor pacing.
-        if auto_approve:
-            if settings.tasks_always_eager:
-                logger.info("auto_apply_queued", job=db_job.title, app_id=app.id)
-                submit_application_task.apply(args=[app.id])
-            else:
-                logger.info("auto_apply_queued_for_drainer", job=db_job.title, app_id=app.id)
+        if auto_eligible:
+            logger.info(
+                "application_ready_for_batch_review",
+                job=db_job.title,
+                app_id=app.id,
+            )
 
     except Exception as exc:
         db.rollback()
@@ -586,13 +584,16 @@ def submit_application_task(self, application_id: int):
             ),
             IcimsSubmitter(),
             ComeetSubmitter(),
-            # Tier 3: Draft-only — Workday SSO wall, never auto-submit
-            WorkdaySubmitter(),
+            # Authenticated Workday browser session; final click remains
+            # independently gated by PORTAL_FINAL_SUBMIT_ENABLED.
+            WorkdaySubmitter(db=db),
         ]
 
         job_ref = JobData(
-            title=db_job.title, company=db_job.company,
-            location=db_job.location, apply_url=db_job.apply_url,
+            title=db_job.title,
+            company=db_job.company,
+            location=db_job.location,
+            apply_url=db_job.apply_url,
             source_url=db_job.source_url,
         )
 
@@ -609,9 +610,7 @@ def submit_application_task(self, application_id: int):
         from db.models import UserProfileVersion
 
         latest_profile = (
-            db.query(UserProfileVersion)
-            .order_by(UserProfileVersion.version.desc())
-            .first()
+            db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
         )
         if app.selected_cv_id:
             from profile.cv_routing import load_routing_config
@@ -619,11 +618,7 @@ def submit_application_task(self, application_id: int):
             try:
                 routing_config = load_routing_config(settings.cv_routing_path)
                 cv = next(
-                    (
-                        item
-                        for item in routing_config.cvs
-                        if item.id == app.selected_cv_id
-                    ),
+                    (item for item in routing_config.cvs if item.id == app.selected_cv_id),
                     None,
                 )
                 root = Path(settings.cv_directory).resolve()
@@ -654,12 +649,25 @@ def submit_application_task(self, application_id: int):
         )
         db.commit()
 
-        # Cascade: try each matching submitter, stop on first success
+        # Route to the matching submitter and preserve its authoritative result.
         result = None
-        if settings.draft_only:
+        if settings.dry_run:
+            from submitters.base import SubmissionResult
+
+            result = SubmissionResult(
+                success=True,
+                platform="dry_run",
+                status="draft_only",
+                error="DRY_RUN",
+                reason_code="DRY_RUN_DISCARDED",
+            )
+        elif settings.draft_only:
             result = run_async(
                 DraftOnlySubmitter().submit(
-                    job_ref, generated, profile_dict, resume_path
+                    job_ref,
+                    generated,
+                    profile_dict,
+                    resume_path,
                 )
             )
         else:
@@ -691,9 +699,7 @@ def submit_application_task(self, application_id: int):
                 # NOT `attempt` — that name holds the claimed Submission ORM
                 # row, and rebinding it here would leave the row unfinalized
                 # below (and break the except-handler's db.get on .id).
-                sub_result = run_async(
-                    sub.submit(job_ref, generated, profile_dict, resume_path)
-                )
+                sub_result = run_async(sub.submit(job_ref, generated, profile_dict, resume_path))
                 logger.info(
                     "submitter_attempt",
                     platform=sub.platform_name,
@@ -703,28 +709,25 @@ def submit_application_task(self, application_id: int):
                 if sub_result.success and sub_result.status == "submitted":
                     result = sub_result
                     break
-                if result is None or sub_result.status != "failed":
-                    # Keep best result seen (prefer draft_only over failed)
+                if result is None or (result.status == "failed" and sub_result.status != "failed"):
+                    # Keep the first definitive result; a real failure must
+                    # never be replaced by a fake draft success.
                     result = sub_result
 
         # abort-don't-lie: a blocked required field is surfaced as
         # NEEDS_REVIEW rather than silently drafted or failed.
         #
-        # Read this BEFORE the draft fallback below. The fallback replaces
-        # `result` wholesale with DraftOnlySubmitter's (error=None), so
-        # extracting afterwards silently dropped the reason for any submitter
-        # that reported the block as status="failed" — the application landed
-        # in DRAFT with no record of which question stopped it.
+        # Read this before unsupported-platform fallback so the operator sees
+        # which required question stopped the adapter.
         needs_review_reason = None
         if result is not None and result.error and result.error.startswith("NEEDS_REVIEW:"):
             needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
-        # Always fall back to draft_only if no real submission succeeded
-        if result is None or result.status == "failed":
+        # Fall back only when no adapter handled the platform. A handled
+        # failure/unknown outcome is authoritative and must remain visible.
+        if result is None:
             result = run_async(
-                DraftOnlySubmitter().submit(
-                    job_ref, generated, profile_dict, resume_path
-                )
+                DraftOnlySubmitter().submit(job_ref, generated, profile_dict, resume_path)
             )
 
         # Finalize the pre-committed attempt. No external action can run before
@@ -734,13 +737,15 @@ def submit_application_task(self, application_id: int):
 
         from worker.submission_attempts import (
             classify_reason,
-            redacted_diagnostics,
+            redacted_result_diagnostics,
         )
 
         if result.status == "submitted" and result.success:
             sub_status = SubmissionStatus.SUCCESS
         elif result.status == "draft_only":
             sub_status = SubmissionStatus.DRAFT_ONLY
+        elif result.status == "unknown":
+            sub_status = SubmissionStatus.UNKNOWN
         else:
             sub_status = SubmissionStatus.FAILED
 
@@ -750,22 +755,21 @@ def submit_application_task(self, application_id: int):
         attempt.confirmation_url = result.confirmation_url
         attempt.confirmation_id = result.confirmation_id
         attempt.error_message = None
-        attempt.reason_code = classify_reason(result.error, result.status)
-        attempt.diagnostic_details = redacted_diagnostics(result.error)
-        attempt.finished_at = now
-        attempt.submitted_at = (
-            now if result.success and result.status == "submitted" else None
+        attempt.reason_code = result.reason_code or classify_reason(
+            result.error,
+            result.status,
         )
+        attempt.diagnostic_details = redacted_result_diagnostics(
+            result.error,
+            result.diagnostic_details,
+        )
+        attempt.finished_at = now
+        attempt.submitted_at = now if result.success and result.status == "submitted" else None
 
         # Job/application status mirrors submission outcome.
         #
-        # CRITICAL: app.status must leave APPROVED on every one of these
-        # branches. The drainer (worker.drainer.select_next_application)
-        # re-selects any Application still APPROVED, so if a completed
-        # attempt left it APPROVED the same app would be re-submitted
-        # every drain tick — re-driving a live LinkedIn apply and hitting
-        # the Submission.application_id UNIQUE constraint (IntegrityError
-        # retry loop), starving every other approved job behind it.
+        # CRITICAL: app.status must leave APPROVED on every terminal branch.
+        # Otherwise the drainer can select it again and create a new attempt.
         if result.status == "submitted" and result.success:
             db_job.status = JobStatus.SUBMITTED
             app.status = JobStatus.SUBMITTED
@@ -776,12 +780,33 @@ def submit_application_task(self, application_id: int):
             app.needs_review_reason = needs_review_reason
             app.status = JobStatus.NEEDS_REVIEW
             db_job.status = JobStatus.NEEDS_REVIEW
+        elif result.status == "unknown":
+            app.needs_review_reason = "Submission outcome is unknown; reconcile manually."
+            app.status = JobStatus.NEEDS_REVIEW
+            db_job.status = JobStatus.NEEDS_REVIEW
         elif result.status in ("draft_only", "captcha_blocked"):
             db_job.status = JobStatus.DRAFT
             app.status = JobStatus.DRAFT
         else:
             db_job.status = JobStatus.FAILED
             app.status = JobStatus.FAILED
+
+        from core.application_audit import record_application_event
+
+        record_application_event(
+            db,
+            app.id,
+            "submission_attempt_finished",
+            actor="worker",
+            details={
+                "attempt_number": attempt.attempt_number,
+                "platform": result.platform,
+                "reason_code": attempt.reason_code,
+                "selected_cv_id": attempt.selected_cv_id,
+                "profile_version": attempt.profile_version,
+                "state": attempt.status.value,
+            },
+        )
         db.commit()
 
         logger.info(

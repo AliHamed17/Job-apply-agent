@@ -35,9 +35,7 @@ def test_unset_salary_never_renders_a_zero_range():
 
 
 def test_real_salary_range_is_stated():
-    assert build_salary_guidance(30000, 45000, "ILS") == (
-        "Salary expectation: 30000–45000 ILS."
-    )
+    assert build_salary_guidance(30000, 45000, "ILS") == ("Salary expectation: 30000–45000 ILS.")
 
 
 @pytest.mark.parametrize(
@@ -99,10 +97,17 @@ def _routing_config(tmp_path):
 def _scored_job(factory, score=95.0):
     db = factory()
     job = Job(
-        title="AI Engineer", company="Acme", source_url="https://x",
-        status=JobStatus.SCORED, score=score,
-        location="", employment_type="", seniority="", description="",
-        requirements="", apply_url="",
+        title="AI Engineer",
+        company="Acme",
+        source_url="https://x",
+        status=JobStatus.SCORED,
+        score=score,
+        location="",
+        employment_type="",
+        seniority="",
+        description="",
+        requirements="",
+        apply_url="",
     )
     db.add(job)
     db.commit()
@@ -118,22 +123,25 @@ def _run(factory, tmp_path, job_id, generated):
         auto_apply=True,
         auto_apply_threshold=50.0,
         min_apply_score=40.0,
-        llm_cv_alignment=False,          # keep the LLM out of routing here
+        llm_cv_alignment=False,  # keep the LLM out of routing here
         cv_routing_path=str(_routing_config(tmp_path)),
         cv_directory=str(tmp_path),
     )
     # Auto-approval chains straight into submit_application_task, which would
     # move the row on past APPROVED before we could observe it. Stub the
     # chained task so these assertions describe generation alone.
-    with patch("worker.tasks.get_session_factory", return_value=factory), \
-         patch("worker.tasks.get_settings", return_value=settings), \
-         patch("profile.loader.get_profile", return_value=UserProfile()), \
-         patch("worker.tasks.submit_application_task"), \
-         patch(
-             "llm.generation.generate_full_application",
-             new=AsyncMock(return_value=generated),
-         ):
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=settings),
+        patch("profile.loader.get_profile", return_value=UserProfile()),
+        patch("worker.tasks.submit_application_task"),
+        patch(
+            "llm.generation.generate_full_application",
+            new=AsyncMock(return_value=generated),
+        ),
+    ):
         from worker.tasks import generate_application_task
+
         generate_application_task.apply(args=[job_id])
 
 
@@ -142,7 +150,9 @@ def test_placeholder_application_is_not_auto_approved(tmp_path):
     job_id = _scored_job(factory)
 
     _run(
-        factory, tmp_path, job_id,
+        factory,
+        tmp_path,
+        job_id,
         GeneratedApplication(
             cover_letter="Dear team, I can start in [PLACEHOLDER: notice period].",
             recruiter_message="hi",
@@ -160,13 +170,15 @@ def test_placeholder_application_is_not_auto_approved(tmp_path):
     db.close()
 
 
-def test_clean_application_still_auto_approves(tmp_path):
-    """The guard must not block genuinely complete applications."""
+def test_clean_application_is_ready_for_explicit_approval(tmp_path):
+    """A clean score-qualified application is prepared, never self-approved."""
     factory = _factory(tmp_path)
     job_id = _scored_job(factory)
 
     _run(
-        factory, tmp_path, job_id,
+        factory,
+        tmp_path,
+        job_id,
         GeneratedApplication(
             cover_letter="Dear team, I can start within 30 days.",
             recruiter_message="hi",
@@ -178,6 +190,8 @@ def test_clean_application_still_auto_approves(tmp_path):
 
     db = factory()
     app = db.query(Application).filter(Application.job_id == job_id).one()
-    assert app.status == JobStatus.APPROVED
+    assert app.status == JobStatus.DRAFT
+    assert app.approved_at is None
+    assert app.approval_source is None
     assert app.needs_review_reason is None
     db.close()

@@ -657,6 +657,16 @@ h1, h2, h3, h4, h5 {
 
 /* Application Cards */
 .cards-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; }
+.batch-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 8px;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+.batch-select input { accent-color: var(--primary); }
 
 .app-card {
     background: var(--bg-surface);

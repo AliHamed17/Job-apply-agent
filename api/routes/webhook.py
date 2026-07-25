@@ -82,6 +82,7 @@ async def _route_text_post(
         sender=sender,
     )
 
+
 # ── URL extraction regex ────────────────────────────────
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')\]},;]+", re.IGNORECASE)
 
@@ -99,9 +100,7 @@ def _verify_signature(body: bytes, signature: str, app_secret: str) -> bool:
     """Verify the X-Hub-Signature-256 header from Meta."""
     if not app_secret:
         return True
-    expected = "sha256=" + hmac.new(
-        app_secret.encode(), body, hashlib.sha256
-    ).hexdigest()
+    expected = "sha256=" + hmac.new(app_secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
@@ -118,9 +117,8 @@ def _extract_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 # ── WhatsApp API helpers ────────────────────────────────
 
-async def _send_whatsapp_message(
-    phone: str, text: str, settings: Settings
-) -> None:
+
+async def _send_whatsapp_message(phone: str, text: str, settings: Settings) -> None:
     """Send a text message via WhatsApp Cloud API."""
     if not settings.whatsapp_api_token or not settings.whatsapp_phone_number_id:
         logger.warning("whatsapp_api_not_configured")
@@ -171,9 +169,8 @@ async def _handle_document(msg: dict, db, settings: Settings) -> bool:
             return True
 
         from profile.cv_intake import bytes_to_temp, ingest_cv_from_temp
-        tmp = bytes_to_temp(
-            content, settings.profile_path.parent, settings.max_resume_bytes
-        )
+
+        tmp = bytes_to_temp(content, settings.profile_path.parent, settings.max_resume_bytes)
         result = await ingest_cv_from_temp(
             tmp, settings=settings, db=db, max_bytes=settings.max_resume_bytes
         )
@@ -193,7 +190,11 @@ async def _handle_document(msg: dict, db, settings: Settings) -> bool:
 
 
 async def _send_approval_buttons(
-    phone: str, job_id: int, title: str, company: str, score: float,
+    phone: str,
+    job_id: int,
+    title: str,
+    company: str,
+    score: float,
     settings: Settings,
 ) -> None:
     """Send an interactive approval message with approve/skip/edit buttons."""
@@ -243,6 +244,7 @@ async def _send_approval_buttons(
 
 # ── Interactive action handlers ─────────────────────────
 
+
 async def _handle_approve(job_id: int, sender: str, db: Session, settings: Settings) -> None:
     """Handle approve_ action: mark application as approved and enqueue submission."""
     app = db.query(Application).filter(Application.job_id == job_id).first()
@@ -257,18 +259,41 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
     if app.status == JobStatus.APPROVED:
         await _send_whatsapp_message(sender, "ℹ️ Already approved.", settings)
         return
+    if not app.selected_cv_id:
+        await _send_whatsapp_message(
+            sender,
+            "⚠️ Select and review a CV in the dashboard before approval.",
+            settings,
+        )
+        return
 
     app.status = JobStatus.APPROVED
     app.approved_at = datetime.utcnow()
+    app.approval_source = "whatsapp"
 
     job = db.query(Job).filter(Job.id == job_id).first()
     if job:
         job.status = JobStatus.APPROVED
 
+    from core.application_audit import record_application_event
+
+    record_application_event(
+        db,
+        app.id,
+        "application_approved",
+        actor="whatsapp_operator",
+        details={
+            "approval_source": "whatsapp",
+            "selected_cv_id": app.selected_cv_id,
+            "profile_version": app.profile_version,
+            "state": "approved",
+        },
+    )
     db.commit()
 
     # Enqueue submission
     from worker.tasks import submit_application_task
+
     submit_application_task.delay(app.id)
 
     await _send_whatsapp_message(
@@ -294,6 +319,16 @@ async def _handle_skip(job_id: int, sender: str, db: Session, settings: Settings
     if job:
         job.status = JobStatus.SKIPPED
 
+    if app:
+        from core.application_audit import record_application_event
+
+        record_application_event(
+            db,
+            app.id,
+            "application_rejected",
+            actor="whatsapp_operator",
+            details={"state": "skipped"},
+        )
     db.commit()
 
     await _send_whatsapp_message(
@@ -325,6 +360,7 @@ async def _handle_edit(job_id: int, sender: str, db: Session, settings: Settings
 
 
 # ── Webhook Endpoints ───────────────────────────────────
+
 
 @router.get("/whatsapp")
 async def verify_webhook(
@@ -452,6 +488,7 @@ async def receive_message(
 
             # Enqueue URL processing
             from worker.tasks import process_url_task
+
             if settings.tasks_always_eager:
                 process_url_task.apply(args=[db_url.id])
             else:
@@ -479,6 +516,7 @@ async def receive_message(
 
 
 # ── Text-post ingestion (Task 5.5) ──────────────────────
+
 
 @ingest_router.post("/ingest-text")
 async def ingest_text(

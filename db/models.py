@@ -23,6 +23,7 @@ from sqlalchemy.orm import DeclarativeBase, relationship
 
 class Base(DeclarativeBase):
     """Declarative base for all models."""
+
     pass
 
 
@@ -78,9 +79,7 @@ class Message(Base):
 
     extracted_urls = relationship("ExtractedURL", back_populates="message")
 
-    __table_args__ = (
-        Index("ix_messages_whatsapp_id", "whatsapp_message_id"),
-    )
+    __table_args__ = (Index("ix_messages_whatsapp_id", "whatsapp_message_id"),)
 
 
 class ExtractedURL(Base):
@@ -104,9 +103,7 @@ class ExtractedURL(Base):
     message = relationship("Message", back_populates="extracted_urls")
     jobs = relationship("Job", back_populates="extracted_url")
 
-    __table_args__ = (
-        Index("ix_extracted_urls_hash", "url_hash"),
-    )
+    __table_args__ = (Index("ix_extracted_urls_hash", "url_hash"),)
 
 
 class Job(Base):
@@ -180,12 +177,19 @@ class Application(Base):
     cv_override_id = Column(String(255), nullable=True)
     outcome = Column(String(32), nullable=True)
     outcome_note = Column(Text, nullable=True)
+    approval_source = Column(String(32), nullable=True)
 
     job = relationship("Job", back_populates="application")
     submissions = relationship(
         "Submission",
         back_populates="application",
         order_by="Submission.attempt_number",
+        cascade="all, delete-orphan",
+    )
+    events = relationship(
+        "ApplicationEvent",
+        back_populates="application",
+        order_by="ApplicationEvent.created_at",
         cascade="all, delete-orphan",
     )
 
@@ -240,6 +244,26 @@ class Submission(Base):
     )
 
 
+class ApplicationEvent(Base):
+    """Durable, redacted audit event for an application lifecycle."""
+
+    __tablename__ = "application_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
+    event_type = Column(String(64), nullable=False)
+    actor = Column(String(32), nullable=False)
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    application = relationship("Application", back_populates="events")
+
+    __table_args__ = (
+        Index("ix_application_events_application_id", "application_id"),
+        Index("ix_application_events_type", "event_type"),
+    )
+
+
 class UserProfileVersion(Base):
     """Versioned snapshot of user profile for audit trail."""
 
@@ -285,9 +309,7 @@ class DiscoveryRun(Base):
     started_at = Column(DateTime, default=func.now(), nullable=False)
     finished_at = Column(DateTime, nullable=True)
 
-    __table_args__ = (
-        Index("ix_discovery_runs_source_finished", "source", "finished_at"),
-    )
+    __table_args__ = (Index("ix_discovery_runs_source_finished", "source", "finished_at"),)
 
 
 class CoverLetterFeedback(Base):
@@ -302,16 +324,14 @@ class CoverLetterFeedback(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
-    original_text = Column(Text, nullable=False)    # LLM-generated draft
-    corrected_text = Column(Text, nullable=False)   # Human-corrected version
-    feedback_note = Column(Text, nullable=True)     # Optional explanation
+    original_text = Column(Text, nullable=False)  # LLM-generated draft
+    corrected_text = Column(Text, nullable=False)  # Human-corrected version
+    feedback_note = Column(Text, nullable=True)  # Optional explanation
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     application = relationship("Application", backref="feedbacks")
 
-    __table_args__ = (
-        Index("ix_cover_letter_feedback_app_id", "application_id"),
-    )
+    __table_args__ = (Index("ix_cover_letter_feedback_app_id", "application_id"),)
 
 
 class AnswerCache(Base):

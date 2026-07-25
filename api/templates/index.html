@@ -205,11 +205,18 @@
             <section id="view-applications" class="view">
                 <div class="list-header">
                     <h2>Pending Approvals</h2>
-                    <div class="filter-group">
-                        <button class="filter-btn active" data-status="draft">Drafts</button>
-                        <button class="filter-btn" data-status="approved">Approved</button>
-                        <button class="filter-btn" data-status="submitted">Submitted</button>
-                        <button class="filter-btn" data-status="skipped">Skipped</button>
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                        <button class="btn btn-sm btn-primary" id="btn-batch-approve"
+                                style="display:none;">
+                            <i data-lucide="check-check" style="width:13px;height:13px;"></i>
+                            Approve selected
+                        </button>
+                        <div class="filter-group">
+                            <button class="filter-btn active" data-status="draft">Drafts</button>
+                            <button class="filter-btn" data-status="approved">Approved</button>
+                            <button class="filter-btn" data-status="submitted">Submitted</button>
+                            <button class="filter-btn" data-status="skipped">Skipped</button>
+                        </div>
                     </div>
                 </div>
                 <div class="cards-list" id="applications-list">
@@ -513,6 +520,10 @@
                     <div class="info-card">
                         <h4>Q&amp;A Answers</h4>
                         <div class="qa-list" id="modal-qa-list"></div>
+                    </div>
+                    <div class="info-card">
+                        <h4>Automation history</h4>
+                        <div class="qa-list" id="modal-audit-list"></div>
                     </div>
                 </div>
 

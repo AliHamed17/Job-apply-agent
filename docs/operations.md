@@ -34,11 +34,13 @@ Stop application workers before a consistent backup.
 
 1. PostgreSQL: run `pg_dump --format=custom --file=job-agent.dump job_agent`
    from an authenticated PostgreSQL environment.
-2. Copy `profile-data/`, including profile versions and uploaded CV material,
-   into an encrypted backup.
+2. Copy `user_profile.yaml`, `cv_routing.yaml`, `cvs/`, and `profile-data/`
+   version metadata into an encrypted backup.
 3. Copy `.linkedin_profile/` only into encrypted storage. It contains an active
    browser session and must be treated as a secret.
-4. Record the Git revision and Alembic revision alongside the backup.
+4. Copy `.portal_profiles/` only into encrypted storage. Each tenant directory
+   contains an active employer session.
+5. Record the Git revision and Alembic revision alongside the backup.
 
 Never commit these artifacts. Encrypt backups at rest, restrict them to the
 operator, and test restoration quarterly.
@@ -47,7 +49,8 @@ operator, and test restoration quarterly.
 
 1. Deploy the recorded Git revision and create an empty PostgreSQL database.
 2. Restore with `pg_restore --clean --if-exists --dbname=job_agent job-agent.dump`.
-3. Restore `profile-data/` and, only if needed, `.linkedin_profile/` with their
+3. Restore `user_profile.yaml`, `cv_routing.yaml`, `cvs/`, `profile-data/`,
+   `.linkedin_profile/`, and `.portal_profiles/` only when needed, with their
    original access restrictions.
 4. Run `alembic upgrade head`.
 5. Start Redis, API, worker, and Beat; require `/health/ready` to become ready
