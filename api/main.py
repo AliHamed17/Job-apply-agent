@@ -67,12 +67,10 @@ from api.routes.salary import router as salary_router
 from api.routes.skill_gaps import router as skill_gaps_router
 from api.routes.spotlight import router as spotlight_router
 from api.routes.stream import router as stream_router
-from api.routes.widgets import router as widgets_router
-
 from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
 from api.routes.whatsapp_ingest import router as whatsapp_ingest_router
-
+from api.routes.widgets import router as widgets_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
