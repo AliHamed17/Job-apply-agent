@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     linkedin_max_gap_s: int = 360
     active_hours: str = "09:00-21:00"
     linkedin_browser_profile_dir: str = ".linkedin_profile"
+    # Login-walled career portals (Workday/Taleo/iCIMS) reuse a browser
+    # profile the user signed into once themselves. Empty by default: the
+    # agent never types a password, so with no session it reports
+    # draft_only rather than attempting to authenticate.
+    portal_browser_profile_dir: str = ""
     dry_run: bool = False
 
     # ── Discovery ───────────────────────────────────────

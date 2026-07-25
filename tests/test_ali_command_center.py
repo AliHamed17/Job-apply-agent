@@ -1,15 +1,15 @@
-import pytest
+from profile.loader import get_profile
+from profile.spotlight_matcher import match_portfolio_spotlight
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
 from core.config import get_settings
 from db.models import Application, Job, JobStatus
 from db.session import get_session_factory
-from notifications.dispatcher import dispatch_high_match_alert
-from profile.loader import get_profile
-from profile.spotlight_matcher import match_portfolio_spotlight
 from jobs.models import JobData
+from notifications.dispatcher import dispatch_high_match_alert
 
 
 @pytest.fixture
@@ -36,16 +36,30 @@ def test_alert_dispatcher():
     assert "+972-53-339-2826" in res.recipient_phone
 
 
-def test_command_center_endpoint(client):
-    resp = client.get("/api/command-center/summary")
+def test_command_center_endpoint(client, auth_headers):
+    resp = client.get("/api/command-center/summary", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["candidate_name"] == "Ali Hamed"
-    assert data["auto_apply_active"] is get_settings().auto_apply
     assert "total_jobs_scanned" in data
+    # Reflects settings.auto_apply, which defaults to False and is not set in
+    # CI — so assert the mapping, not one environment's value.
+    assert data["auto_apply_active"] is get_settings().auto_apply
 
 
-def test_spotlight_endpoint(client):
+def test_command_center_reports_auto_apply_enabled(monkeypatch, client, auth_headers):
+    """The flag must track the setting rather than being hardcoded."""
+    from core.config import Settings
+
+    enabled = Settings(_env_file=None, auto_apply=True, secret_key=get_settings().secret_key)
+    monkeypatch.setattr("api.routes.command_center.get_settings", lambda: enabled)
+
+    resp = client.get("/api/command-center/summary", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["auto_apply_active"] is True
+
+
+def test_spotlight_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -72,7 +86,10 @@ def test_spotlight_endpoint(client):
         db_session.commit()
         db_session.refresh(app_rec)
 
-        resp = client.get(f"/api/applications/{app_rec.id}/portfolio-spotlight")
+        resp = client.get(
+            f"/api/applications/{app_rec.id}/portfolio-spotlight",
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["application_id"] == app_rec.id
@@ -81,7 +98,7 @@ def test_spotlight_endpoint(client):
         db_session.close()
 
 
-def test_dispatch_endpoint(client):
+def test_dispatch_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -109,7 +126,11 @@ def test_dispatch_endpoint(client):
         db_session.commit()
         db_session.refresh(app_rec)
 
-        resp = client.post("/api/notifications/dispatch", json={"application_id": app_rec.id, "event_type": "auto_applied"})
+        resp = client.post(
+            "/api/notifications/dispatch",
+            json={"application_id": app_rec.id, "event_type": "auto_applied"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["dispatched"] is True

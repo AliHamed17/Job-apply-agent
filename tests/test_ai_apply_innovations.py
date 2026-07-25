@@ -1,6 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -24,15 +24,15 @@ def test_ab_testing_analytics():
         db_session.close()
 
 
-def test_ab_testing_endpoint(client):
-    resp = client.get("/api/analytics/ab-testing")
+def test_ab_testing_endpoint(client, auth_headers):
+    resp = client.get("/api/analytics/ab-testing", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "total_analyzed" in data
     assert "variants" in data
 
 
-def test_culture_fit_endpoint(client):
+def test_culture_fit_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -65,7 +65,7 @@ def test_culture_fit_endpoint(client):
             mock_eval.return_value.behavioral_talking_points = ["Proactive ownership"]
             mock_eval.return_value.caution_flags = []
 
-            resp = client.get(f"/api/applications/{app_rec.id}/culture-fit")
+            resp = client.get(f"/api/applications/{app_rec.id}/culture-fit", headers=auth_headers)
             assert resp.status_code == 200
             data = resp.json()
             assert data["application_id"] == app_rec.id
@@ -74,7 +74,7 @@ def test_culture_fit_endpoint(client):
         db_session.close()
 
 
-def test_stream_endpoint(client):
+def test_stream_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -101,7 +101,7 @@ def test_stream_endpoint(client):
         db_session.commit()
         db_session.refresh(app_rec)
 
-        resp = client.get(f"/api/applications/{app_rec.id}/stream")
+        resp = client.get(f"/api/applications/{app_rec.id}/stream", headers=auth_headers)
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
     finally:
