@@ -240,7 +240,7 @@ def test_heartbeat_publishes_release_and_protocol_metadata() -> None:
     assert kwargs == {"ex": 3600}
 
 
-def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch) -> None:
+def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_headers) -> None:
     from api.main import app
     from api.routes import runtime as runtime_route
 
@@ -253,7 +253,10 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch) -> None:
         lambda _settings, _report: expected,
     )
 
-    response = TestClient(app).get("/api/runtime/capabilities")
+    response = TestClient(app).get(
+        "/api/runtime/capabilities",
+        headers=auth_headers,
+    )
 
     assert response.status_code == 200
     assert response.json() == expected
