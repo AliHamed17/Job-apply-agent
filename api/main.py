@@ -61,11 +61,7 @@ from api.routes.profile import router as profile_router
 from api.routes.realign import router as realign_router
 from api.routes.salary import router as salary_router
 from api.routes.skill_gaps import router as skill_gaps_router
-from api.routes.widgets import router as widgets_router
-
-
 from api.routes.webhook import ingest_router
-
 from api.routes.webhook import router as webhook_router
 from api.routes.widgets import router as widgets_router
 from core.config import get_settings
