@@ -667,19 +667,24 @@ def submit_application_task(self, application_id: int):
                         # Leave the application APPROVED — the drainer
                         # (Task 3.6) will retry once the governor allows it.
                         return
-                attempt = run_async(sub.submit(job_ref, generated, profile_dict, resume_path))
+                # NOT `attempt` — that name holds the claimed Submission ORM
+                # row, and rebinding it here would leave the row unfinalized
+                # below (and break the except-handler's db.get on .id).
+                sub_result = run_async(
+                    sub.submit(job_ref, generated, profile_dict, resume_path)
+                )
                 logger.info(
                     "submitter_attempt",
                     platform=sub.platform_name,
-                    status=attempt.status,
-                    success=attempt.success,
+                    status=sub_result.status,
+                    success=sub_result.success,
                 )
-                if attempt.success and attempt.status == "submitted":
-                    result = attempt
+                if sub_result.success and sub_result.status == "submitted":
+                    result = sub_result
                     break
-                if result is None or attempt.status != "failed":
+                if result is None or sub_result.status != "failed":
                     # Keep best result seen (prefer draft_only over failed)
-                    result = attempt
+                    result = sub_result
 
         # Always fall back to draft_only if no real submission succeeded
         if result is None or result.status == "failed":
