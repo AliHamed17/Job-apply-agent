@@ -13,7 +13,31 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+try:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+except ImportError:  # pragma: no cover - exercised in dependency-light smokes
+    CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
+
+    def generate_latest() -> bytes:
+        """Return a valid, discoverable placeholder exposition."""
+        metric_names = (
+            "job_agent_http_requests_total",
+            "job_agent_http_request_duration_seconds",
+            "job_agent_pipeline_duration_seconds",
+            "job_agent_failures_total",
+            "job_agent_retries_total",
+            "job_agent_governor_denials_total",
+            "job_agent_queue_depth",
+            "job_agent_challenge_trips_total",
+            "job_agent_outbound_results_total",
+            "job_agent_selector_failures_total",
+        )
+        return "".join(
+            f"# HELP {name} Metric unavailable in this minimal environment.\n"
+            f"# TYPE {name} untyped\n"
+            for name in metric_names
+        ).encode()
 
 from api.routes.applications import router as applications_router
 from api.routes.control import router as control_router

@@ -68,6 +68,31 @@ class ManualIngestRequest(BaseModel):
     sender: str = "manual"
 
 
+class PipelineBottleneck(BaseModel):
+    name: str
+    count: int
+    severity: str
+    action: str
+
+
+class RecentPipelineEvent(BaseModel):
+    type: str
+    id: int
+    status: str
+    title: str
+    created_at: datetime | None
+
+
+class PipelineInsights(BaseModel):
+    generated_at: datetime
+    window_days: int
+    queue_depth: dict[str, int]
+    stale: dict[str, int]
+    bottlenecks: list[PipelineBottleneck]
+    top_opportunities: list[dict[str, Any]]
+    recent_events: list[RecentPipelineEvent]
+
+
 @router.get("/dashboard", response_model=DashboardSummary)
 async def dashboard_summary(db: Session = Depends(get_db)):
     """Get a summary of the pipeline state."""
@@ -208,6 +233,170 @@ async def dashboard_summary(db: Session = Depends(get_db)):
             f"{version}:{reason}": count for version, reason, count in cluster_rows
         },
         browser_qualification_runs=db.query(BrowserQualificationRun).count(),
+    )
+
+
+@router.get("/dashboard/insights", response_model=PipelineInsights)
+async def dashboard_insights(
+    window_days: int = 7,
+    stale_hours: int = 24,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+):
+    """Return actionable pipeline insights for operators.
+
+    The summary dashboard exposes raw counts; this endpoint turns the same data into
+    queue depth, stale work, bottleneck recommendations, and the best pending
+    opportunities so the operator knows what to fix or review next.
+    """
+    now = datetime.utcnow()
+    since = now - timedelta(days=max(1, min(window_days, 90)))
+    stale_before = now - timedelta(hours=max(1, min(stale_hours, 168)))
+    limit = max(1, min(limit, 50))
+
+    queue_depth = {
+        "urls_pending": db.query(ExtractedURL)
+        .filter(ExtractedURL.status == URLStatus.PENDING)
+        .count(),
+        "jobs_extracted": db.query(Job)
+        .filter(Job.status == JobStatus.EXTRACTED)
+        .count(),
+        "jobs_scored": db.query(Job).filter(Job.status == JobStatus.SCORED).count(),
+        "applications_draft": db.query(Application)
+        .filter(Application.status == JobStatus.DRAFT)
+        .count(),
+        "applications_approved": db.query(Application)
+        .filter(Application.status == JobStatus.APPROVED)
+        .count(),
+        "submissions_running": db.query(Submission)
+        .filter(Submission.status == SubmissionStatus.RUNNING)
+        .count(),
+        "submissions_unknown": db.query(Submission)
+        .filter(Submission.status == SubmissionStatus.UNKNOWN)
+        .count(),
+    }
+    stale = {
+        "urls_pending": db.query(ExtractedURL)
+        .filter(
+            ExtractedURL.status == URLStatus.PENDING,
+            ExtractedURL.created_at < stale_before,
+        )
+        .count(),
+        "applications_approved": db.query(Application)
+        .filter(
+            Application.status == JobStatus.APPROVED,
+            Application.updated_at < stale_before,
+        )
+        .count(),
+        "submissions_running": db.query(Submission)
+        .filter(
+            Submission.status == SubmissionStatus.RUNNING,
+            Submission.started_at < stale_before,
+        )
+        .count(),
+        "submissions_unknown": db.query(Submission)
+        .filter(
+            Submission.status == SubmissionStatus.UNKNOWN,
+            Submission.created_at < stale_before,
+        )
+        .count(),
+    }
+
+    bottlenecks: list[PipelineBottleneck] = []
+    if queue_depth["urls_pending"]:
+        bottlenecks.append(
+            PipelineBottleneck(
+                name="URL processing backlog",
+                count=queue_depth["urls_pending"],
+                severity="warning" if stale["urls_pending"] == 0 else "critical",
+                action=(
+                    "Check fetcher logs and ensure processing workers are consuming "
+                    "the processing queue."
+                ),
+            )
+        )
+    if queue_depth["applications_draft"]:
+        bottlenecks.append(
+            PipelineBottleneck(
+                name="Applications awaiting approval",
+                count=queue_depth["applications_draft"],
+                severity="info",
+                action=(
+                    "Review drafts, confirm CV routing, then approve or reject "
+                    "them from the dashboard."
+                ),
+            )
+        )
+    if queue_depth["submissions_unknown"]:
+        bottlenecks.append(
+            PipelineBottleneck(
+                name="Unknown submission outcomes",
+                count=queue_depth["submissions_unknown"],
+                severity="critical",
+                action="Reconcile unknown attempts before retrying to avoid duplicates.",
+            )
+        )
+    if stale["submissions_running"]:
+        bottlenecks.append(
+            PipelineBottleneck(
+                name="Stale running submissions",
+                count=stale["submissions_running"],
+                severity="critical",
+                action=(
+                    "Inspect browser traces and mark the attempt reconciled if "
+                    "the worker died mid-submit."
+                ),
+            )
+        )
+
+    top_jobs = (
+        db.query(Job)
+        .filter(
+            Job.score.isnot(None),
+            Job.status.in_([JobStatus.SCORED, JobStatus.DRAFT, JobStatus.NEEDS_REVIEW]),
+        )
+        .order_by(Job.score.desc(), Job.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    top_opportunities = [
+        {
+            "id": job.id,
+            "title": job.title,
+            "company": job.company or "",
+            "score": job.score,
+            "status": job.status.value if job.status else "",
+            "apply_url": job.apply_url or job.source_url,
+        }
+        for job in top_jobs
+    ]
+
+    recent_jobs = (
+        db.query(Job)
+        .filter(Job.created_at >= since)
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    recent_events = [
+        RecentPipelineEvent(
+            type="job",
+            id=job.id,
+            status=job.status.value if job.status else "",
+            title=f"{job.title} — {job.company or 'Unknown company'}",
+            created_at=job.created_at,
+        )
+        for job in recent_jobs
+    ]
+
+    return PipelineInsights(
+        generated_at=now,
+        window_days=max(1, min(window_days, 90)),
+        queue_depth=queue_depth,
+        stale=stale,
+        bottlenecks=bottlenecks,
+        top_opportunities=top_opportunities,
+        recent_events=recent_events,
     )
 
 
