@@ -538,6 +538,7 @@ def submit_application_task(self, application_id: int):
     from submitters.linkedin_v2 import LinkedInV2Submitter
     from submitters.smartrecruiters import SmartRecruitersSubmitter
     from submitters.workable import WorkableSubmitter
+    from submitters.portal_login import PortalLoginSubmitter
     from submitters.workday import WorkdaySubmitter
 
     db = _get_db()
@@ -586,6 +587,7 @@ def submit_application_task(self, application_id: int):
             ),
             IcimsSubmitter(),
             ComeetSubmitter(),
+            PortalLoginSubmitter(),
             # Tier 3: Draft-only — Workday SSO wall, never auto-submit
             WorkdaySubmitter(),
         ]

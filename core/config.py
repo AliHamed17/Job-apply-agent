@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     llm_cv_alignment: bool = True
 
     # ── Application Modes ───────────────────────────────
-    draft_only: bool = True
+    draft_only: bool = False
     auto_apply: bool = False
     auto_apply_threshold: float = 80.0
     tasks_always_eager: bool = True  # If True, runs tasks synchronously (no Redis needed)

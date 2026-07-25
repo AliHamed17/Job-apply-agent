@@ -52,8 +52,8 @@ class PortalLoginSubmitter(BaseSubmitter):
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
-                context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                browser = await pw.chromium.launch(headless=False, args=['--start-maximized'])
+                context = await browser.new_context(no_viewport=True, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 page = await context.new_page()
 
                 logger.info("navigating_to_portal", url=apply_url)
