@@ -112,31 +112,3 @@ If info is missing, use [PLACEHOLDER: ...].
 
 Respond with the JSON object only.
 """
-
-# ── CV Alignment Validation Prompt ─────────────────────────────────────────
-CV_ALIGNMENT_PROMPT = """\
-Analyze whether the selected CV genuinely matches the requirements of the job posting.
-
-## Job Details
-- Title: {job_title}
-- Seniority: {seniority}
-- Description: {job_description}
-
-## Selected CV ({cv_id})
-{cv_text}
-
-## All Available CV Options
-{available_cvs_info}
-
-## Task
-Evaluate if the selected CV ({cv_id}) is a strong match for this job, or if another CV option would be significantly better aligned.
-
-Respond ONLY with a JSON object in this format:
-{{
-    "is_good_match": true/false,
-    "alignment_score": float between 0.0 and 1.0,
-    "reasoning": "Concise summary explaining why this CV matches or doesn't match",
-    "suggested_cv_id": "cv-id-string" (or null if the selected CV is best)
-}}
-"""
-
