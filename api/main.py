@@ -71,6 +71,8 @@ from api.routes.widgets import router as widgets_router
 
 from api.routes.webhook import ingest_router
 from api.routes.webhook import router as webhook_router
+from api.routes.whatsapp_ingest import router as whatsapp_ingest_router
+
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
@@ -253,6 +255,8 @@ app.include_router(dispatch_router, prefix="/api")
 app.include_router(spotlight_router, prefix="/api")
 app.include_router(salary_router, prefix="/api")
 app.include_router(skill_gaps_router, prefix="/api")
+app.include_router(whatsapp_ingest_router, prefix="/api")
+
 
 
 
