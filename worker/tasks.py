@@ -326,7 +326,6 @@ def generate_application_task(self, job_id: int):
             load_routing_config,
             parse_required_skills,
             route_cv,
-            validate_cv_alignment,
         )
 
         routing_job = RoutingJob(
@@ -342,8 +341,25 @@ def generate_application_task(self, job_id: int):
         if routing_path.exists():
             routing_config = load_routing_config(routing_path)
             routing = route_cv(routing_job, routing_config)
-            if settings.llm_cv_alignment and routing.selected_cv_id:
-                routing = run_async(validate_cv_alignment(routing_job, routing, routing_config))
+            # The keyword matcher only scores what it has signal for - a
+            # posting with no scraped description gives it nothing to match
+            # skills against. When it can't confidently pick a CV, let the
+            # LLM actually read every candidate CV's real content and judge,
+            # instead of silently shipping the generic fallback CV.
+            if settings.llm_cv_alignment and routing.fallback_reason:
+                from profile.cv_routing_llm import load_cv_excerpts, select_cv_via_llm
+
+                try:
+                    excerpts = load_cv_excerpts(
+                        routing_config, settings.cv_directory, settings.cv_routing_path
+                    )
+                    llm_routing = run_async(
+                        select_cv_via_llm(routing_job, routing_config, excerpts)
+                    )
+                    if llm_routing.selected_cv_id is not None:
+                        routing = llm_routing
+                except Exception as exc:
+                    logger.warning("llm_cv_routing_unavailable", error=str(exc))
         else:
             routing = RoutingDecision(
                 selected_cv_id=None,
@@ -374,7 +390,6 @@ def generate_application_task(self, job_id: int):
             min_apply_score=settings.min_apply_score,
         )
         auto_approve = action == Action.AUTO_APPLY and routing.selected_cv_id is not None
-
 
         from db.models import UserProfileVersion
 

@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+from profile.cv_routing import load_routing_config
+from profile.pdf_loader import extract_text_from_pdf
+
 import structlog
 
 from core.config import get_settings
-from profile.cv_routing import load_routing_config
-from profile.pdf_loader import extract_text_from_pdf
 
 logger = structlog.get_logger(__name__)
 
 _CV_TEXT_CACHE: dict[str, str] = {}
 
 
-def get_cv_text_by_id(cv_id: str, cv_routing_path: str | Path | None = None, cv_directory: str | Path | None = None) -> str:
+def get_cv_text_by_id(
+    cv_id: str,
+    cv_routing_path: str | Path | None = None,
+    cv_directory: str | Path | None = None,
+) -> str:
     """Retrieve extracted text for a specific CV ID defined in cv_routing.yaml."""
     if cv_id in _CV_TEXT_CACHE:
         return _CV_TEXT_CACHE[cv_id]

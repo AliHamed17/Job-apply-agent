@@ -195,7 +195,9 @@ async def generate_full_application(
     # Load once and pass into cover letter generation
     few_shot_examples = _load_few_shot_examples()
 
-    cover_letter = await generate_cover_letter(job, profile, client, few_shot_examples, cv_text=cv_text)
+    cover_letter = await generate_cover_letter(
+        job, profile, client, few_shot_examples, cv_text=cv_text
+    )
     recruiter_msg = await generate_recruiter_message(job, profile, client)
     qa_answers = await generate_qa_answers(job, profile, client, cv_text=cv_text)
 
