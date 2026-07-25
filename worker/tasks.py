@@ -368,21 +368,6 @@ def generate_application_task(self, job_id: int):
         # An application cannot become eligible until routing selected a CV.
         auto_approve = auto_approve and routing.selected_cv_id is not None
 
-        app = Application(
-            job_id=job_id,
-            cover_letter=generated.cover_letter,
-            recruiter_message=generated.recruiter_message,
-            qa_answers=json.dumps(generated.qa_answers),
-            status=JobStatus.APPROVED if auto_approve else JobStatus.DRAFT,
-            approved_at=datetime.utcnow() if auto_approve else None,
-            selected_cv_id=routing.selected_cv_id,
-            cv_routing_confidence=routing.confidence,
-            cv_routing_evidence=json.dumps(routing.matched_evidence),
-            cv_routing_fallback_reason=routing.fallback_reason,
-            needs_review_reason=(
-                "CV_ROUTING_REVIEW_REQUIRED" if routing.selected_cv_id is None else None
-            ),
-        )
         from db.models import UserProfileVersion
 
         latest_profile = (
@@ -390,8 +375,32 @@ def generate_application_task(self, job_id: int):
             .order_by(UserProfileVersion.version.desc())
             .first()
         )
-        app.profile_version = latest_profile.version if latest_profile else None
-        db.add(app)
+        profile_version = latest_profile.version if latest_profile else None
+
+        # Application.job_id is UNIQUE — this task can run more than once for
+        # the same job (a regenerate action, or Celery's own retry landing
+        # after a transient error on a later line). Update the existing row
+        # in place instead of blindly inserting, which used to raise
+        # IntegrityError and burn a full (real, non-mock) LLM generation on
+        # every retry without ever persisting the result.
+        app = db.query(Application).filter(Application.job_id == job_id).first()
+        if app is None:
+            app = Application(job_id=job_id)
+            db.add(app)
+
+        app.cover_letter = generated.cover_letter
+        app.recruiter_message = generated.recruiter_message
+        app.qa_answers = json.dumps(generated.qa_answers)
+        app.status = JobStatus.APPROVED if auto_approve else JobStatus.DRAFT
+        app.approved_at = datetime.utcnow() if auto_approve else None
+        app.selected_cv_id = routing.selected_cv_id
+        app.cv_routing_confidence = routing.confidence
+        app.cv_routing_evidence = json.dumps(routing.matched_evidence)
+        app.cv_routing_fallback_reason = routing.fallback_reason
+        app.needs_review_reason = (
+            "CV_ROUTING_REVIEW_REQUIRED" if routing.selected_cv_id is None else None
+        )
+        app.profile_version = profile_version
         db.flush()
 
         if auto_approve:
