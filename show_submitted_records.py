@@ -1,55 +1,49 @@
-"""Query and display real submitted application records from SQLite database."""
+"""Display only employer-verified submissions, with private content omitted."""
 
 from __future__ import annotations
 
-import json
-from db.models import Application, Job, JobStatus
+from core.submission_truth import latest_employer_verified_query
+from db.models import Application, Job, Submission
 from db.session import get_session_factory
 
 
 def display_submitted_records():
     db = get_session_factory()()
     try:
-        submitted_apps = (
-            db.query(Application)
-            .join(Job)
-            .filter(Application.status == JobStatus.SUBMITTED)
-            .order_by(Application.id.desc())
+        verified_rows = (
+            latest_employer_verified_query(db)
+            .join(Application, Application.id == Submission.application_id)
+            .join(Job, Job.id == Application.job_id)
+            .order_by(Submission.submitted_at.desc())
             .limit(10)
             .all()
         )
 
         print("\n" + "=" * 90)
-        print("REAL DATABASE RECORDS: SUCCESSFULLY SUBMITTED APPLICATIONS (job_agent.db)")
+        print("EMPLOYER-VERIFIED SUBMISSION RECORDS (job_agent.db)")
         print("=" * 90)
 
-        if not submitted_apps:
-            print("No submitted records found in database.")
+        if not verified_rows:
+            print("No employer-verified submission records found.")
             return
 
-        for app in submitted_apps:
+        for attempt in verified_rows:
+            app = attempt.application
             job = app.job
-            print(f"\n[RECORD] APPLICATION RECORD #{app.id}")
+            print(f"\n[VERIFIED] APPLICATION RECORD #{app.id}")
             print(f"   * Job ID:              #{job.id}")
             print(f"   * Job Title:           {job.title}")
             print(f"   * Company:             {job.company}")
             print(f"   * Location:            {job.location}")
-            print(f"   * Match Score:         {job.score:.1f}/100.0")
-            print(f"   * Selected CV:         {app.selected_cv_id}")
-            print(f"   * Application Status:  {app.status.value.upper()} (SUCCESS)")
-            print(f"   * Created At (UTC):    {app.created_at}")
-
-            try:
-                qa = json.loads(app.qa_answers) if isinstance(app.qa_answers, str) else app.qa_answers
-            except Exception:
-                qa = app.qa_answers
-            print(f"   * Form QA Answers:     {qa}")
-
-            cl_snippet = (app.cover_letter or "").replace("\n", " ")[:120]
-            print(f'   * Cover Letter Snippet: "{cl_snippet}..."')
+            score = f"{job.score:.1f}/100.0" if job.score is not None else "not scored"
+            print(f"   * Match Score:         {score}")
+            print(f"   * Attempt:             {attempt.attempt_number}")
+            print(f"   * ATS Adapter:         {attempt.submitter_name}")
+            print(f"   * Verification Code:   {attempt.reason_code}")
+            print(f"   * Verified At (UTC):   {attempt.submitted_at}")
             print("-" * 90)
 
-        print(f"\nTOTAL SUBMITTED RECORDS DISPLAYED: {len(submitted_apps)}")
+        print(f"\nTOTAL EMPLOYER-VERIFIED RECORDS DISPLAYED: {len(verified_rows)}")
         print("=" * 90 + "\n")
 
     finally:

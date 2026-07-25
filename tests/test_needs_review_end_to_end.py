@@ -14,6 +14,7 @@ submitter -> worker -> DB path is covered, not just the string helper.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -30,6 +31,7 @@ from db.models import (
     SubmissionStatus,
 )
 from submitters.base import SubmissionResult
+from submitters.platforms import QualificationTier, adapter_for_url
 from submitters.safe_fill import needs_review_error
 
 
@@ -42,17 +44,26 @@ def _factory(tmp_path):
 def _approved(factory, apply_url):
     db = factory()
     job = Job(
-        title="AI Engineer", company="Acme",
-        apply_url=apply_url, source_url=apply_url,
-        status=JobStatus.APPROVED, score=90.0,
-        location="", employment_type="", seniority="", description="",
+        title="AI Engineer",
+        company="Acme",
+        apply_url=apply_url,
+        source_url=apply_url,
+        status=JobStatus.APPROVED,
+        score=90.0,
+        location="",
+        employment_type="",
+        seniority="",
+        description="",
         requirements="",
     )
     db.add(job)
     db.flush()
     app = Application(
-        job_id=job.id, cover_letter="letter", recruiter_message="msg",
-        qa_answers="{}", status=JobStatus.APPROVED,
+        job_id=job.id,
+        cover_letter="letter",
+        recruiter_message="msg",
+        qa_answers="{}",
+        status=JobStatus.APPROVED,
     )
     db.add(app)
     db.commit()
@@ -63,20 +74,31 @@ def _approved(factory, apply_url):
 
 def _settings():
     return Settings(
-        _env_file=None, draft_only=False, auto_apply=True,
+        _env_file=None,
+        draft_only=False,
+        auto_apply=True,
         cv_routing_path="does-not-exist.yaml",
+    )
+
+
+def _live_qualified_descriptor(url):
+    descriptor = adapter_for_url(url)
+    assert descriptor is not None
+    return replace(
+        descriptor,
+        qualification=QualificationTier.LIVE_CANARY_QUALIFIED,
     )
 
 
 @pytest.mark.parametrize(
     ("submitter_path", "apply_url"),
     [
-        ("submitters.greenhouse.GreenhouseSubmitter.submit",
-         "https://boards.greenhouse.io/acme/jobs/1"),
-        ("submitters.lever.LeverSubmitter.submit",
-         "https://jobs.lever.co/acme/1"),
-        ("submitters.workable.WorkableSubmitter.submit",
-         "https://apply.workable.com/acme/j/ABC/"),
+        (
+            "submitters.greenhouse.GreenhouseSubmitter.submit",
+            "https://boards.greenhouse.io/acme/jobs/1",
+        ),
+        ("submitters.lever.LeverSubmitter.submit", "https://jobs.lever.co/acme/1"),
+        ("submitters.workable.WorkableSubmitter.submit", "https://apply.workable.com/acme/j/ABC/"),
     ],
 )
 def test_blocked_question_surfaces_as_needs_review(tmp_path, submitter_path, apply_url):
@@ -90,11 +112,19 @@ def test_blocked_question_surfaces_as_needs_review(tmp_path, submitter_path, app
         error=needs_review_error(["Years of Kubernetes experience?"]),
     )
 
-    with patch("worker.tasks.get_session_factory", return_value=factory), \
-         patch("worker.tasks.get_settings", return_value=_settings()), \
-         patch("profile.loader.get_profile"), \
-         patch(submitter_path, new=AsyncMock(return_value=blocked)):
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("worker.tasks._validated_submit_command_available", return_value=True),
+        patch("profile.loader.get_profile"),
+        patch(
+            "submitters.platforms.adapter_for_url",
+            side_effect=_live_qualified_descriptor,
+        ),
+        patch(submitter_path, new=AsyncMock(return_value=blocked)),
+    ):
         from worker.tasks import submit_application_task
+
         submit_application_task.apply(args=[app_id])
 
     db = factory()
@@ -124,14 +154,22 @@ def test_needs_review_survives_a_failed_status_submitter(tmp_path):
         error=needs_review_error(["Do you hold a security clearance?"]),
     )
 
-    with patch("worker.tasks.get_session_factory", return_value=factory), \
-         patch("worker.tasks.get_settings", return_value=_settings()), \
-         patch("profile.loader.get_profile"), \
-         patch(
-             "submitters.greenhouse.GreenhouseSubmitter.submit",
-             new=AsyncMock(return_value=blocked_as_failed),
-         ):
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("worker.tasks._validated_submit_command_available", return_value=True),
+        patch("profile.loader.get_profile"),
+        patch(
+            "submitters.platforms.adapter_for_url",
+            side_effect=_live_qualified_descriptor,
+        ),
+        patch(
+            "submitters.greenhouse.GreenhouseSubmitter.submit",
+            new=AsyncMock(return_value=blocked_as_failed),
+        ),
+    ):
         from worker.tasks import submit_application_task
+
         submit_application_task.apply(args=[app_id])
 
     db = factory()
@@ -190,18 +228,24 @@ def test_ordinary_draft_is_not_mislabelled_needs_review(tmp_path):
     factory = _factory(tmp_path)
     app_id = _approved(factory, "https://boards.greenhouse.io/acme/jobs/3")
 
-    plain = SubmissionResult(
-        success=True, platform="greenhouse", status="draft_only", error=None
-    )
+    plain = SubmissionResult(success=True, platform="greenhouse", status="draft_only", error=None)
 
-    with patch("worker.tasks.get_session_factory", return_value=factory), \
-         patch("worker.tasks.get_settings", return_value=_settings()), \
-         patch("profile.loader.get_profile"), \
-         patch(
-             "submitters.greenhouse.GreenhouseSubmitter.submit",
-             new=AsyncMock(return_value=plain),
-         ):
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=_settings()),
+        patch("worker.tasks._validated_submit_command_available", return_value=True),
+        patch("profile.loader.get_profile"),
+        patch(
+            "submitters.platforms.adapter_for_url",
+            side_effect=_live_qualified_descriptor,
+        ),
+        patch(
+            "submitters.greenhouse.GreenhouseSubmitter.submit",
+            new=AsyncMock(return_value=plain),
+        ),
+    ):
         from worker.tasks import submit_application_task
+
         submit_application_task.apply(args=[app_id])
 
     db = factory()

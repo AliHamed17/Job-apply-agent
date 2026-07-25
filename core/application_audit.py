@@ -10,6 +10,8 @@ from db.models import ApplicationEvent
 _ALLOWED_DETAIL_KEYS = {
     "approval_source",
     "attempt_number",
+    "external_action_queued",
+    "external_action_started",
     "platform",
     "profile_version",
     "reason_code",

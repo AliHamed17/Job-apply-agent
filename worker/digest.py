@@ -33,21 +33,31 @@ def build_digest(db, day) -> DigestSummary:
       ``OutboundContact.last_contacted_at``.
     """
     from sqlalchemy import func  # noqa: PLC0415
-    from db.models import Application, JobStatus, OutboundContact, Submission, SubmissionStatus  # noqa: PLC0415
 
-    applied = db.query(func.count(Submission.id)).filter(
-        Submission.status == SubmissionStatus.SUCCESS,
-        func.date(Submission.submitted_at) == day,
-    ).scalar() or 0
+    from core.submission_truth import latest_employer_verified_query  # noqa: PLC0415
+    from db.models import Application, JobStatus, OutboundContact, Submission  # noqa: PLC0415
+
+    applied = (
+        latest_employer_verified_query(db).filter(func.date(Submission.submitted_at) == day).count()
+    )
 
     def _app_count(status):
-        return db.query(func.count(Application.id)).filter(
-            Application.status == status,
-            func.date(Application.updated_at) == day,
-        ).scalar() or 0
+        return (
+            db.query(func.count(Application.id))
+            .filter(
+                Application.status == status,
+                func.date(Application.updated_at) == day,
+            )
+            .scalar()
+            or 0
+        )
 
-    outbound = db.query(func.count(OutboundContact.id)).filter(
-        func.date(OutboundContact.last_contacted_at) == day).scalar() or 0
+    outbound = (
+        db.query(func.count(OutboundContact.id))
+        .filter(func.date(OutboundContact.last_contacted_at) == day)
+        .scalar()
+        or 0
+    )
     return DigestSummary(
         applied=applied,
         needs_review=_app_count(JobStatus.NEEDS_REVIEW),
@@ -57,20 +67,23 @@ def build_digest(db, day) -> DigestSummary:
 
 
 def format_digest(s: DigestSummary) -> str:
-    return (f"📊 *Daily Job Agent Digest*\n"
-            f"✅ Applied: {s.applied}\n"
-            f"⚠️ Needs review: {s.needs_review}\n"
-            f"❌ Failed: {s.failed}\n"
-            f"📨 Outbound sent: {s.outbound_sent}")
+    return (
+        f"📊 *Daily Job Agent Digest*\n"
+        f"✅ Applied: {s.applied}\n"
+        f"⚠️ Needs review: {s.needs_review}\n"
+        f"❌ Failed: {s.failed}\n"
+        f"📨 Outbound sent: {s.outbound_sent}"
+    )
 
 
 @shared_task(name="worker.digest.send_daily_digest_task")
 def send_daily_digest_task() -> str:
     from datetime import datetime  # noqa: PLC0415
+
+    from api.routes.webhook import _send_whatsapp_message  # noqa: PLC0415
     from core.config import get_settings  # noqa: PLC0415
     from core.utils import run_async  # noqa: PLC0415
     from db.session import get_session_factory  # noqa: PLC0415
-    from api.routes.webhook import _send_whatsapp_message  # noqa: PLC0415
 
     settings = get_settings()
     db = get_session_factory()()

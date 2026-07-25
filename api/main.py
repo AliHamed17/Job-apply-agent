@@ -64,6 +64,7 @@ from api.routes.jobs import router as jobs_router
 from api.routes.outreach import router as outreach_router
 from api.routes.profile import router as profile_router
 from api.routes.realign import router as realign_router
+from api.routes.runtime import router as runtime_router
 from api.routes.salary import router as salary_router
 from api.routes.skill_gaps import router as skill_gaps_router
 from api.routes.spotlight import router as spotlight_router
@@ -76,6 +77,8 @@ from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
 from core.operations import rate_limit_allowed, readiness_report
+from core.runtime_identity import compute_ui_asset_digest, get_runtime_identity
+from core.single_instance import acquire_dashboard_instance_lock
 from db.session import init_db
 
 # Setup structured logging
@@ -107,9 +110,24 @@ def _is_public_read(request: Request) -> bool:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings.validate_runtime()
-    init_db()
-    logger.info("app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply)
-    yield
+    identity = get_runtime_identity()
+    instance_lock = acquire_dashboard_instance_lock(
+        app_env=settings.app_env,
+        boot_id=identity.boot_id,
+    )
+    try:
+        init_db()
+        logger.info(
+            "app_started",
+            draft_only=settings.draft_only,
+            auto_apply=settings.auto_apply,
+            build_sha=identity.build_sha,
+            boot_id=identity.boot_id,
+        )
+        yield
+    finally:
+        if instance_lock is not None:
+            instance_lock.release()
 
 
 # ── App creation ─────────────────────────────────────────
@@ -242,6 +260,7 @@ app.include_router(profile_router)
 app.include_router(control_router)
 app.include_router(cv_routing_router, prefix="/api")
 app.include_router(realign_router, prefix="/api")
+app.include_router(runtime_router, prefix="/api")
 app.include_router(interview_prep_router, prefix="/api")
 app.include_router(widgets_router, prefix="/api")
 app.include_router(export_router, prefix="/api")
@@ -296,7 +315,18 @@ async def health_ready():
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
-    return templates.TemplateResponse(request, "index.html")
+    identity = get_runtime_identity()
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "runtime_build_sha": identity.build_sha,
+            "runtime_ui_asset_digest": compute_ui_asset_digest(),
+            "runtime_protocol_version": identity.protocol_version,
+            "runtime_boot_id": identity.boot_id,
+            "runtime_started_at": identity.started_at.isoformat().replace("+00:00", "Z"),
+        },
+    )
 
 
 @app.get("/metrics")

@@ -19,7 +19,7 @@ def test_format_digest_readable():
 
 
 def _db(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path/'d.db'}")
+    engine = create_engine(f"sqlite:///{tmp_path / 'd.db'}")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
 
@@ -40,8 +40,16 @@ def test_build_digest_counts_by_event_date_not_job_created_at(tmp_path):
     old_app = Application(job_id=old_job.id, status=JobStatus.SUBMITTED)
     db.add(old_app)
     db.flush()
-    db.add(Submission(application_id=old_app.id, submitter_name="greenhouse",
-                       status=SubmissionStatus.SUCCESS, submitted_at=today_dt))
+    db.add(
+        Submission(
+            application_id=old_app.id,
+            submitter_name="greenhouse",
+            status=SubmissionStatus.SUCCESS,
+            submitted_at=today_dt,
+            reason_code="EMPLOYER_VERIFIED",
+            confirmation_id="receipt-1",
+        )
+    )
 
     # Needs review: Job created today, Application.updated_at forced to today.
     nr_job = Job(title="t2", source_url="y", status=JobStatus.NEEDS_REVIEW, created_at=today_dt)
@@ -55,8 +63,9 @@ def test_build_digest_counts_by_event_date_not_job_created_at(tmp_path):
     stale_fail_job = Job(title="t3", source_url="z", status=JobStatus.FAILED, created_at=today_dt)
     db.add(stale_fail_job)
     db.flush()
-    stale_fail_app = Application(job_id=stale_fail_job.id, status=JobStatus.FAILED,
-                                  updated_at=yesterday)
+    stale_fail_app = Application(
+        job_id=stale_fail_job.id, status=JobStatus.FAILED, updated_at=yesterday
+    )
     db.add(stale_fail_app)
 
     db.commit()

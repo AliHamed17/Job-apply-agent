@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
+from core.submission_truth import latest_employer_verified_count
 from db.models import Application, Job, JobStatus
 from db.session import get_db
 
@@ -34,7 +35,7 @@ async def get_command_center_summary(db: Session = Depends(get_db)):
 
     total_jobs = db.query(Job).count()
     total_apps = db.query(Application).count()
-    submitted = db.query(Application).filter(Application.status == JobStatus.SUBMITTED).count()
+    submitted = latest_employer_verified_count(db)
     needs_review = (
         db.query(Application).filter(Application.status == JobStatus.NEEDS_REVIEW).count()
     )
