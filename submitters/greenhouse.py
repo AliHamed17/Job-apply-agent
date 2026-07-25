@@ -155,12 +155,22 @@ class GreenhouseSubmitter(BaseSubmitter):
             first_name = name_parts[0] if name_parts else ""
             last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
-            # Greenhouse fields often have IDs like 'first_name', 'last_name', etc.
-            # or name attributes.
-            await page.fill('input[name="first_name"]', first_name)
-            await page.fill('input[name="last_name"]', last_name)
-            await page.fill('input[name="email"]', personal.get("email", ""))
-            await page.fill('input[name="phone"]', personal.get("phone", ""))
+            fn_loc = page.locator('input[name="first_name"], input[id*="first_name"]').first
+            if await fn_loc.is_visible(timeout=3000):
+                await fn_loc.fill(first_name)
+
+            ln_loc = page.locator('input[name="last_name"], input[id*="last_name"]').first
+            if await ln_loc.is_visible(timeout=3000):
+                await ln_loc.fill(last_name)
+
+            em_loc = page.locator('input[name="email"], input[type="email"]').first
+            if await em_loc.is_visible(timeout=3000):
+                await em_loc.fill(personal.get("email", ""))
+
+            ph_loc = page.locator('input[name="phone"], input[type="tel"]').first
+            if await ph_loc.is_visible(timeout=3000):
+                await ph_loc.fill(personal.get("phone", ""))
+
 
             # Resume
             if resume_path:
