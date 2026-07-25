@@ -19,6 +19,8 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.form_brain import FormBrain
+from submitters.safe_fill import fill_form_safely, needs_review_error
 
 logger = structlog.get_logger(__name__)
 
@@ -64,10 +66,11 @@ class JobviteSubmitter(BaseSubmitter):
 
         # Jobvite API requires auth tokens for most operations;
         # fall back to the public form-based submission which works without auth.
-        return await self._submit_form(url, job_id, application, user_profile, resume_path)
+        return await self._submit_form(job, url, job_id, application, user_profile, resume_path)
 
     async def _submit_form(
         self,
+        job: JobData,
         job_url: str,
         job_id: str,
         application: GeneratedApplication,
@@ -105,7 +108,9 @@ class JobviteSubmitter(BaseSubmitter):
 
             if self.detect_captcha(resp.text):
                 logger.warning("jobvite_captcha_detected", url=submit_url)
-                return await self._submit_via_browser(job_url, application, user_profile, resume_path)
+                return await self._submit_via_browser(
+                    job_url, application, user_profile, resume_path, job=job
+                )
 
             if resp.status_code in (200, 201, 302):
                 return SubmissionResult(
@@ -115,11 +120,15 @@ class JobviteSubmitter(BaseSubmitter):
                     confirmation_url=str(resp.url),
                 )
             else:
-                return await self._submit_via_browser(job_url, application, user_profile, resume_path)
+                return await self._submit_via_browser(
+                    job_url, application, user_profile, resume_path, job=job
+                )
 
         except Exception as exc:
             logger.warning("jobvite_submit_error_trying_browser", error=str(exc))
-            return await self._submit_via_browser(job_url, application, user_profile, resume_path)
+            return await self._submit_via_browser(
+                job_url, application, user_profile, resume_path, job=job
+            )
 
     async def _submit_via_browser(
         self,
@@ -127,6 +136,7 @@ class JobviteSubmitter(BaseSubmitter):
         application: GeneratedApplication,
         user_profile: dict,
         resume_path: str | None = None,
+        job: JobData | None = None,
     ) -> SubmissionResult:
         """Fallback: Submit via browser using Playwright."""
         try:
@@ -164,7 +174,7 @@ class JobviteSubmitter(BaseSubmitter):
             await page.fill('input[name="firstName"], input[name="firstname"]', first_name)
             await page.fill('input[name="lastName"], input[name="lastname"]', last_name)
             await page.fill('input[name="email"], input[type="email"]', personal.get("email", ""))
-            
+
             phone_input = page.locator('input[type="tel"], input[name="phone"]').first
             if await phone_input.count() > 0:
                 await phone_input.fill(personal.get("phone", ""))
@@ -176,36 +186,24 @@ class JobviteSubmitter(BaseSubmitter):
                     await file_input.set_input_files(resume_path)
                     await page.wait_for_timeout(1000)
 
-            # Custom questions (Jobvite Q&A blocks)
-            if application.qa_answers:
-                text_inputs = page.locator('input[type="text"]:visible, textarea:visible')
-                for i in range(await text_inputs.count()):
-                    el = text_inputs.nth(i)
-                    if not await el.is_editable(): continue
-                    current = await el.input_value()
-                    if current: continue
-                    label_text = (await el.get_attribute("aria-label") or "").lower()
-                    el_id = await el.get_attribute("id") or ""
-                    if not label_text and el_id:
-                        lbl = page.locator(f'label[for="{el_id}"]')
-                        if await lbl.count() > 0:
-                            label_text = (await lbl.inner_text()).strip().lower()
-                    if not label_text: continue
-                    best_answer = next((str(v) for k, v in application.qa_answers.items() if any(kw in label_text for kw in k.lower().split("_"))), next((str(v) for v in application.qa_answers.values() if v), ""))
-                    if best_answer:
-                        await el.fill(best_answer[:500])
+            # Custom questions (Jobvite Q&A blocks) and dropdowns — resolved per
+            # question through FormBrain, which abstains instead of guessing, so
+            # an unmatched field is left blank rather than answered falsely.
+            from profile.models import UserProfile
 
-            # Select dropdowns
-            selects = page.locator('select:visible')
-            for i in range(await selects.count()):
-                sel = selects.nth(i)
-                options = await sel.locator('option').all_text_contents()
-                options_lower = [o.lower() for o in options]
-                if "yes" in options_lower and "no" in options_lower:
-                    try:
-                        await sel.select_option(label=next(o for o in options if o.lower() == "yes"))
-                    except Exception:
-                        pass
+            profile_obj = UserProfile(**user_profile) if user_profile else UserProfile()
+            brain = FormBrain(profile_obj)
+            blocked = await fill_form_safely(page, brain, job, application.qa_answers)
+
+            # A required question we cannot answer truthfully stops the submission:
+            # worker/tasks.py routes the NEEDS_REVIEW: prefix to human review.
+            if blocked:
+                logger.warning("jobvite_needs_review", url=job_url, questions=blocked[:5])
+                await browser.close()
+                return SubmissionResult(
+                    success=False, platform=self.platform_name, status="failed",
+                    error=needs_review_error(blocked)
+                )
 
             # Acknowledge / Checkboxes
             checkboxes = page.locator('input[type="checkbox"]:visible')
@@ -217,7 +215,10 @@ class JobviteSubmitter(BaseSubmitter):
                     pass
 
             # Submit application
-            submit_btn = page.locator('button[type="submit"]:has-text("Submit"), button[type="submit"]:has-text("Apply")').first
+            submit_btn = page.locator(
+                'button[type="submit"]:has-text("Submit"), '
+                'button[type="submit"]:has-text("Apply")'
+            ).first
             if await submit_btn.is_visible():
                 await submit_btn.click()
                 await page.wait_for_timeout(3000)
@@ -225,8 +226,10 @@ class JobviteSubmitter(BaseSubmitter):
             # Check success (Jobvite usually redirects or shows a confirmation)
             success_indicators = ["success", "applied", "thank", "confirmation"]
             final_content = (await page.content()).lower()
-            success = any(ind in page.url.lower() or ind in final_content for ind in success_indicators)
-            
+            success = any(
+                ind in page.url.lower() or ind in final_content for ind in success_indicators
+            )
+
             await browser.close()
             return SubmissionResult(
                 success=success, platform=self.platform_name,

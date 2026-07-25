@@ -389,7 +389,15 @@ def generate_application_task(self, job_id: int):
             threshold=settings.auto_apply_threshold,
             min_apply_score=settings.min_apply_score,
         )
-        auto_approve = action == Action.AUTO_APPLY and routing.selected_cv_id is not None
+        # Unfilled [PLACEHOLDER: ...] markers must never reach an employer.
+        # has_placeholders was previously computed and logged but gated
+        # nothing, so a letter still reading "[PLACEHOLDER: notice period]"
+        # could auto-approve and submit verbatim.
+        auto_approve = (
+            action == Action.AUTO_APPLY
+            and routing.selected_cv_id is not None
+            and not generated.has_placeholders
+        )
 
         from db.models import UserProfileVersion
 
@@ -420,9 +428,13 @@ def generate_application_task(self, job_id: int):
         app.cv_routing_confidence = routing.confidence
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
         app.cv_routing_fallback_reason = routing.fallback_reason
-        app.needs_review_reason = (
-            "CV_ROUTING_REVIEW_REQUIRED" if routing.selected_cv_id is None else None
-        )
+        if routing.selected_cv_id is None:
+            app.needs_review_reason = "CV_ROUTING_REVIEW_REQUIRED"
+        elif generated.has_placeholders:
+            fields = ", ".join(generated.placeholder_fields[:3]) or "unspecified"
+            app.needs_review_reason = f"UNFILLED_PLACEHOLDERS:{fields}"
+        else:
+            app.needs_review_reason = None
         app.profile_version = profile_version
         db.flush()
 

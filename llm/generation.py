@@ -14,6 +14,7 @@ from llm.prompts import (
     QA_ANSWERS_PROMPT,
     RECRUITER_MESSAGE_PROMPT,
     SYSTEM_PROMPT,
+    build_salary_guidance,
     build_system_prompt,
 )
 
@@ -183,9 +184,7 @@ async def generate_qa_answers(
         user_location=profile.personal.location,
         work_authorization=profile.personal.work_authorization,
         resume_text=resume_content,
-        salary_min=salary.min,
-        salary_max=salary.max,
-        currency=salary.currency,
+        salary_guidance=build_salary_guidance(salary.min, salary.max, salary.currency),
     )
 
     try:
