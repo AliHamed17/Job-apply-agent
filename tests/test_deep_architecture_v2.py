@@ -32,23 +32,23 @@ def test_executive_digest():
         db_session.close()
 
 
-def test_digest_endpoint(client):
-    resp = client.get("/api/notifications/digest")
+def test_digest_endpoint(client, auth_headers):
+    resp = client.get("/api/notifications/digest", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "total_jobs_scanned" in data
     assert "summary_text" in data
 
 
-def test_health_inspector_endpoint(client):
-    resp = client.get("/api/submitters/health")
+def test_health_inspector_endpoint(client, auth_headers):
+    resp = client.get("/api/submitters/health", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "registered_platforms" in data
     assert "playwright_installed" in data
 
 
-def test_interview_simulate_endpoint(client):
+def test_interview_simulate_endpoint(client, auth_headers):
     db_session = get_session_factory()()
     try:
         job = Job(
@@ -83,7 +83,11 @@ def test_interview_simulate_endpoint(client):
 
             resp = client.post(
                 f"/api/applications/{app_rec.id}/interview-simulate",
-                json={"question": "Tell me about your RAG experience", "candidate_answer": "I built a RAG agent in Python."},
+                json={
+                    "question": "Tell me about your RAG experience",
+                    "candidate_answer": "I built a RAG agent in Python.",
+                },
+                headers=auth_headers,
             )
             assert resp.status_code == 200
             data = resp.json()
