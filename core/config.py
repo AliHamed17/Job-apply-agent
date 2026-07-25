@@ -35,10 +35,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # ── LLM ─────────────────────────────────────────────
-    llm_provider: Literal["openai", "anthropic", "mock"] = "openai"
+    llm_provider: Literal["openai", "anthropic", "ollama", "mock"] = "openai"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     llm_model: str = "gpt-4o"
+    ollama_base_url: str = "http://localhost:11434"
 
     # ── Application Modes ───────────────────────────────
     draft_only: bool = True

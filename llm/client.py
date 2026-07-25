@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 
+import httpx
 import structlog
 
 from core.config import get_settings
@@ -144,6 +145,61 @@ class AnthropicClient(LLMClient):
         return json.loads(result)
 
 
+class OllamaClient(LLMClient):
+    """Local Ollama client (no API key — runs against a local Ollama server)."""
+
+    def __init__(self):
+        settings = get_settings()
+        self.base_url = settings.ollama_base_url.rstrip("/")
+        self.model = settings.llm_model or "qwen2.5:7b"
+
+    async def _chat(
+        self,
+        prompt: str,
+        system: str,
+        max_tokens: int,
+        temperature: float,
+        json_mode: bool,
+    ) -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": temperature, "num_predict": max_tokens},
+        }
+        if json_mode:
+            payload["format"] = "json"
+
+        async with httpx.AsyncClient(timeout=180.0) as http:
+            response = await http.post(f"{self.base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            data = response.json()
+        return data.get("message", {}).get("content", "")
+
+    async def generate(
+        self,
+        prompt: str,
+        system: str = "",
+        max_tokens: int = 2000,
+        temperature: float = 0.3,
+    ) -> str:
+        return await self._chat(prompt, system, max_tokens, temperature, json_mode=False)
+
+    async def generate_json(
+        self,
+        prompt: str,
+        system: str = "",
+        max_tokens: int = 2000,
+    ) -> dict:
+        content = await self._chat(prompt, system, max_tokens, temperature=0.1, json_mode=True)
+        return json.loads(content or "{}")
+
+
 class MockClient(LLMClient):
     """Mock client for testing."""
 
@@ -172,6 +228,8 @@ def get_llm_client() -> LLMClient:
         return AnthropicClient()
     elif settings.llm_provider == "openai":
         return OpenAIClient()
+    elif settings.llm_provider == "ollama":
+        return OllamaClient()
     elif settings.llm_provider == "mock":
         return MockClient()
     else:
