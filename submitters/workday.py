@@ -121,7 +121,7 @@ def assess_workday_page(html: str, url: str = "") -> WorkdayPageAssessment:
     ):
         return WorkdayPageAssessment("already_applied", "ALREADY_APPLIED")
 
-    confirmation = soup.find(attrs={"data-automation-id": "confirmationPage"})
+    confirmation = soup.select_one('[data-automation-id="confirmationPage"]')
     if confirmation is not None or (
         "application submitted" in text
         and any(marker in text for marker in ("successfully", "thank you", "received"))
@@ -129,7 +129,7 @@ def assess_workday_page(html: str, url: str = "") -> WorkdayPageAssessment:
         return WorkdayPageAssessment("submitted", "SUBMITTED")
 
     if (
-        soup.find(attrs={"data-automation-id": "reviewPage"}) is not None
+        soup.select_one('[data-automation-id="reviewPage"]') is not None
         or "review your application" in text
         or (
             re.search(r"\breview\b", text)
@@ -143,9 +143,9 @@ def assess_workday_page(html: str, url: str = "") -> WorkdayPageAssessment:
 
     if "use my last application" in text:
         return WorkdayPageAssessment("entry_options")
-    if soup.find(attrs={"data-automation-id": "jobPostingApplyButton"}) is not None:
+    if soup.select_one('[data-automation-id="jobPostingApplyButton"]') is not None:
         return WorkdayPageAssessment("job")
-    if soup.find(attrs={"data-automation-id": "bottom-navigation-next-button"}) is not None:
+    if soup.select_one('[data-automation-id="bottom-navigation-next-button"]') is not None:
         return WorkdayPageAssessment("form")
     if soup.find(["input", "textarea", "select"]) is not None:
         return WorkdayPageAssessment("form")
