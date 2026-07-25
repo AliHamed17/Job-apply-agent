@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     # ── Discovery ───────────────────────────────────────
     discovery_interval_h: int = 3
     discovery_pages_per_query: int = 3
+    public_discovery_enabled: bool = True
+    public_discovery_interval_h: int = 6
+    public_discovery_max_jobs: int = 50
+    public_discovery_timeout_s: float = 20.0
 
     # ── WhatsApp outbound + email ───────────────────────
     wa_outbound_daily_cap: int = 15

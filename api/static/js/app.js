@@ -245,6 +245,7 @@ function renderOverview(data) {
     const gov = data.governor || {};
     const counts = data.counts || {};
     const needsReview = data.needs_review || [];
+    const discovery = data.discovery || [];
 
     // Gauge: remaining vs. today's total (remaining + already used)
     const remaining = gov.remaining ?? 0;
@@ -299,6 +300,26 @@ function renderOverview(data) {
                 <span class="count-chip-value">${it.value}</span>
                 <span class="count-chip-label">${esc(it.label)}</span>
             </div>`).join('');
+    }
+
+    const discoveryRow = $('discovery-status-row');
+    if (discoveryRow) {
+        discoveryRow.innerHTML = discovery.length
+            ? discovery.map(run => {
+                const label = run.source === 'linkedin_search' ? 'LinkedIn' : 'Public Remote Jobs';
+                const blocked = ['challenge', 'failed', 'blocked'].includes(run.status);
+                const detail = run.reason_code === 'CHALLENGE_DETECTED'
+                    ? 'Sign-in/security check required'
+                    : run.reason_code === 'PROFILE_INCOMPLETE'
+                        ? 'Complete your real candidate profile'
+                        : `${run.inserted || 0} new jobs`;
+                return `<div class="discovery-source-card ${blocked ? 'is-blocked' : ''}">
+                    <div class="discovery-source-title">${esc(label)}</div>
+                    <span class="status-badge status-${esc(run.status)}">${esc(run.status)}</span>
+                    <div class="discovery-source-detail">${esc(detail)}</div>
+                </div>`;
+            }).join('')
+            : '<div class="text-sm text-dim">Discovery has not run yet.</div>';
     }
 
     // Needs-review table
@@ -1077,6 +1098,7 @@ async function overrideCvRoute(appId) {
         showToast('Enter a configured CV id', 'info');
         return;
     }
+
     const result = await apiCall(`/api/applications/${appId}/cv-override`, 'POST', { cv_id: cvId });
     if (!result) return;
     showToast(`CV override saved: ${result.selected_cv_id}`, 'success');

@@ -85,6 +85,18 @@ The database (SQLite) is created automatically on first run.
 celery -A worker.celery_app worker --loglevel=info
 ```
 
+For a local qualification run without Redis, keep `DRY_RUN=true` and
+`DRAFT_ONLY=true`, then start the fail-closed scheduler:
+
+```bash
+python -m scripts.run_safe_automation
+```
+
+It runs discovery immediately and then every `DISCOVERY_INTERVAL_H`. LinkedIn
+challenges pause only LinkedIn; the rate-limited public remote-jobs fallback can
+continue on its own six-hour cadence. The runner refuses placeholder profiles
+and never enables final submission.
+
 ### 6. Test with manual ingestion
 
 ```bash

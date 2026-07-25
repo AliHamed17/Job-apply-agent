@@ -32,7 +32,7 @@ async def status():
 async def overview(db: Session = Depends(get_db)):
     from datetime import UTC, datetime
 
-    from db.models import Application, Job, JobStatus
+    from db.models import Application, DiscoveryRun, Job, JobStatus
     from worker.digest import build_digest
 
     gov = get_governor().status()
@@ -43,7 +43,27 @@ async def overview(db: Session = Depends(get_db)):
               .limit(50).all())
     needs = [{"job_id": j.id, "title": j.title, "reason": a.needs_review_reason}
              for a, j in rows]
+    latest_discovery = []
+    for source in ("linkedin_search", "remotive"):
+        run = (
+            db.query(DiscoveryRun)
+            .filter(DiscoveryRun.source == source)
+            .order_by(DiscoveryRun.started_at.desc())
+            .first()
+        )
+        if run:
+            latest_discovery.append(
+                {
+                    "source": run.source,
+                    "status": run.status,
+                    "inserted": run.inserted,
+                    "reason_code": run.reason_code,
+                    "started_at": run.started_at,
+                    "finished_at": run.finished_at,
+                }
+            )
     return {"governor": gov,
             "counts": {"applied": summary.applied, "needs_review": summary.needs_review,
                        "failed": summary.failed, "outbound_sent": summary.outbound_sent},
-            "needs_review": needs}
+            "needs_review": needs,
+            "discovery": latest_discovery}

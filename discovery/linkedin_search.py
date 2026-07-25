@@ -20,7 +20,6 @@ That counter is reserved for actual submissions (see ``submitters/``).
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 
 import structlog
@@ -162,10 +161,8 @@ async def run_discovery(db, profile, settings, governor) -> int:
     """
     from playwright.async_api import async_playwright  # noqa: PLC0415
 
-    from db.models import Job, JobStatus
+    from discovery.ingest import ingest_discovered_jobs
     from discovery.query_builder import build_search_urls
-    from ingestion.url_utils import job_signature, url_hash
-    from worker.tasks import score_job_task
 
     urls = build_search_urls(profile, settings.discovery_pages_per_query)
     inserted = 0
@@ -206,52 +203,13 @@ async def run_discovery(db, profile, settings, governor) -> int:
                     await notify_challenge(settings)
                     break
 
-                for job_data in parse_search_results(html):
-                    sig = job_signature(job_data.title, job_data.company, job_data.location)
-                    existing = db.query(Job).filter(Job.job_signature == sig).first()
-                    if existing:
-                        logger.debug("discovery_duplicate_job", title=job_data.title)
-                        continue
-
-                    apply_hash = url_hash(job_data.apply_url) if job_data.apply_url else None
-                    if apply_hash:
-                        existing_apply = db.query(Job).filter(
-                            Job.apply_url_hash == apply_hash
-                        ).first()
-                        if existing_apply:
-                            logger.debug("discovery_duplicate_apply_url", url=job_data.apply_url)
-                            continue
-
-                    try:
-                        db_job = Job(
-                            extracted_url_id=None,
-                            title=job_data.title,
-                            company=job_data.company or "",
-                            location=job_data.location or "",
-                            description=job_data.description or "",
-                            apply_url=job_data.apply_url or "",
-                            source_url=job_data.source_url or "",
-                            keywords=json.dumps(job_data.keywords),
-                            apply_url_hash=apply_hash,
-                            job_signature=sig,
-                            status=JobStatus.EXTRACTED,
-                            discovery_source="linkedin_search",
-                            easy_apply=True,
-                        )
-                        db.add(db_job)
-                        db.flush()
-                        db.commit()
-
-                        if settings.tasks_always_eager:
-                            score_job_task.apply(args=[db_job.id])
-                        else:
-                            score_job_task.delay(db_job.id)
-
-                        inserted += 1
-                    except Exception as exc:
-                        db.rollback()
-                        logger.error("discovery_job_insert_failed", error=str(exc))
-                        continue
+                inserted += ingest_discovered_jobs(
+                    db,
+                    parse_search_results(html),
+                    source="linkedin_search",
+                    easy_apply=True,
+                    tasks_always_eager=settings.tasks_always_eager,
+                )
 
                 await asyncio.sleep(governor.next_gap_seconds())
         finally:
