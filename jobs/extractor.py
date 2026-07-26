@@ -87,9 +87,7 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
         if gh_jobs:
             logger.info("extracted_via_greenhouse", url=url, count=len(gh_jobs))
             page_type = "single_job" if len(gh_jobs) == 1 else "listing"
-            return ExtractionResult(
-                jobs=gh_jobs, page_type=page_type, parser_used="greenhouse"
-            )
+            return ExtractionResult(jobs=gh_jobs, page_type=page_type, parser_used="greenhouse")
 
     # 3) Lever
     if "lever.co" in url_lower:
@@ -97,9 +95,7 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
         if lever_jobs:
             logger.info("extracted_via_lever", url=url, count=len(lever_jobs))
             page_type = "single_job" if len(lever_jobs) == 1 else "listing"
-            return ExtractionResult(
-                jobs=lever_jobs, page_type=page_type, parser_used="lever"
-            )
+            return ExtractionResult(jobs=lever_jobs, page_type=page_type, parser_used="lever")
 
     # 4) LinkedIn
     if "linkedin.com" in url_lower:
@@ -114,9 +110,7 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
         if comeet_jobs:
             logger.info("extracted_via_comeet", url=url, count=len(comeet_jobs))
             page_type = "single_job" if len(comeet_jobs) == 1 else "listing"
-            return ExtractionResult(
-                jobs=comeet_jobs, page_type=page_type, parser_used="comeet"
-            )
+            return ExtractionResult(jobs=comeet_jobs, page_type=page_type, parser_used="comeet")
 
     # 6) Workday
     if is_workday_url(url):
@@ -124,9 +118,7 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
         if workday_jobs:
             logger.info("extracted_via_workday", url=url, count=len(workday_jobs))
             page_type = "single_job" if len(workday_jobs) == 1 else "listing"
-            return ExtractionResult(
-                jobs=workday_jobs, page_type=page_type, parser_used="workday"
-            )
+            return ExtractionResult(jobs=workday_jobs, page_type=page_type, parser_used="workday")
 
     # 7) Israeli boards (Drushim / AllJobs / JobMaster) — Hebrew, RTL.
     # Ahead of the generic heuristic, which reads their label/value markup as
@@ -136,9 +128,7 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
         if il_jobs:
             logger.info("extracted_via_israeli_board", url=url, count=len(il_jobs))
             page_type = "single_job" if len(il_jobs) == 1 else "listing"
-            return ExtractionResult(
-                jobs=il_jobs, page_type=page_type, parser_used="israeli_board"
-            )
+            return ExtractionResult(jobs=il_jobs, page_type=page_type, parser_used="israeli_board")
 
     # 8) Generic HTML heuristic
     heuristic_jobs = parse_html_heuristic(html, url)

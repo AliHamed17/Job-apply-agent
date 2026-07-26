@@ -105,8 +105,11 @@ def _labelled_section(soup: BeautifulSoup, labels: tuple[str, ...]) -> str:
                 if not text:
                     continue
                 # Stop at the next section heading so blocks don't bleed.
-                if any(other in text[:40] for other in _REQUIREMENT_LABELS + _DESCRIPTION_LABELS
-                       if other != label):
+                if any(
+                    other in text[:40]
+                    for other in _REQUIREMENT_LABELS + _DESCRIPTION_LABELS
+                    if other != label
+                ):
                     break
                 parts.append(text)
             if parts:
@@ -144,29 +147,54 @@ def is_israeli_board(url: str) -> bool:
 # keep a posting parseable after the board reskins.
 
 _TITLE_SELECTORS = (
-    "h1.job-title", "h1[itemprop='title']", ".job-title-h1",
-    ".jobTitle", "[data-testid='job-title']",
+    "h1.job-title",
+    "h1[itemprop='title']",
+    ".job-title-h1",
+    ".jobTitle",
+    "[data-testid='job-title']",
     # Class-only before bare tags: on a results card the title is an h2/h3,
     # and matching the class avoids picking up a page-level heading.
-    ".job-title", "h1", "h2.job-title", "h2", "h3",
+    ".job-title",
+    "h1",
+    "h2.job-title",
+    "h2",
+    "h3",
 )
 _COMPANY_SELECTORS = (
-    "[itemprop='hiringOrganization']", ".company-name", ".jobCompany",
-    "[data-testid='company-name']", ".employer-name", "h2.company",
-    ".company", ".employer", "[class*='company']",
+    "[itemprop='hiringOrganization']",
+    ".company-name",
+    ".jobCompany",
+    "[data-testid='company-name']",
+    ".employer-name",
+    "h2.company",
+    ".company",
+    ".employer",
+    "[class*='company']",
 )
 _LOCATION_SELECTORS = (
-    "[itemprop='jobLocation']", ".job-location", ".jobLocation",
-    "[data-testid='job-location']", ".location", ".city", ".area",
+    "[itemprop='jobLocation']",
+    ".job-location",
+    ".jobLocation",
+    "[data-testid='job-location']",
+    ".location",
+    ".city",
+    ".area",
     "[class*='location']",
 )
 _DESCRIPTION_SELECTORS = (
-    "[itemprop='description']", ".job-description", ".job-desc",
-    ".description", ".jobDescription", "[class*='description']",
+    "[itemprop='description']",
+    ".job-description",
+    ".job-desc",
+    ".description",
+    ".jobDescription",
+    "[class*='description']",
 )
 _CARD_SELECTORS = (
-    "div.job-item", "div.jobList_item", "article.job-card",
-    "[data-testid='job-card']", "div.job-content-top",
+    "div.job-item",
+    "div.jobList_item",
+    "article.job-card",
+    "[data-testid='job-card']",
+    "div.job-content-top",
 )
 
 
