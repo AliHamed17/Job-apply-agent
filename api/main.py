@@ -208,7 +208,7 @@ async def auth_middleware(request: Request, call_next):
     if request.url.path == "/webhook/whatsapp" or _is_public_read(request):
         return await call_next(request)
 
-    if settings.app_env == "development" and not settings.operator_auth_configured:
+    if settings.app_env == "development" and settings.operator_auth_is_placeholder:
         prepare_only = (
             settings.dry_run or settings.draft_only or not settings.portal_final_submit_enabled
         )

@@ -147,25 +147,27 @@ class Settings(BaseSettings):
         return [proxy.strip() for proxy in self.trusted_proxies.split(",") if proxy.strip()]
 
     @property
+    def operator_auth_is_placeholder(self) -> bool:
+        """Whether development may use the explicit prepare-only auth bypass."""
+
+        return self.secret_key in {
+            "",
+            "change-me",
+            "change-me-to-a-random-secret",
+        }
+
+    @property
     def operator_auth_configured(self) -> bool:
         """Whether bearer authentication is strong enough to authorize live send."""
 
-        return (
-            self.secret_key
-            not in {
-                "",
-                "change-me",
-                "change-me-to-a-random-secret",
-            }
-            and len(self.secret_key) >= 32
-        )
+        return not self.operator_auth_is_placeholder and len(self.secret_key) >= 32
 
     def validate_runtime(self) -> None:
         """Reject unsafe production settings before the process accepts traffic."""
         if self.app_env != "production":
             return
         errors: list[str] = []
-        if self.secret_key in {"", "change-me", "change-me-to-a-random-secret"}:
+        if self.operator_auth_is_placeholder:
             errors.append("SECRET_KEY must be a non-default value")
         if len(self.secret_key) < 32:
             errors.append("SECRET_KEY must be at least 32 characters")
