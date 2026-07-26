@@ -75,8 +75,8 @@ _COMMON_CONTROLS = ("text", "textarea", "select", "radio", "checkbox", "file")
 _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     AdapterDescriptor(
         platform="workday",
-        adapter_version="2.0.0",
-        selector_version="workday-candidate-v2",
+        adapter_version="2.0.3",
+        selector_version="workday-candidate-v2.4",
         transport="browser",
         authentication_mode="persistent_profile",
         supported_controls=_COMMON_CONTROLS,

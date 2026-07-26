@@ -106,8 +106,8 @@ async def test_ats_inventory_exposes_fixture_only_workday_as_send_disabled():
     assert workday.qualification_tier == "fixture_qualified"
     assert workday.final_execution_enabled is False
     assert workday.qualified_form_scope == []
-    assert workday.adapter_version == "2.0.0"
-    assert workday.selector_version == "workday-candidate-v2"
+    assert workday.adapter_version == "2.0.3"
+    assert workday.selector_version == "workday-candidate-v2.4"
 
 
 @pytest.mark.parametrize(

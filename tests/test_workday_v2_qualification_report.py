@@ -46,6 +46,13 @@ def _load_report() -> dict[str, object]:
     return json.loads(REPORT_PATH.read_text(encoding="utf-8"))
 
 
+def _canonical_fixture_bytes(path: Path) -> bytes:
+    """Return a platform-independent UTF-8 representation for evidence hashing."""
+
+    text = path.read_text(encoding="utf-8")
+    return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+
+
 def _walk_keys(value: object) -> set[str]:
     if isinstance(value, dict):
         return {
@@ -63,9 +70,9 @@ def _validate_fixture_only_report(report: dict[str, object]) -> None:
     assert isinstance(adapter, dict)
     assert adapter == {
         "adapter_name": "workday",
-        "adapter_version": "2.0.0",
+        "adapter_version": "2.0.3",
         "execution_contract_version": "two-phase-v2",
-        "selector_version": "workday-candidate-v2",
+        "selector_version": "workday-candidate-v2.4",
         "transport": "browser",
     }
     assert report["achieved_tier"] == "fixture_qualified"
@@ -84,6 +91,14 @@ def _validate_fixture_only_report(report: dict[str, object]) -> None:
     assert isinstance(safety, dict)
     assert safety["external_network_used"] is False
     assert safety["final_action_performed"] is False
+    assert safety["final_request_resource_type"] == "document"
+    assert safety["final_control_guards"] == [
+        "enabled",
+        "aria_enabled",
+        "outside_inert_subtree",
+        "visible_positive_geometry",
+        "pointer_actionable",
+    ]
     assert safety["private_data_used"] is False
     assert safety["real_application_used"] is False
 
@@ -110,7 +125,7 @@ def test_report_binds_the_exact_sanitized_fixture_set():
     report = _load_report()
     evidence = report["fixture_evidence"]
     assert isinstance(evidence, dict)
-    assert evidence["digest_algorithm"] == "sha256-manifest-v1"
+    assert evidence["digest_algorithm"] == "sha256-lf-normalized-manifest-v1"
     assert evidence["fixture_directory"] == "tests/fixtures/workday_v2"
     assert evidence["fixture_count"] == len(EXPECTED_CASES)
 
@@ -126,12 +141,11 @@ def test_report_binds_the_exact_sanitized_fixture_set():
         state, reason_code = EXPECTED_CASES[filename]
         assert case["expected_state"] == state
         assert case["expected_reason_code"] == reason_code
-        observed_digest = hashlib.sha256((FIXTURE_ROOT / filename).read_bytes()).hexdigest()
+        fixture_path = FIXTURE_ROOT / filename
+        observed_digest = hashlib.sha256(_canonical_fixture_bytes(fixture_path)).hexdigest()
         assert SHA256.fullmatch(case["sha256"])
         assert case["sha256"] == observed_digest
-        assessment = assess_workday_v2_snapshot(
-            (FIXTURE_ROOT / filename).read_text(encoding="utf-8")
-        )
+        assessment = assess_workday_v2_snapshot(fixture_path.read_text(encoding="utf-8"))
         assert assessment.state.value == state
         assert (
             assessment.reason_code.value if assessment.reason_code is not None else None
