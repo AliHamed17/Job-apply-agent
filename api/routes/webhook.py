@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,6 +21,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from core.application_mutations import (
+    ApplicationMutationBlockedError,
+    ApplicationMutationIntent,
+    lock_application_for_mutation,
+    lock_job_without_application_for_mutation,
+    mark_locked_application_prepared,
+    transition_locked_application_to_skipped,
+)
+from core.application_revision import preparation_is_current
 from core.config import Settings, get_settings
 from db.models import Application, ExtractedURL, Job, JobStatus, Message
 from db.session import get_db
@@ -250,23 +259,34 @@ async def _send_approval_buttons(
 
 async def _handle_approve(job_id: int, sender: str, db: Session, settings: Settings) -> None:
     """Handle the legacy approve action as preparation only."""
-    app = db.query(Application).filter(Application.job_id == job_id).first()
-    if not app:
+    try:
+        locked = lock_application_for_mutation(
+            db,
+            job_id=job_id,
+            intent=ApplicationMutationIntent.PREPARE,
+        )
+    except ApplicationMutationBlockedError as exc:
+        db.rollback()
+        if exc.reason_code == "APPLICATION_NOT_FOUND":
+            message = f"❌ Application for job #{job_id} not found."
+        else:
+            message = "⚠️ This application requires dashboard review or reconciliation."
         await _send_whatsapp_message(
             sender,
-            f"❌ Application for job #{job_id} not found.",
+            message,
             settings,
         )
         return
+    assert locked is not None
+    app = locked.application
+    job = locked.job
 
-    if (
-        app.status == JobStatus.DRAFT
-        and app.approved_at is not None
-        and app.approval_source == "whatsapp_prepare"
-    ):
+    if preparation_is_current(app):
+        db.rollback()
         await _send_whatsapp_message(sender, "ℹ️ Already prepared.", settings)
         return
     if app.status not in (JobStatus.DRAFT, JobStatus.APPROVED):
+        db.rollback()
         await _send_whatsapp_message(
             sender,
             "⚠️ This application requires dashboard review or reconciliation.",
@@ -274,6 +294,7 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
         )
         return
     if not app.selected_cv_id:
+        db.rollback()
         await _send_whatsapp_message(
             sender,
             "⚠️ Select and review a CV in the dashboard before approval.",
@@ -281,28 +302,11 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
         )
         return
 
-    app.status = JobStatus.DRAFT
-    app.approved_at = datetime.now(UTC).replace(tzinfo=None)
-    app.approval_source = "whatsapp_prepare"
-
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if job:
-        job.status = JobStatus.DRAFT
-
-    from core.application_audit import record_application_event
-
-    record_application_event(
+    mark_locked_application_prepared(
         db,
-        app.id,
-        "application_prepared",
+        locked,
         actor="whatsapp_operator",
-        details={
-            "approval_source": "whatsapp_prepare",
-            "selected_cv_id": app.selected_cv_id,
-            "profile_version": app.profile_version,
-            "state": "prepared",
-            "external_action_queued": False,
-        },
+        source="whatsapp_prepare",
     )
     db.commit()
 
@@ -319,26 +323,49 @@ async def _handle_approve(job_id: int, sender: str, db: Session, settings: Setti
 
 async def _handle_skip(job_id: int, sender: str, db: Session, settings: Settings) -> None:
     """Handle skip_ action: mark application as rejected."""
-    app = db.query(Application).filter(Application.job_id == job_id).first()
-    job = db.query(Job).filter(Job.id == job_id).first()
-
-    if app:
-        app.status = JobStatus.SKIPPED
-        app.rejected_at = datetime.utcnow()
-        app.rejection_reason = "Skipped by user via WhatsApp"
-    if job:
-        job.status = JobStatus.SKIPPED
-
-    if app:
-        from core.application_audit import record_application_event
-
-        record_application_event(
+    try:
+        locked = lock_application_for_mutation(
             db,
-            app.id,
-            "application_rejected",
-            actor="whatsapp_operator",
-            details={"state": "skipped"},
+            job_id=job_id,
+            intent=ApplicationMutationIntent.TERMINAL,
+            allow_missing=True,
         )
+    except ApplicationMutationBlockedError:
+        db.rollback()
+        await _send_whatsapp_message(
+            sender,
+            "⚠️ This application may already have reached the employer. "
+            "Review or reconcile it in the dashboard before skipping.",
+            settings,
+        )
+        return
+
+    if locked is not None:
+        transition_locked_application_to_skipped(
+            db,
+            locked,
+            actor="whatsapp_operator",
+            reason_code="OPERATOR_CANCELLED",
+            rejection_reason="Skipped by user via WhatsApp",
+        )
+        job = locked.job
+    else:
+        try:
+            job = lock_job_without_application_for_mutation(
+                db,
+                job_id=job_id,
+                intent=ApplicationMutationIntent.TERMINAL,
+            )
+        except ApplicationMutationBlockedError:
+            db.rollback()
+            await _send_whatsapp_message(
+                sender,
+                "⚠️ This application may already have reached the employer. "
+                "Review or reconcile it in the dashboard before skipping.",
+                settings,
+            )
+            return
+        job.status = JobStatus.SKIPPED
     db.commit()
 
     await _send_whatsapp_message(

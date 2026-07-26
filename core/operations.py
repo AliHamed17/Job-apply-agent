@@ -43,6 +43,8 @@ def record_heartbeat(component: str, settings: Settings | None = None) -> None:
         {
             "seen_at": time.time(),
             "build_sha": identity.build_sha,
+            "source_digest": identity.source_digest,
+            "release_id": identity.release_id,
             "protocol_version": identity.protocol_version,
         },
         separators=(",", ":"),
@@ -75,9 +77,15 @@ def _heartbeat_status(component: str, settings: Settings) -> dict[str, Any]:
     }
     if isinstance(payload, dict):
         build_sha = payload.get("build_sha")
+        source_digest = payload.get("source_digest")
+        release_id = payload.get("release_id")
         protocol_version = payload.get("protocol_version")
         if isinstance(build_sha, str):
             result["build_sha"] = build_sha[:64]
+        if isinstance(source_digest, str):
+            result["source_digest"] = source_digest[:71]
+        if isinstance(release_id, str):
+            result["release_id"] = release_id[:64]
         if isinstance(protocol_version, str):
             result["protocol_version"] = protocol_version[:64]
     return result

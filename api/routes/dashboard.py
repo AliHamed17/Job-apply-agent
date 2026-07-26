@@ -18,7 +18,10 @@ from core.application_state import (
 )
 from core.config import get_settings
 from core.operations import readiness_report
-from core.submission_truth import latest_employer_verified_count
+from core.submission_truth import (
+    latest_employer_verified_count,
+    latest_employer_verified_query,
+)
 from db.models import (
     Application,
     BrowserQualificationRun,
@@ -105,6 +108,8 @@ class RecentPipelineEvent(BaseModel):
     type: str
     id: int
     status: str
+    source_status: str
+    employer_verified: bool
     title: str
     created_at: datetime | None
 
@@ -119,6 +124,18 @@ class PipelineInsights(BaseModel):
     recent_events: list[RecentPipelineEvent]
 
 
+def _employer_verified_job_ids(db: Session) -> set[int]:
+    """Return job IDs whose latest attempt satisfies the exact evidence contract."""
+    return {
+        job_id
+        for (job_id,) in latest_employer_verified_query(db)
+        .join(Application, Submission.application_id == Application.id)
+        .with_entities(Application.job_id)
+        .distinct()
+        .all()
+    }
+
+
 @router.get("/dashboard", response_model=DashboardSummary)
 async def dashboard_summary(db: Session = Depends(get_db)):
     """Get a summary of the pipeline state."""
@@ -128,9 +145,17 @@ async def dashboard_summary(db: Session = Depends(get_db)):
     total_urls = db.query(ExtractedURL).count()
     total_jobs = db.query(Job).count()
 
-    # Jobs by status
-    status_counts = db.query(Job.status, func.count(Job.id)).group_by(Job.status).all()
-    jobs_by_status = {s.value: c for s, c in status_counts}
+    # Assign each job one truth-derived display state. A historical SUBMITTED
+    # enum without exact employer evidence is an unverified record, not success.
+    verified_job_ids = _employer_verified_job_ids(db)
+    jobs_by_status: dict[str, int] = {}
+    for job_id, source_status in db.query(Job.id, Job.status).all():
+        display_status = (
+            JobStatus.SUBMITTED.value
+            if job_id in verified_job_ids
+            else ("unverified" if source_status == JobStatus.SUBMITTED else source_status.value)
+        )
+        jobs_by_status[display_status] = jobs_by_status.get(display_status, 0) + 1
 
     apps_pending = reviewable_application_count(db)
     apps_approved = prepared_application_count(db)
@@ -378,11 +403,22 @@ async def dashboard_insights(
         .limit(limit)
         .all()
     )
+    verified_job_ids = _employer_verified_job_ids(db)
     recent_events = [
         RecentPipelineEvent(
             type="job",
             id=job.id,
-            status=job.status.value if job.status else "",
+            status=(
+                JobStatus.SUBMITTED.value
+                if job.id in verified_job_ids
+                else (
+                    "unverified"
+                    if job.status == JobStatus.SUBMITTED
+                    else (job.status.value if job.status else "")
+                )
+            ),
+            source_status=job.status.value if job.status else "",
+            employer_verified=job.id in verified_job_ids,
             title=f"{job.title} — {job.company or 'Unknown company'}",
             created_at=job.created_at,
         )

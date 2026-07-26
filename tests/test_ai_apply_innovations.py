@@ -1,6 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -59,7 +59,9 @@ def test_culture_fit_endpoint(client):
         db_session.commit()
         db_session.refresh(app_rec)
 
-        with patch("api.routes.culture_fit.evaluate_culture_fit", new_callable=AsyncMock) as mock_eval:
+        with patch(
+            "api.routes.culture_fit.evaluate_culture_fit", new_callable=AsyncMock
+        ) as mock_eval:
             mock_eval.return_value.culture_fit_score = 92
             mock_eval.return_value.cultural_highlights = ["Autonomous engineering team"]
             mock_eval.return_value.behavioral_talking_points = ["Proactive ownership"]
@@ -104,5 +106,8 @@ def test_stream_endpoint(client):
         resp = client.get(f"/api/applications/{app_rec.id}/stream")
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
+        assert '"step":"not_started"' in resp.text
+        assert '"verified":false' in resp.text
+        assert "verified successfully" not in resp.text.lower()
     finally:
         db_session.close()

@@ -14,6 +14,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from urllib.parse import urlparse
 
+TWO_PHASE_EXECUTION_CONTRACT_VERSION = "two-phase-v2"
+
 
 class QualificationTier(StrEnum):
     """Evidence level reached by one exact adapter version."""
@@ -38,11 +40,31 @@ class AdapterDescriptor:
     qualification: QualificationTier
     qualified_form_scope: tuple[str, ...]
     domains: tuple[str, ...]
+    execution_contract_version: str | None = None
 
     @property
     def allows_live_submission(self) -> bool:
         """Only a completed live canary qualifies an external final action."""
         return self.qualification is QualificationTier.LIVE_CANARY_QUALIFIED
+
+    @property
+    def allows_final_execution(self) -> bool:
+        """Require the two-phase contract and an exact qualified form scope.
+
+        ``allows_live_submission`` remains the qualification-tier signal used
+        by legacy compatibility paths.  This stronger property is the only
+        gate the final-action executor registry may use.
+        """
+        return (
+            self.allows_live_submission
+            and self.execution_contract_version == TWO_PHASE_EXECUTION_CONTRACT_VERSION
+            and bool(self.qualified_form_scope)
+        )
+
+    def qualifies_form_fingerprint(self, form_fingerprint: str) -> bool:
+        """Return whether one exact observed form was live-canary qualified."""
+        normalized = (form_fingerprint or "").strip()
+        return bool(normalized) and normalized in self.qualified_form_scope
 
 
 _COMMON_CONTROLS = ("text", "textarea", "select", "radio", "checkbox", "file")

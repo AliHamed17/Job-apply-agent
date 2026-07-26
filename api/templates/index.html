@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="job-agent-build-sha" content="{{ runtime_build_sha | default('unavailable') | e }}">
     <meta name="job-agent-ui-digest" content="{{ runtime_ui_asset_digest | default('unavailable') | e }}">
+    <meta name="job-agent-source-digest" content="{{ runtime_source_digest | default('unavailable') | e }}">
     <meta name="job-agent-protocol" content="{{ runtime_protocol_version | default('unavailable') | e }}">
     <meta name="job-agent-boot-id" content="{{ runtime_boot_id | default('unavailable') | e }}">
     <meta name="job-agent-started-at" content="{{ runtime_started_at | default('unavailable') | e }}">

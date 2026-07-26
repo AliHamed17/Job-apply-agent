@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     portal_reuse_last_application: bool = True
     portal_session_lock_minutes: int = 30
     employer_workflow_path: str = "employer_workflows.yaml"
+    form_plan_ttl_minutes: int = 30
+    submit_permit_ttl_seconds: int = 300
+    submission_command_claim_ttl_seconds: int = 900
+    submission_command_drain_interval_seconds: int = 15
+    submission_command_drain_batch_size: int = 25
 
     # ── Discovery ───────────────────────────────────────
     discovery_interval_h: int = 3
@@ -141,12 +146,28 @@ class Settings(BaseSettings):
     def trusted_proxy_list(self) -> list[str]:
         return [proxy.strip() for proxy in self.trusted_proxies.split(",") if proxy.strip()]
 
+    @property
+    def operator_auth_is_placeholder(self) -> bool:
+        """Whether development may use the explicit prepare-only auth bypass."""
+
+        return self.secret_key in {
+            "",
+            "change-me",
+            "change-me-to-a-random-secret",
+        }
+
+    @property
+    def operator_auth_configured(self) -> bool:
+        """Whether bearer authentication is strong enough to authorize live send."""
+
+        return not self.operator_auth_is_placeholder and len(self.secret_key) >= 32
+
     def validate_runtime(self) -> None:
         """Reject unsafe production settings before the process accepts traffic."""
         if self.app_env != "production":
             return
         errors: list[str] = []
-        if self.secret_key in {"", "change-me", "change-me-to-a-random-secret"}:
+        if self.operator_auth_is_placeholder:
             errors.append("SECRET_KEY must be a non-default value")
         if len(self.secret_key) < 32:
             errors.append("SECRET_KEY must be at least 32 characters")
@@ -168,12 +189,22 @@ class Settings(BaseSettings):
             errors.append("PORTAL_FINAL_SUBMIT_ENABLED cannot be used with DRY_RUN=true")
         if self.portal_final_submit_enabled and self.draft_only:
             errors.append("PORTAL_FINAL_SUBMIT_ENABLED cannot be used with DRAFT_ONLY=true")
+        if self.portal_final_submit_enabled and not self.db_is_postgres:
+            errors.append("PORTAL_FINAL_SUBMIT_ENABLED requires PostgreSQL")
+        if self.submission_command_drain_interval_seconds >= self.submit_permit_ttl_seconds:
+            errors.append("submission command drain interval must be below permit TTL")
+        if not 1 <= self.submission_command_drain_batch_size <= 100:
+            errors.append("submission command drain batch size must be between 1 and 100")
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
 
     @property
     def db_is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def db_is_postgres(self) -> bool:
+        return self.database_url.lower().startswith(("postgresql://", "postgresql+"))
 
     @property
     def profile_path(self) -> Path:

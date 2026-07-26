@@ -17,6 +17,8 @@ router = APIRouter(tags=["runtime"])
 class ReleaseCapabilities(BaseModel):
     build_sha: str
     ui_asset_digest: str
+    source_digest: str
+    release_id: str
     protocol_version: str
     boot_id: str
     started_at: str
@@ -41,6 +43,8 @@ class SubmissionCapabilities(BaseModel):
 
 class WorkerCapabilities(BaseModel):
     build_sha: str | None
+    source_digest: str | None
+    release_id: str | None
     protocol_version: str | None
     compatible: bool
 

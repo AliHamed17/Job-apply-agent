@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from api.submission_display import job_submission_display
 from core.config import get_settings
 from core.submission_truth import latest_employer_verified_count
 from db.models import Application, Job, JobStatus
@@ -41,16 +42,20 @@ async def get_command_center_summary(db: Session = Depends(get_db)):
     )
 
     top_jobs_db = db.query(Job).order_by(Job.score.desc()).limit(5).all()
-    top_jobs = [
-        {
-            "id": j.id,
-            "title": j.title,
-            "company": j.company,
-            "score": j.score,
-            "status": str(j.status),
-        }
-        for j in top_jobs_db
-    ]
+    top_jobs = []
+    for job in top_jobs_db:
+        display = job_submission_display(job)
+        top_jobs.append(
+            {
+                "id": job.id,
+                "title": job.title,
+                "company": job.company,
+                "score": job.score,
+                "status": display.display_status,
+                "source_status": display.source_status,
+                "employer_verified": display.employer_verified,
+            }
+        )
 
     return CommandCenterSummary(
         candidate_name=get_profile().personal.name or "Candidate",
