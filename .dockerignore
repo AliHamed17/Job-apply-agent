@@ -54,6 +54,11 @@ bridge/.wwebjs_auth/
 bridge/.wwebjs_cache/
 bridge/session/
 
+# Sanitized templates are required at image/runtime bootstrap. Re-include only
+# these exact public examples after the private wildcard exclusions above.
+!user_profile.yaml.example
+!cv_routing.yaml.example
+
 # Logs
 *.log
 logs/
