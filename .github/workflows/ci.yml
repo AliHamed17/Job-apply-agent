@@ -86,7 +86,9 @@ jobs:
           worker/submission_attempts.py submitters/platforms.py
           submitters/base.py
           submitters/employer_workflows.py submitters/confirmation.py
-          submitters/workday.py
+          submitters/workday.py core/async_lifecycle.py
+          submitters/workday_v2.py submitters/workday_playwright.py
+          submitters/registry.py
       - name: Typed v4 submission orchestration
         run: >
           mypy --ignore-missing-imports
@@ -98,6 +100,7 @@ jobs:
           --disable-error-code return-value
           core/submission_service.py core/submit_permits.py
           core/application_mutations.py core/application_revision.py
+          core/form_plan_persistence.py
           worker/submission_commands.py api/routes/ats.py
       - name: Typed local intelligence and form planning
         run: >
@@ -155,7 +158,7 @@ jobs:
           api/main.py api/routes/applications.py api/routes/cv_routing.py
           api/routes/dashboard.py api/routes/realign.py api/routes/runtime.py
           core/application_audit.py core/config.py core/form_plan_evidence.py
-          core/form_planning.py
+          core/form_planning.py core/form_plan_persistence.py
           core/material_audit.py core/operations.py core/runtime_identity.py
           core/sensitive_policy.py core/submission_domain.py core/submission_service.py
           core/utils.py db/models.py
@@ -171,7 +174,9 @@ jobs:
           profile/cv_routing_llm.py profile/models.py
           scripts/evaluate_v4_local_model_qualification.py
           scripts/build_v4_local_model_material_fixtures.py
-          submitters/form_brain.py worker/celery_app.py
+          submitters/form_brain.py submitters/registry.py
+          submitters/workday_v2.py submitters/workday_playwright.py
+          worker/celery_app.py
           worker/submission_commands.py worker/task_dispatch.py worker/tasks.py
       - name: Compose validation
         run: cp .env.example .env && docker compose config --quiet

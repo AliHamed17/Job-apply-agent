@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect as python_inspect
 import json
 from datetime import UTC, datetime
-from profile.cv_content_cache import get_selected_cv_artifact_by_id
+from profile.cv_content_cache import (
+    CVArtifactBindingError,
+    get_selected_cv_artifact_by_id,
+    require_current_selected_cv_artifact,
+)
 from profile.cv_routing import load_routing_config
+from profile.versioned_snapshot import (
+    ProfileSnapshotError,
+    load_versioned_profile_snapshot,
+)
 from typing import Literal
 from uuid import uuid4
 
@@ -32,7 +41,17 @@ from core.application_state import (
     reviewable_applications_query,
 )
 from core.config import get_settings
-from core.form_planning import ANSWER_POLICY_VERSION, option_set_hash
+from core.form_plan_persistence import (
+    ATTACHMENT_VERIFICATION_SOURCE,
+    FormPlanPersistenceError,
+    persist_inspected_form_plan,
+)
+from core.form_planning import (
+    ANSWER_POLICY_VERSION,
+    AnswerPolicyV1,
+    option_set_hash,
+    reusable_field_contract_fingerprint,
+)
 from core.submission_domain import (
     AnswerDecisionV1,
     AnswerDisposition,
@@ -58,7 +77,8 @@ from db.models import (
 )
 from db.session import get_db
 from llm.contracts import is_qualified_material_identity
-from submitters.platforms import detect_platform
+from llm.generation import GeneratedApplication
+from submitters.platforms import adapter_for_url, detect_platform
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["applications"])
@@ -129,6 +149,7 @@ class ApplicationResponse(BaseModel):
     submission_verified: bool = False
     attempts: list[SubmissionAttemptResponse] = Field(default_factory=list)
     selected_cv_id: str | None = None
+    selected_cv_ref: str | None = None
     selected_cv_hash: str | None = None
     profile_version: int | None = None
     cv_routing_confidence: float | None = None
@@ -168,6 +189,10 @@ class ApproveResponse(BaseModel):
     verified: bool = False
     attempt_id: int | None = None
     status_url: str | None = None
+
+
+class InspectApplicationRequest(BaseModel):
+    application_revision: PositiveInt
 
 
 class ReconcileRequest(BaseModel):
@@ -231,10 +256,14 @@ class FormPlanResponse(BaseModel):
     selector_version: str
     fingerprint: str
     selected_cv_id: str
+    selected_cv_ref: str
     selected_cv_hash: str
     attached_cv_id: str | None
+    attached_cv_ref: str | None
     attached_cv_hash: str | None
     attachment_verified: bool
+    attachment_verification_source: str | None
+    attachment_verified_at: str | None
     profile_version: int | None
     fields: list = Field(default_factory=list)
     decisions: list = Field(default_factory=list)
@@ -287,6 +316,7 @@ _FIELD_LEVEL_ANSWER_BLOCKERS = frozenset(
         ReasonCode.ATTACHMENT_UNVERIFIED,
     }
 )
+_GLOBAL_FORM_PLAN_BLOCKERS = frozenset({ReasonCode.FORM_PLAN_INCOMPLETE})
 
 
 def _recompute_answer_blockers(
@@ -295,7 +325,11 @@ def _recompute_answer_blockers(
 ) -> tuple[ReasonCode, ...]:
     """Replace stale field-level blockers while preserving plan-global gates."""
 
-    blockers = [blocker for blocker in plan.blockers if blocker not in _FIELD_LEVEL_ANSWER_BLOCKERS]
+    blockers = [
+        blocker
+        for blocker in plan.blockers
+        if blocker in _GLOBAL_FORM_PLAN_BLOCKERS or blocker not in _FIELD_LEVEL_ANSWER_BLOCKERS
+    ]
     for field in plan.fields:
         decision = decisions_by_id.get(field.field_id)
         if not field.required or (
@@ -344,6 +378,15 @@ def _json_list(value: str | None) -> list:
     except (TypeError, ValueError):
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _redacted_cv_ref(cv_id: str | None) -> str | None:
+    """Return a stable opaque dashboard reference without exposing a CV name."""
+
+    if not cv_id:
+        return None
+    digest = hashlib.sha256(cv_id.encode("utf-8")).hexdigest()
+    return f"cv-ref-{digest[:12]}"
 
 
 def _attempt_response(attempt) -> SubmissionAttemptResponse:
@@ -403,7 +446,13 @@ def _event_history(app) -> list[ApplicationEventResponse]:
     ]
 
 
-def _form_plan_valid(plan: FormPlan | None, app: Application) -> bool:
+def _form_plan_review_ready(plan: FormPlan | None, app: Application) -> bool:
+    """Return whether one observed plan is safe for explicit operator review.
+
+    Preparation is intentionally excluded from this predicate.  The operator
+    must be able to review a current plan before preparation marks the exact
+    application revision eligible for a later submission request.
+    """
     if plan is None:
         return False
     now = datetime.now(UTC).replace(tzinfo=None)
@@ -416,18 +465,66 @@ def _form_plan_valid(plan: FormPlan | None, app: Application) -> bool:
         plan.invalidated_at is None
         and plan.expires_at > now
         and plan.application_revision == app.revision
-        and app.prepared_revision == app.revision
         and plan.selected_cv_id == app.selected_cv_id
         and app.material_eligible is True
         and plan.selected_cv_hash == app.selected_cv_hash
+        and plan.attached_cv_id == plan.selected_cv_id
+        and plan.attached_cv_hash == plan.selected_cv_hash
+        and plan.attachment_verified is True
+        and plan.attachment_verification_source == ATTACHMENT_VERIFICATION_SOURCE
+        and plan.attachment_verified_at is not None
         and plan.profile_version == app.profile_version
         and domain_plan.answer_policy_version == ANSWER_POLICY_VERSION
         and domain_ready
     )
 
 
+def _form_plan_valid(plan: FormPlan | None, app: Application) -> bool:
+    """Return whether preparation remains bound to this exact latest plan."""
+
+    latest = _latest_form_plan(app)
+    return (
+        plan is not None
+        and latest is not None
+        and latest.id == plan.id
+        and _form_plan_review_ready(plan, app)
+        and app.prepared_revision == app.revision
+    )
+
+
+def _requires_versioned_form_plan(app: Application) -> bool:
+    """Gate every adapter that has entered the two-phase execution contract."""
+
+    if app.job is None:
+        return False
+    descriptor = adapter_for_url(app.job.apply_url or app.job.source_url or "")
+    return bool(descriptor and descriptor.execution_contract_version)
+
+
+def _require_review_ready_form_plan(app: Application) -> None:
+    if not _requires_versioned_form_plan(app):
+        return
+    if _form_plan_review_ready(_latest_form_plan(app), app):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "FORM_PLAN_REQUIRED",
+            "message": (
+                "Inspect and review the current application form, including "
+                "the verified CV attachment, before preparation."
+            ),
+        },
+    )
+
+
 def _latest_form_plan(app: Application) -> FormPlan | None:
-    return app.form_plans[-1] if app.form_plans else None
+    if not app.form_plans:
+        return None
+    # Exactly one plan should remain active. Prefer it over wall-clock ordering
+    # so a local clock adjustment cannot resurrect an invalidated observation.
+    active = [plan for plan in app.form_plans if plan.invalidated_at is None]
+    return active[-1] if active else app.form_plans[-1]
 
 
 def _form_plan_uses_local_llm(plan: FormPlan | None) -> bool:
@@ -450,10 +547,16 @@ def _form_plan_response(plan: FormPlan, app: Application) -> FormPlanResponse:
         selector_version=plan.selector_version,
         fingerprint=plan.fingerprint,
         selected_cv_id=plan.selected_cv_id,
+        selected_cv_ref=_redacted_cv_ref(plan.selected_cv_id) or "cv-ref-unavailable",
         selected_cv_hash=plan.selected_cv_hash,
         attached_cv_id=plan.attached_cv_id,
+        attached_cv_ref=_redacted_cv_ref(plan.attached_cv_id),
         attached_cv_hash=plan.attached_cv_hash,
         attachment_verified=plan.attachment_verified,
+        attachment_verification_source=plan.attachment_verification_source,
+        attachment_verified_at=(
+            plan.attachment_verified_at.isoformat() if plan.attachment_verified_at else None
+        ),
         profile_version=plan.profile_version,
         fields=_json_list(plan.fields_json),
         decisions=_json_list(plan.decisions_json),
@@ -713,6 +816,7 @@ async def list_applications(
                 submission_verified=is_employer_verified(submission),
                 attempts=_attempt_history(app),
                 selected_cv_id=app.selected_cv_id,
+                selected_cv_ref=_redacted_cv_ref(app.selected_cv_id),
                 selected_cv_hash=app.selected_cv_hash,
                 profile_version=app.profile_version,
                 cv_routing_confidence=app.cv_routing_confidence,
@@ -788,6 +892,7 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         submission_verified=is_employer_verified(submission),
         attempts=_attempt_history(app),
         selected_cv_id=app.selected_cv_id,
+        selected_cv_ref=_redacted_cv_ref(app.selected_cv_id),
         selected_cv_hash=app.selected_cv_hash,
         profile_version=app.profile_version,
         cv_routing_confidence=app.cv_routing_confidence,
@@ -852,12 +957,16 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
         and app.approved_at is not None
         and preparation_is_current(app)
         and app.approval_source in {"manual_prepare", "batch_prepare", "retry_prepare"}
+        and (
+            not _requires_versioned_form_plan(app) or _form_plan_valid(_latest_form_plan(app), app)
+        )
     ):
         db.rollback()
         return _prepare_response(app.id)
     try:
         _validate_selected_cv(app)
         _validate_material_quality(app)
+        _require_review_ready_form_plan(app)
     except HTTPException:
         db.rollback()
         raise
@@ -909,6 +1018,7 @@ async def batch_approve_applications(
                 )
             _validate_selected_cv(app)
             _validate_material_quality(app)
+            _require_review_ready_form_plan(app)
     except HTTPException:
         db.rollback()
         raise
@@ -928,6 +1038,206 @@ async def batch_approve_applications(
         message=f"{len(application_ids)} application(s) prepared; nothing was queued.",
         prepared_application_ids=application_ids,
     )
+
+
+@router.post(
+    "/applications/{app_id}/inspect",
+    response_model=FormPlanResponse,
+)
+async def inspect_application_form(
+    app_id: int,
+    body: InspectApplicationRequest,
+    db: Session = Depends(get_db),
+):
+    """Observe and plan one candidate form without creating a submission attempt."""
+
+    locked = _lock_mutation_or_http(
+        db,
+        application_id=app_id,
+        intent=ApplicationMutationIntent.CONTENT,
+        expected_revision=body.application_revision,
+    )
+    app = locked.application
+    if app.status != JobStatus.DRAFT or locked.job is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Only a reviewable draft can be inspected.")
+    try:
+        _validate_selected_cv(app)
+        _validate_material_quality(app)
+        if (
+            app.material_eligible is not True
+            or not isinstance(app.profile_version, int)
+            or app.profile_version < 1
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MATERIAL_AUDIT_REQUIRED",
+                    "message": "Regenerate and review application materials before inspection.",
+                },
+            )
+        selected = get_selected_cv_artifact_by_id(app.selected_cv_id or "")
+        if selected is None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "SELECTED_CV_UNAVAILABLE", "message": "Selected CV unavailable."},
+            )
+        selected = require_current_selected_cv_artifact(
+            selected,
+            expected_sha256=app.selected_cv_hash,
+        )
+        profile_snapshot = load_versioned_profile_snapshot(
+            db,
+            version=app.profile_version,
+        )
+    except (CVArtifactBindingError, ProfileSnapshotError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": str(exc),
+                "message": "The private CV or profile revision changed; regenerate first.",
+            },
+        ) from exc
+    except HTTPException:
+        db.rollback()
+        raise
+
+    from jobs.models import JobData
+    from submitters.registry import get_two_phase_registry
+
+    job = locked.job
+    job_data = JobData(
+        title=job.title or "",
+        company=job.company or "",
+        location=job.location or "",
+        employment_type=job.employment_type or "",
+        seniority=job.seniority or "",
+        description=job.description or "",
+        requirements=job.requirements or "",
+        apply_url=job.apply_url or "",
+        source_url=job.source_url or "",
+    )
+    generated = GeneratedApplication(
+        cover_letter=app.cover_letter or "",
+        recruiter_message=app.recruiter_message or "",
+        qa_answers=_json_dict(app.qa_answers),
+        cv_sha256=app.selected_cv_hash,
+        profile_version=app.profile_version,
+    )
+    application_revision = int(app.revision or 1)
+    selected_cv_id = str(app.selected_cv_id)
+    selected_cv_hash = str(app.selected_cv_hash)
+    profile_version = app.profile_version
+    profile_payload = profile_snapshot.profile.model_dump(mode="python")
+    resume_path = selected.resolved_path
+    inspector = get_two_phase_registry().get_inspector(job_data)
+    db.rollback()
+
+    if inspector is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ADAPTER_NOT_QUALIFIED",
+                "message": "No version-qualified browser inspector is available for this form.",
+            },
+        )
+    inspect_kwargs = {
+        "application_id": app_id,
+        "application_revision": application_revision,
+        "job": job_data,
+        "application": generated,
+        "user_profile": profile_payload,
+        "resume_path": resume_path,
+        "selected_cv_id": selected_cv_id,
+    }
+    try:
+        inspector_parameters = python_inspect.signature(inspector.inspect).parameters
+    except (TypeError, ValueError):
+        inspector_parameters = {}
+    if "answer_policy" in inspector_parameters:
+        # This policy is request-scoped and database-backed.  It deliberately
+        # has no LLM client, so inspection cannot mutate a singleton or fall
+        # back to any cloud provider.  The application lock was released by
+        # the rollback above before this policy can query reusable answers.
+        inspect_kwargs["answer_policy"] = AnswerPolicyV1(db=db)
+    try:
+        domain_plan = await inspector.inspect(**inspect_kwargs)
+    except Exception as exc:
+        reason = getattr(exc, "reason_code", None)
+        reason_code = reason.value if isinstance(reason, ReasonCode) else "FORM_INSPECTION_FAILED"
+        reason_messages = {
+            ReasonCode.SESSION_EXPIRED.value: (
+                "The dedicated portal session needs an operator sign-in."
+            ),
+            ReasonCode.MFA_REQUIRED.value: "Complete MFA manually, then inspect again.",
+            ReasonCode.CHALLENGE_DETECTED.value: (
+                "A browser challenge requires manual handling; no bypass was attempted."
+            ),
+            ReasonCode.JOB_CLOSED.value: "The employer reports that this job is closed.",
+            ReasonCode.ALREADY_APPLIED.value: (
+                "The employer reports an existing application; no new submission was created."
+            ),
+            ReasonCode.ATTACHMENT_UNVERIFIED.value: (
+                "The selected CV attachment could not be verified."
+            ),
+            ReasonCode.SELECTOR_DRIFT.value: (
+                "The Workday form differs from the qualified selector version."
+            ),
+        }
+        logger.warning(
+            "application_form_inspection_failed",
+            application_id=app_id,
+            reason_code=reason_code,
+            error_type=type(exc).__name__[:80],
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": reason_code,
+                "message": reason_messages.get(
+                    reason_code,
+                    "Inspection stopped safely before any final action.",
+                ),
+            },
+        ) from exc
+
+    # Re-lock after browser navigation and prove that no review input changed.
+    locked = _lock_mutation_or_http(
+        db,
+        application_id=app_id,
+        intent=ApplicationMutationIntent.CONTENT,
+        expected_revision=application_revision,
+    )
+    app = locked.application
+    if (
+        app.selected_cv_id != selected_cv_id
+        or app.selected_cv_hash != selected_cv_hash
+        or app.profile_version != profile_version
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "FORM_CHANGED", "message": "Review inputs changed during inspection."},
+        )
+    try:
+        row = persist_inspected_form_plan(
+            db,
+            application=app,
+            plan=domain_plan,
+        )
+    except FormPlanPersistenceError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.reason_code,
+                "message": "The observed form no longer matches this application revision.",
+            },
+        ) from exc
+    db.commit()
+    db.refresh(row)
+    return _form_plan_response(row, app)
 
 
 @router.get(
@@ -1009,6 +1319,19 @@ async def confirm_application_answer(
     if field is None:
         db.rollback()
         raise HTTPException(status_code=404, detail="Form field not found")
+    if ReasonCode.FORM_PLAN_INCOMPLETE in domain_plan.blockers and not body.reusable:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": ReasonCode.FORM_PLAN_INCOMPLETE.value,
+                "message": (
+                    "This is a partial form observation. Confirm the answer as "
+                    "reusable, then inspect the employer form again; the partial "
+                    "plan itself cannot become preparation-ready."
+                ),
+            },
+        )
     if body.reusable and not field.canonical_name:
         db.rollback()
         raise HTTPException(
@@ -1095,6 +1418,12 @@ async def confirm_application_answer(
             adapter_version=domain_plan.adapter_version,
             selector_version=domain_plan.selector_version,
             form_fingerprint=domain_plan.form_fingerprint,
+            field_contract_fingerprint=reusable_field_contract_fingerprint(
+                field,
+                adapter_name=domain_plan.adapter_name,
+                adapter_version=domain_plan.adapter_version,
+                selector_version=domain_plan.selector_version,
+            ),
             policy_version=domain_plan.answer_policy_version,
             answer_json=json.dumps(body.value, separators=(",", ":"), ensure_ascii=True),
             evidence_source=body.evidence_source,
@@ -1183,6 +1512,8 @@ async def confirm_application_answer(
         attached_cv_id=cloned_domain.attached_cv_id,
         attached_cv_hash=cloned_domain.attached_cv_hash,
         attachment_verified=cloned_domain.attachment_verified,
+        attachment_verification_source=plan.attachment_verification_source,
+        attachment_verified_at=plan.attachment_verified_at,
         profile_version=cloned_domain.profile_version,
         fields_json=json.dumps(
             [item.model_dump(mode="json") for item in cloned_domain.fields],
@@ -1398,6 +1729,7 @@ async def retry_application(app_id: int, db: Session = Depends(get_db)):
     try:
         _validate_selected_cv(app)
         _validate_material_quality(app)
+        _require_review_ready_form_plan(app)
     except HTTPException:
         db.rollback()
         raise

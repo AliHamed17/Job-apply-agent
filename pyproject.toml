@@ -56,7 +56,7 @@ dev = [
     "types-PyYAML",
 ]
 browser = [
-    "playwright>=1.41,<2",
+    "playwright>=1.48,<2",
 ]
 # PDF resume text extraction (Phase 9)
 pdf = [

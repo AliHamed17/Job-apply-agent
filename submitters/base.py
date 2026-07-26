@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from hmac import compare_digest
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
@@ -44,6 +47,36 @@ class SubmissionResult:
     error: str | None = None
     reason_code: str | None = None
     diagnostic_details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AdapterPreflightContext:
+    """Private, ephemeral local inputs for reconstructing browser preflight.
+
+    This object is passed directly from the private worker to an adapter. It is
+    never a domain record, API payload, event, diagnostic, or persistence
+    model. Its representation is deliberately redacted because it contains a
+    normalized employer URL and an absolute local CV path.
+    """
+
+    normalized_job_url: str
+    selected_cv_id: str
+    selected_cv_hash: str
+    resume_path: str
+
+    def __post_init__(self) -> None:
+        if self.normalized_job_url != normalize_url(self.normalized_job_url):
+            raise ValueError("preflight job URL must be normalized")
+        if not self.selected_cv_id.strip():
+            raise ValueError("preflight selected CV ID is required")
+        if re.fullmatch(r"[0-9a-f]{64}", self.selected_cv_hash) is None:
+            raise ValueError("preflight selected CV hash must be SHA-256")
+        resume = Path(self.resume_path)
+        if not resume.is_absolute():
+            raise ValueError("preflight CV path must be absolute")
+
+    def __repr__(self) -> str:
+        return "AdapterPreflightContext(<private>)"
 
 
 class BaseSubmitter(ABC):
@@ -111,8 +144,10 @@ class TwoPhaseSubmitter(Protocol):
         application: GeneratedApplication,
         user_profile: Mapping[str, Any],
         resume_path: str | None,
+        selected_cv_id: str | None = None,
+        answer_policy: Any | None = None,
     ) -> FormPlanV1:
-        """Observe a prepared application before any submission attempt exists."""
+        """Observe using an optional request-scoped policy before an attempt exists."""
         ...
 
     async def preflight(
@@ -120,6 +155,7 @@ class TwoPhaseSubmitter(Protocol):
         *,
         plan: FormPlanV1,
         permit: FinalSubmitPermit,
+        context: AdapterPreflightContext | None = None,
     ) -> PreflightOutcome:
         """Prepare the exact action or return a definitive pre-commit outcome."""
         ...
@@ -132,6 +168,19 @@ class TwoPhaseSubmitter(Protocol):
     ) -> CommitOutcome:
         """Perform only the one prepared click/POST and return a typed outcome."""
         ...
+
+
+def supports_preflight_context(submitter: object) -> bool:
+    """Whether one adapter explicitly accepts the private worker context."""
+
+    preflight = getattr(submitter, "preflight", None)
+    if not callable(preflight):
+        return False
+    try:
+        parameters = inspect.signature(preflight).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.name == "context" for parameter in parameters)
 
 
 class DraftOnlySubmitter(BaseSubmitter):
@@ -187,9 +236,21 @@ class SubmitterRegistry:
         self._two_phase[descriptor.platform] = submitter
 
     def get_inspector(self, job: JobData) -> TwoPhaseSubmitter | None:
-        """Return a safe inspector for a non-disabled, version-pinned adapter."""
+        """Return an ordinary employer inspector only after scoped dry-run qualification.
+
+        Fixture qualification belongs to an explicit offline harness and never
+        authorizes the dashboard/API to open an arbitrary employer URL.
+        """
         descriptor = adapter_for_url(job.apply_url or job.source_url)
-        if descriptor is None or descriptor.qualification is QualificationTier.DISABLED:
+        if (
+            descriptor is None
+            or descriptor.qualification
+            not in {
+                QualificationTier.DRY_RUN_QUALIFIED,
+                QualificationTier.LIVE_CANARY_QUALIFIED,
+            }
+            or not descriptor.qualified_form_scope
+        ):
             return None
         submitter = self._two_phase.get(descriptor.platform)
         if submitter is None or not _same_execution_identity(submitter.descriptor, descriptor):

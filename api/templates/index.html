@@ -544,6 +544,16 @@
 
                     <div class="info-card">
                         <h4>Observed form plan</h4>
+                        <p class="text-sm text-dim" style="margin:0 0 10px;">
+                            Inspection opens the employer form and may upload or replace the
+                            routed CV so the private browser can observe upload completion.
+                            It never clicks the final submit control. Preparation stays
+                            disabled until the redacted selected and attached CV references,
+                            hashes, evidence source, and evidence time all match.
+                            A partial inspection cannot be prepared: save only explicitly
+                            scoped reusable answers, then inspect again until the employer
+                            review step is reached.
+                        </p>
                         <div class="qa-list" id="modal-form-plan">
                             <div class="text-dim text-sm">No current form inspection is available.</div>
                         </div>
@@ -582,6 +592,10 @@
             <button class="btn btn-secondary" id="btn-reject-app">Skip / Reject</button>
             <button class="btn btn-retry" id="btn-retry-app" style="display:none;">
                 <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Retry attempt
+            </button>
+            <button class="btn btn-secondary" id="btn-inspect-app" style="display:none;">
+                <i data-lucide="scan-search" style="width:14px;height:14px;"></i>
+                Inspect application form
             </button>
             <button class="btn btn-primary" id="btn-approve-app">Prepare application</button>
             <button class="btn btn-send" id="btn-send-app" style="display:none;" disabled>

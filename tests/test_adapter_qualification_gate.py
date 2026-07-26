@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from api.routes.ats import list_ats_adapters
 from db.models import Application, Base, Job, JobStatus, Submission
 from submitters.platforms import (
     QualificationTier,
@@ -81,6 +82,7 @@ def test_detection_and_qualification_share_one_adapter_inventory():
         assert descriptor.qualification in {
             QualificationTier.DISABLED,
             QualificationTier.DRY_RUN_ONLY,
+            QualificationTier.FIXTURE_QUALIFIED,
         }
         assert descriptor.allows_live_submission is False
 
@@ -88,7 +90,24 @@ def test_detection_and_qualification_share_one_adapter_inventory():
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.DRY_RUN_ONLY
-    } == _PLANNED_FIRST_FIVE
+    } == _PLANNED_FIRST_FIVE - {"workday"}
+    assert {
+        descriptor.platform
+        for descriptor in descriptors
+        if descriptor.qualification is QualificationTier.FIXTURE_QUALIFIED
+    } == {"workday"}
+
+
+@pytest.mark.asyncio
+async def test_ats_inventory_exposes_fixture_only_workday_as_send_disabled():
+    inventory = await list_ats_adapters()
+    workday = next(adapter for adapter in inventory if adapter.ats == "workday")
+
+    assert workday.qualification_tier == "fixture_qualified"
+    assert workday.final_execution_enabled is False
+    assert workday.qualified_form_scope == []
+    assert workday.adapter_version == "2.0.0"
+    assert workday.selector_version == "workday-candidate-v2"
 
 
 @pytest.mark.parametrize(

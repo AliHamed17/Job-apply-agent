@@ -53,6 +53,8 @@ const state = {
     runtimeCapabilities: null,
     readiness: null,
     runtimeProbeStatus: 'loading',
+    adapterCapabilities: null,
+    adapterProbeStatus: 'loading',
     sendIdempotencyKeys: new Map(),
 };
 
@@ -311,13 +313,22 @@ async function refreshAllData() {
 
 // ── Runtime safety / effective mode ──────────────────────────────────────────
 async function fetchRuntimeStatus() {
-    const [capabilities, readiness] = await Promise.all([
+    const [capabilities, readiness, adapters] = await Promise.all([
         probeJson('/api/runtime/capabilities'),
         probeJson('/health/ready'),
+        probeJson('/api/ats/adapters'),
     ]);
 
     state.runtimeCapabilities = capabilities.ok ? capabilities.data : null;
     state.readiness = state.runtimeCapabilities?.readiness || readiness.data || null;
+    state.adapterCapabilities = adapters.ok && Array.isArray(adapters.data)
+        ? adapters.data
+        : null;
+    state.adapterProbeStatus = adapters.ok
+        ? 'available'
+        : adapters.status === 401 || adapters.status === 403
+            ? 'authentication_required'
+            : 'unavailable';
     state.runtimeProbeStatus = capabilities.ok
         ? 'available'
         : capabilities.status === 401 || capabilities.status === 403
@@ -1090,6 +1101,49 @@ function hasActiveSubmissionAttempt(application) {
     return ACTIVE_SUBMISSION_STAGES.has(stage);
 }
 
+function adapterQualificationBlockers(application) {
+    const blockers = [];
+    if (!Array.isArray(state.adapterCapabilities)) {
+        blockers.push(
+            state.adapterProbeStatus === 'authentication_required'
+                ? 'Enter the API Secret to verify ATS qualification'
+                : 'ATS qualification inventory is unavailable'
+        );
+        return blockers;
+    }
+
+    const adapterName = application?.form_plan_adapter_name;
+    const adapterVersion = application?.form_plan_adapter_version;
+    const selectorVersion = application?.form_plan_selector_version;
+    const fingerprint = application?.form_plan_fingerprint;
+    if (!adapterName || !adapterVersion || !selectorVersion) {
+        return ['The current form plan has no versioned adapter identity'];
+    }
+    const capability = state.adapterCapabilities.find(adapter => (
+        adapter.ats === adapterName
+        && adapter.adapter_version === adapterVersion
+        && adapter.selector_version === selectorVersion
+    ));
+    if (!capability) {
+        return ['The exact form adapter version is not registered'];
+    }
+    if (capability.final_execution_enabled !== true) {
+        blockers.push(
+            `${adapterName} ${adapterVersion} is not live-canary qualified for final execution`
+        );
+    }
+    const qualifiedScope = Array.isArray(capability.qualified_form_scope)
+        ? capability.qualified_form_scope
+        : [];
+    if (
+        !/^[0-9a-f]{64}$/.test(String(fingerprint || ''))
+        || !qualifiedScope.includes(fingerprint)
+    ) {
+        blockers.push('The current form fingerprint is outside the qualified live scope');
+    }
+    return blockers;
+}
+
 function liveSendBlockers(application) {
     const blockers = [...runtimeSubmissionState().reasons];
     const runtimeModel = state.runtimeCapabilities?.llm;
@@ -1122,6 +1176,7 @@ function liveSendBlockers(application) {
         blockers.push('The local model changed; inspect the employer form again');
     }
     if (!hasValidFormPlan(application)) blockers.push('A current validated form plan is required');
+    blockers.push(...adapterQualificationBlockers(application));
     if (application?.portal_session_ready === false) blockers.push('Sign in to the employer portal');
     return [...new Set(blockers)];
 }
@@ -1458,6 +1513,34 @@ function formPlanIsReviewable(plan) {
     return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
+function formPlanHasAttachmentEvidence(plan) {
+    if (!plan || plan.attachment_verified !== true) return false;
+    const verifiedAt = parseServerTimestamp(plan.attachment_verified_at);
+    return (
+        plan.attachment_verification_source === 'candidate_browser_upload_complete'
+        && Number.isFinite(verifiedAt)
+        && Boolean(plan.selected_cv_ref)
+        && plan.selected_cv_ref === plan.attached_cv_ref
+        && /^[0-9a-f]{64}$/.test(String(plan.selected_cv_hash || ''))
+        && plan.selected_cv_hash === plan.attached_cv_hash
+    );
+}
+
+function cacheFormPlanIdentity(application, plan) {
+    if (!application || !plan) return;
+    application.form_plan_id = plan.plan_id || null;
+    application.form_plan_fingerprint = plan.fingerprint || null;
+    application.form_plan_adapter_name = plan.adapter_name || null;
+    application.form_plan_adapter_version = plan.adapter_version || null;
+    application.form_plan_selector_version = plan.selector_version || null;
+}
+
+function redactedDigest(value) {
+    return /^[0-9a-f]{64}$/.test(String(value || ''))
+        ? `${String(value).slice(0, 12)}…`
+        : 'unavailable';
+}
+
 function formConstraintSummary(field) {
     const constraints = field.constraints || {};
     const parts = [];
@@ -1478,7 +1561,7 @@ function formConstraintSummary(field) {
     return parts.join(' · ');
 }
 
-function formAnswerControl(field, decision, index, reviewable) {
+function formAnswerControl(field, decision, index, reviewable, partialPlan) {
     const controlId = `form-answer-${index}`;
     const reusableId = `form-reusable-${index}`;
     const value = decision?.disposition === 'resolved' ? decision.value : null;
@@ -1542,14 +1625,21 @@ function formAnswerControl(field, decision, index, reviewable) {
 
     const reusable = field.canonical_name
         ? `<label class="text-sm text-dim" style="display:flex;gap:7px;align-items:center;">
-            <input id="${reusableId}" type="checkbox"${disabled}>
-            Reuse only for this exact field and form version
+            <input id="${reusableId}" type="checkbox"${partialPlan ? ' checked required aria-required="true"' : ''}${disabled}>
+            ${partialPlan
+                ? 'Required for this partial plan: save as a scoped reusable answer'
+                : 'Reuse only for this exact field and form version'}
         </label>`
+        : partialPlan
+            ? '<div class="text-sm text-warning">This partial field has no reusable scope. Reinspect after its field mapping is corrected.</div>'
+            : '';
+    const actionDisabled = !reviewable || (partialPlan && !field.canonical_name)
+        ? ' disabled'
         : '';
     return `${control}
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;">
             <button type="button" class="btn btn-sm btn-secondary"
-                    data-confirm-field-index="${index}"${disabled}>
+                    data-confirm-field-index="${index}"${actionDisabled}>
                 ${decision?.disposition === 'resolved' ? 'Update answer' : 'Confirm answer'}
             </button>
             ${reusable}
@@ -1571,13 +1661,17 @@ function renderFormPlanPanel(appId, plan) {
     const provenance = [...new Set(
         decisions.map(item => item.provenance).filter(Boolean)
     )];
+    const blockers = Array.isArray(plan.blockers) ? plan.blockers : [];
+    const partialPlan = blockers.includes('FORM_PLAN_INCOMPLETE');
     const reviewable = formPlanIsReviewable(plan);
-    const planLabel = plan.valid
+    const attachmentEvidence = formPlanHasAttachmentEvidence(plan);
+    const planLabel = partialPlan
+        ? 'Partial observation — scoped answers and reinspection required'
+        : plan.valid
         ? 'Current, prepared plan'
         : reviewable
             ? 'Current plan — prepare again after changes'
             : 'Expired or changed plan';
-    const blockers = Array.isArray(plan.blockers) ? plan.blockers : [];
     const fieldRows = fields.map((field, index) => {
         const decision = decisionByField.get(field.field_id);
         const constraints = formConstraintSummary(field);
@@ -1593,7 +1687,7 @@ function renderFormPlanPanel(appId, plan) {
             <div class="qa-a">${esc(field.field_type)} · ${esc(status)}</div>
             ${constraints ? `<div class="qa-a text-dim">${esc(constraints)}</div>` : ''}
             <div style="margin-top:9px;">
-                ${formAnswerControl(field, decision, index, reviewable)}
+                ${formAnswerControl(field, decision, index, reviewable, partialPlan)}
             </div>
         </div>`;
     }).join('');
@@ -1603,6 +1697,10 @@ function renderFormPlanPanel(appId, plan) {
             <div class="qa-q">${esc(planLabel)}</div>
             <div class="qa-a">${esc(plan.adapter_name)} ${esc(plan.adapter_version)} · selector ${esc(plan.selector_version)}</div>
         </div>
+        ${partialPlan ? `<div class="qa-item" data-partial-plan-guidance>
+            <div class="qa-q">Preparation is unavailable for this partial plan</div>
+            <div class="qa-a">Confirm the unresolved field as a scoped reusable answer, then run Inspect application form again. Only a complete reinspection that reaches the employer review step can become preparation-ready.</div>
+        </div>` : ''}
         <div class="qa-item">
             <div class="qa-q">Answers</div>
             <div class="qa-a">${resolved}/${fields.length} resolved · ${unresolvedRequired} required answers need review</div>
@@ -1610,6 +1708,20 @@ function renderFormPlanPanel(appId, plan) {
         <div class="qa-item">
             <div class="qa-q">Provenance</div>
             <div class="qa-a">${esc(provenance.join(' · ') || 'No resolved answers')}</div>
+        </div>
+        <div class="qa-item" data-attachment-evidence>
+            <div class="qa-q">Selected CV (redacted)</div>
+            <div class="qa-a">${esc(plan.selected_cv_ref || 'unavailable')} · SHA-256 ${esc(redactedDigest(plan.selected_cv_hash))}</div>
+        </div>
+        <div class="qa-item" data-attachment-evidence>
+            <div class="qa-q">Attached CV (redacted)</div>
+            <div class="qa-a">${esc(plan.attached_cv_ref || 'unavailable')} · SHA-256 ${esc(redactedDigest(plan.attached_cv_hash))}</div>
+        </div>
+        <div class="qa-item" data-attachment-evidence>
+            <div class="qa-q">Attachment evidence</div>
+            <div class="qa-a">${attachmentEvidence
+                ? `Browser-observed upload-complete marker · recorded ${esc(fmtDate(plan.attachment_verified_at))}`
+                : 'Not verified — preparation is disabled'}</div>
         </div>
         ${blockers.length ? `<div class="qa-item">
             <div class="qa-q">Plan blockers</div>
@@ -1664,7 +1776,16 @@ async function confirmFormAnswer(appId, plan, index) {
         showToast(error.message, 'warning');
         return;
     }
-    const reusable = Boolean($(`form-reusable-${index}`)?.checked);
+    const partialPlan = (plan.blockers || []).includes('FORM_PLAN_INCOMPLETE');
+    const reusableControl = $(`form-reusable-${index}`);
+    if (partialPlan && (!field.canonical_name || reusableControl?.checked !== true)) {
+        showToast(
+            'Partial plans require a scoped reusable answer, followed by reinspection.',
+            'warning'
+        );
+        return;
+    }
+    const reusable = Boolean(reusableControl?.checked);
     const button = document.querySelector(`[data-confirm-field-index="${index}"]`);
     if (button) button.disabled = true;
     const result = await probeJson(
@@ -1688,18 +1809,49 @@ async function confirmFormAnswer(appId, plan, index) {
             application.prepared_revision = null;
             application.revision = result.data.application_revision;
             application.application_revision = result.data.application_revision;
-            application.form_plan_id = result.data.plan_id;
+            cacheFormPlanIdentity(application, result.data);
             application.form_plan_valid = result.data.valid === true;
             application.form_plan_blockers = result.data.blockers || [];
+            application.form_plan_review_ready = (
+                formPlanIsReviewable(result.data)
+                && formPlanHasAttachmentEvidence(result.data)
+                && (result.data.blockers || []).length === 0
+            );
         }
-        showToast('Answer confirmed. Review the updated plan, then prepare again.', 'info');
+        const remainsPartial = (result.data.blockers || []).includes(
+            'FORM_PLAN_INCOMPLETE'
+        );
+        showToast(
+            remainsPartial
+                ? 'Reusable answer saved. Reinspect the employer form; this partial plan cannot be prepared.'
+                : 'Answer confirmed. Review the updated plan, then prepare again.',
+            'info'
+        );
         renderFormPlanPanel(appId, result.data);
+        const prepareButton = $('btn-approve-app');
+        if (prepareButton && application) {
+            prepareButton.disabled = application.form_plan_review_ready !== true;
+            prepareButton.title = prepareButton.disabled
+                ? 'Resolve all current form blockers before preparation'
+                : '';
+        }
         return;
     }
     if (result.status === 409) {
-        showToast('The form changed while you were reviewing it. Loading the latest plan.', 'warning');
-        const refreshed = await probeJson(`/api/applications/${appId}/form-plan`);
-        if (refreshed.ok && refreshed.data) renderFormPlanPanel(appId, refreshed.data);
+        const reasonCode = result.data?.detail?.code;
+        showToast(
+            boundedApiError(
+                result.data,
+                `Answer confirmation rejected (HTTP ${result.status})`
+            ),
+            'warning'
+        );
+        if (['FORM_CHANGED', 'ANSWER_POLICY_CHANGED'].includes(reasonCode)) {
+            const refreshed = await probeJson(`/api/applications/${appId}/form-plan`);
+            if (refreshed.ok && refreshed.data) renderFormPlanPanel(appId, refreshed.data);
+        } else if (button) {
+            button.disabled = false;
+        }
         return;
     }
     showToast(
@@ -1717,6 +1869,7 @@ window.openReviewModal = async appId => {
     const actionButtons = [
         $('btn-preview-cv'),
         $('btn-override-cv'),
+        $('btn-inspect-app'),
         $('btn-approve-app'),
         $('btn-reject-app'),
         $('btn-retry-app'),
@@ -1737,7 +1890,7 @@ window.openReviewModal = async appId => {
     $('modal-recruiter-msg').textContent = app.recruiter_message || 'N/A';
     const routingEvidence = (app.cv_routing_evidence || []).join(' · ');
     $('modal-cv-routing').textContent = app.selected_cv_id
-        ? `${app.selected_cv_id} · ${app.selected_cv_hash ? 'SHA-256 ' + app.selected_cv_hash.slice(0, 12) + '… · ' : ''}confidence ${Math.round((app.cv_routing_confidence || 0) * 100)}%${routingEvidence ? ' · ' + routingEvidence : ''}`
+        ? `${app.selected_cv_ref || 'redacted CV reference unavailable'} · SHA-256 ${redactedDigest(app.selected_cv_hash)} · confidence ${Math.round((app.cv_routing_confidence || 0) * 100)}%${routingEvidence ? ' · ' + routingEvidence : ''}`
         : `Review required${app.cv_routing_fallback_reason ? ' · ' + app.cv_routing_fallback_reason : ''}`;
     $('btn-preview-cv').onclick = () => previewCvRoute(app.id);
     $('btn-override-cv').onclick = () => overrideCvRoute(app.id);
@@ -1775,21 +1928,29 @@ window.openReviewModal = async appId => {
         const planResult = await probeJson(`/api/applications/${app.id}/form-plan`);
         if (!isCurrentReviewModalRequest(app.id, requestToken)) return;
         if (planResult.ok) {
+            cacheFormPlanIdentity(app, planResult.data);
             app.form_plan_expires_at = planResult.data?.expires_at || null;
             app.form_plan_invalidated_at = planResult.data?.invalidated_at || null;
             app.form_plan_valid = (
                 planResult.data?.valid === true
                 && !app.form_plan_invalidated_at
             );
+            app.form_plan_review_ready = (
+                formPlanIsReviewable(planResult.data)
+                && formPlanHasAttachmentEvidence(planResult.data)
+                && (planResult.data?.blockers || []).length === 0
+            );
             renderFormPlanPanel(app.id, planResult.data);
         } else {
             app.form_plan_valid = false;
+            app.form_plan_review_ready = false;
             app.form_plan_expires_at = null;
             app.form_plan_invalidated_at = null;
             formPlanPanel.innerHTML = '<div class="text-dim text-sm">The recorded plan is no longer available.</div>';
         }
     } else {
         app.form_plan_valid = false;
+        app.form_plan_review_ready = false;
         app.form_plan_expires_at = null;
         app.form_plan_invalidated_at = null;
         formPlanPanel.innerHTML = '<div class="text-dim text-sm">No current form inspection is available.</div>';
@@ -1870,9 +2031,26 @@ window.openReviewModal = async appId => {
     const outcome = attemptOutcome(app);
     const canRetry = ['failed', 'failed_before_commit', 'draft_only'].includes(outcome);
     const isPrepared = isPreparedApplication(app);
+    const inspectBtn = $('btn-inspect-app');
+    if (inspectBtn) {
+        inspectBtn.style.display = isPending && app.platform === 'workday'
+            ? 'inline-flex'
+            : 'none';
+        inspectBtn.disabled = app.material_eligible !== true || !app.selected_cv_id;
+        inspectBtn.title = inspectBtn.disabled
+            ? 'A routed CV and evidence-eligible material are required first'
+            : 'May upload or replace the routed CV to verify it; never clicks final submit';
+        inspectBtn.onclick = () => inspectApplicationForm(app.id);
+    }
     $('btn-approve-app').style.display = isPending ? 'inline-flex' : 'none';
     $('btn-reject-app').style.display  = isPending ? 'inline-flex' : 'none';
-    $('btn-approve-app').disabled = false;
+    $('btn-approve-app').disabled = (
+        app.platform === 'workday'
+        && app.form_plan_review_ready !== true
+    );
+    $('btn-approve-app').title = $('btn-approve-app').disabled
+        ? 'Inspect and resolve the current Workday form before preparation'
+        : '';
     $('btn-reject-app').disabled = false;
     $('btn-preview-cv').disabled = false;
     $('btn-override-cv').disabled = false;
@@ -1919,7 +2097,7 @@ async function previewCvRoute(appId) {
     if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     const result = await apiCall('/api/cv-routing/preview', 'POST', { application_id: appId });
     if (!isCurrentReviewModalRequest(appId, requestToken) || !result) return;
-    showToast(result.selected_cv_id ? `Selected CV: ${result.selected_cv_id}` : 'Routing abstained — choose a CV', 'info');
+    showToast(result.selected_cv_id ? 'CV routing preview is ready for review' : 'Routing abstained — choose a CV', 'info');
     hideModal($('review-modal'));
     await refreshAllData();
 }
@@ -1935,9 +2113,68 @@ async function overrideCvRoute(appId) {
 
     const result = await apiCall(`/api/applications/${appId}/cv-override`, 'POST', { cv_id: cvId });
     if (!isCurrentReviewModalRequest(appId, requestToken) || !result) return;
-    showToast(`CV override saved: ${result.selected_cv_id}`, 'info');
+    showToast('CV override saved. Reinspect the employer form before preparation.', 'info');
     hideModal($('review-modal'));
     await refreshAllData();
+}
+
+async function inspectApplicationForm(appId) {
+    const requestToken = reviewModalState.requestToken;
+    const application = state.applications.find(item => item.id === appId);
+    const button = $('btn-inspect-app');
+    if (!application || !isCurrentReviewModalRequest(appId, requestToken)) return;
+
+    button.disabled = true;
+    button.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Inspecting…';
+    lucide.createIcons();
+    const result = await probeJson(
+        `/api/applications/${appId}/inspect`,
+        'POST',
+        { application_revision: application.revision }
+    );
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
+    button.innerHTML = '<i data-lucide="scan-search" style="width:14px;height:14px;"></i> Inspect application form';
+    lucide.createIcons();
+
+    if (!result.ok || !result.data) {
+        button.disabled = false;
+        showToast(
+            boundedApiError(result.data, `Form inspection stopped (HTTP ${result.status})`),
+            result.status === 409 ? 'warning' : 'error'
+        );
+        return;
+    }
+
+    cacheFormPlanIdentity(application, result.data);
+    application.form_plan_expires_at = result.data.expires_at;
+    application.form_plan_invalidated_at = result.data.invalidated_at;
+    application.form_plan_valid = result.data.valid === true;
+    application.prepared_revision = null;
+    application.approved_at = null;
+    application.form_plan_review_ready = (
+        formPlanIsReviewable(result.data)
+        && formPlanHasAttachmentEvidence(result.data)
+        && (result.data.blockers || []).length === 0
+    );
+    application.form_plan_blockers = result.data.blockers || [];
+    renderFormPlanPanel(appId, result.data);
+    const prepareButton = $('btn-approve-app');
+    if (prepareButton) {
+        prepareButton.disabled = application.form_plan_review_ready !== true;
+        prepareButton.title = prepareButton.disabled
+            ? 'Resolve all current form blockers before preparation'
+            : '';
+    }
+    const incomplete = (result.data.blockers || []).includes('FORM_PLAN_INCOMPLETE');
+    showToast(
+        incomplete
+            ? 'Partial form inspected — save scoped reusable answers, then reinspect; preparation is unavailable.'
+            : result.data.blockers?.length
+            ? 'Form inspected — review the unresolved fields before preparation'
+            : 'Form inspected — exact CV upload evidence recorded for review',
+        result.data.blockers?.length ? 'warning' : 'info'
+    );
+    button.disabled = false;
 }
 
 window.copyCoverLetter = () => {

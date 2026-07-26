@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -1131,6 +1133,46 @@ class _ConfirmedExecutor:
         )
 
 
+class _SameLoopExecutor(_ConfirmedExecutor):
+    def __init__(self, *, crash_after_boundary: bool = False):
+        self.crash_after_boundary = crash_after_boundary
+        self.committed = False
+        self.async_calls: list[tuple[str, int, int]] = []
+        self.cleaned_action = None
+
+    def _record_async_call(self, name: str) -> None:
+        self.async_calls.append(
+            (
+                name,
+                id(asyncio.get_running_loop()),
+                threading.get_ident(),
+            )
+        )
+
+    async def preflight(self, *, plan, permit):
+        self._record_async_call("preflight")
+        return await super().preflight(plan=plan, permit=permit)
+
+    async def commit(self, *, action, permit):
+        self._record_async_call("commit")
+        self.committed = True
+        if self.crash_after_boundary:
+            raise RuntimeError("synthetic same-loop post-boundary crash")
+        return await super().commit(action=action, permit=permit)
+
+    async def cleanup_prepared_action(self, *, action):
+        self._record_async_call("cleanup")
+        self.cleaned_action = action
+
+
+class _ContextAwareSameLoopExecutor(_SameLoopExecutor):
+    preflight_context = None
+
+    async def preflight(self, *, plan, permit, context):
+        self.preflight_context = context
+        return await super().preflight(plan=plan, permit=permit)
+
+
 class _LLMCallingExecutor:
     """A broken adapter must be unable to invoke an LLM in final execution."""
 
@@ -1401,6 +1443,251 @@ def test_only_typed_bound_evidence_can_finish_confirmed_submitted(tmp_path):
     db.close()
 
 
+@pytest.mark.asyncio
+async def test_preflight_commit_and_cleanup_share_one_event_loop(tmp_path):
+    """Browser-bound state remains valid while sync safety gates run between calls."""
+
+    class _ThreadRecordingGovernor(_AllowGovernor):
+        thread_id = None
+
+        def reserve_final_action(self, *, reservation_id, platform):
+            self.thread_id = threading.get_ident()
+            return super().reserve_final_action(
+                reservation_id=reservation_id,
+                platform=platform,
+            )
+
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    created = _admit(factory, reviewed)
+    db = factory()
+    assert claim_submission_command(db, command_id=created.command_id) == created.command_id
+    executor = _SameLoopExecutor()
+    governor = _ThreadRecordingGovernor()
+    caller_thread = threading.get_ident()
+
+    result = execute_claimed_submission_command(
+        db,
+        created.command_id,
+        registry=_registry(executor),
+        settings=_live_settings(),
+        governor=governor,
+    )
+
+    assert result == "confirmed_submitted"
+    assert [name for name, _loop, _thread in executor.async_calls] == [
+        "preflight",
+        "commit",
+        "cleanup",
+    ]
+    assert len({loop for _name, loop, _thread in executor.async_calls}) == 1
+    assert len({thread for _name, _loop, thread in executor.async_calls}) == 1
+    assert executor.async_calls[0][2] != caller_thread
+    assert governor.thread_id == caller_thread
+    assert executor.cleaned_action is not None
+    assert executor.cleaned_action.attempt_id == created.attempt_id
+    db.expire_all()
+    attempt = db.get(Submission, created.attempt_id)
+    assert attempt.outcome == "confirmed_submitted"
+    assert attempt.final_action_at is not None
+    db.close()
+
+
+def test_context_aware_preflight_receives_current_private_cv_binding(
+    tmp_path,
+    monkeypatch,
+):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    created = _admit(factory, reviewed)
+    cv_path = (tmp_path / "selected-private-cv.pdf").resolve()
+    cv_path.write_bytes(b"synthetic test CV")
+    selected = SimpleNamespace(
+        cv_id="cv-ai",
+        pdf_sha256=reviewed.cv_hash,
+        resolved_path=str(cv_path),
+    )
+    resolver_calls = []
+
+    def resolve_selected(cv_id, *, cv_routing_path, cv_directory):
+        resolver_calls.append((cv_id, cv_routing_path, cv_directory))
+        return selected
+
+    def require_current(candidate, *, expected_sha256):
+        assert candidate is selected
+        assert expected_sha256 == reviewed.cv_hash
+        return candidate
+
+    monkeypatch.setattr(
+        "profile.cv_content_cache.get_selected_cv_artifact_by_id",
+        resolve_selected,
+    )
+    monkeypatch.setattr(
+        "profile.cv_content_cache.require_current_selected_cv_artifact",
+        require_current,
+    )
+    db = factory()
+    assert claim_submission_command(db, command_id=created.command_id) == created.command_id
+    executor = _ContextAwareSameLoopExecutor()
+    settings = _live_settings()
+
+    result = execute_claimed_submission_command(
+        db,
+        created.command_id,
+        registry=_registry(executor),
+        settings=settings,
+        governor=_AllowGovernor(),
+    )
+
+    assert result == "confirmed_submitted"
+    assert resolver_calls == [
+        (
+            "cv-ai",
+            settings.cv_routing_path,
+            settings.cv_directory,
+        )
+    ]
+    context = executor.preflight_context
+    assert context.normalized_job_url == "https://boards.greenhouse.io/acme/jobs/123"
+    assert context.selected_cv_id == "cv-ai"
+    assert context.selected_cv_hash == reviewed.cv_hash
+    assert context.resume_path == str(cv_path)
+    context_repr = repr(context)
+    assert context_repr == "AdapterPreflightContext(<private>)"
+    assert context.normalized_job_url not in context_repr
+    assert context.resume_path not in context_repr
+    assert [name for name, _loop, _thread in executor.async_calls] == [
+        "preflight",
+        "commit",
+        "cleanup",
+    ]
+    assert len({loop for _name, loop, _thread in executor.async_calls}) == 1
+    db.expire_all()
+    attempt = db.get(Submission, created.attempt_id)
+    assert attempt.outcome == "confirmed_submitted"
+    assert not hasattr(attempt, "resume_path")
+    db.close()
+
+
+@pytest.mark.parametrize("failure_mode", ["missing", "changed"])
+def test_context_aware_preflight_blocks_unavailable_or_changed_cv(
+    tmp_path,
+    monkeypatch,
+    failure_mode,
+):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    created = _admit(factory, reviewed)
+    cv_path = (tmp_path / "selected-private-cv.pdf").resolve()
+    cv_path.write_bytes(b"synthetic test CV")
+    selected = SimpleNamespace(
+        cv_id="cv-ai",
+        pdf_sha256=reviewed.cv_hash,
+        resolved_path=str(cv_path),
+    )
+    monkeypatch.setattr(
+        "profile.cv_content_cache.get_selected_cv_artifact_by_id",
+        lambda *_args, **_kwargs: None if failure_mode == "missing" else selected,
+    )
+
+    def require_current(_candidate, *, expected_sha256):
+        del expected_sha256
+        if failure_mode == "changed":
+            raise RuntimeError("synthetic CV binding change")
+        raise AssertionError("missing CV must stop before current-byte verification")
+
+    monkeypatch.setattr(
+        "profile.cv_content_cache.require_current_selected_cv_artifact",
+        require_current,
+    )
+    db = factory()
+    assert claim_submission_command(db, command_id=created.command_id) == created.command_id
+    executor = _ContextAwareSameLoopExecutor()
+
+    result = execute_claimed_submission_command(
+        db,
+        created.command_id,
+        registry=_registry(executor),
+        settings=_live_settings(),
+        governor=_AllowGovernor(),
+    )
+
+    assert result == "failed_before_commit"
+    assert executor.preflight_context is None
+    assert executor.async_calls == []
+    assert executor.committed is False
+    db.expire_all()
+    attempt = db.get(Submission, created.attempt_id)
+    assert attempt.outcome == "failed_before_commit"
+    assert attempt.reason_code == "ATTACHMENT_UNVERIFIED"
+    assert attempt.final_action_at is None
+    assert attempt.final_submit_permit.consumed_at is None
+    db.close()
+
+
+def test_boundary_rejection_cleans_prepared_state_without_commit(tmp_path):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    created = _admit(factory, reviewed)
+    db = factory()
+    assert claim_submission_command(db, command_id=created.command_id) == created.command_id
+    executor = _SameLoopExecutor()
+
+    result = execute_claimed_submission_command(
+        db,
+        created.command_id,
+        registry=_registry(executor),
+        settings=_live_settings(),
+        governor=_DenyGovernor("kill switch active"),
+    )
+
+    assert result == "failed_before_commit"
+    assert [name for name, _loop, _thread in executor.async_calls] == [
+        "preflight",
+        "cleanup",
+    ]
+    assert len({loop for _name, loop, _thread in executor.async_calls}) == 1
+    assert executor.committed is False
+    assert executor.cleaned_action is not None
+    db.expire_all()
+    attempt = db.get(Submission, created.attempt_id)
+    assert attempt.outcome == "failed_before_commit"
+    assert attempt.final_action_at is None
+    db.close()
+
+
+def test_same_loop_commit_exception_is_unknown_then_cleans_up(tmp_path):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    created = _admit(factory, reviewed)
+    db = factory()
+    assert claim_submission_command(db, command_id=created.command_id) == created.command_id
+    executor = _SameLoopExecutor(crash_after_boundary=True)
+
+    result = execute_claimed_submission_command(
+        db,
+        created.command_id,
+        registry=_registry(executor),
+        settings=_live_settings(),
+        governor=_AllowGovernor(),
+    )
+
+    assert result == "unknown"
+    assert [name for name, _loop, _thread in executor.async_calls] == [
+        "preflight",
+        "commit",
+        "cleanup",
+    ]
+    assert len({loop for _name, loop, _thread in executor.async_calls}) == 1
+    assert executor.cleaned_action is not None
+    db.expire_all()
+    attempt = db.get(Submission, created.attempt_id)
+    assert attempt.outcome == "unknown"
+    assert attempt.final_action_at is not None
+    assert attempt.final_submit_permit.consumed_at is not None
+    db.close()
+
+
 def test_final_execution_prohibits_all_llm_calls_before_transport(tmp_path):
     factory = _factory(tmp_path)
     reviewed = _reviewed_application(factory)
@@ -1433,7 +1720,7 @@ def test_final_execution_prohibits_all_llm_calls_before_transport(tmp_path):
 
 @pytest.mark.asyncio
 async def test_eager_async_execution_preserves_final_stage_llm_prohibition(tmp_path):
-    """The ContextVar guard must survive run_async's worker-thread boundary."""
+    """The ContextVar guard must survive the lifecycle worker-thread boundary."""
 
     factory = _factory(tmp_path)
     reviewed = _reviewed_application(factory)

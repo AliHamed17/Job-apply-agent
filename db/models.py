@@ -546,6 +546,8 @@ class FormPlan(Base):
         default=False,
         server_default=false(),
     )
+    attachment_verification_source = Column(String(64), nullable=True)
+    attachment_verified_at = Column(DateTime, nullable=True)
     profile_version = Column(Integer, nullable=True)
     fields_json = Column(Text, nullable=False, default="[]", server_default="[]")
     decisions_json = Column(Text, nullable=False, default="[]", server_default="[]")
@@ -615,6 +617,14 @@ class FormPlan(Base):
         CheckConstraint(
             "length(trim(locale)) > 0 AND length(trim(answer_policy_version)) > 0",
             name="ck_form_plans_policy_metadata",
+        ),
+        CheckConstraint(
+            "(attachment_verification_source IS NULL "
+            "AND attachment_verified_at IS NULL) OR "
+            "(attachment_verification_source IS NOT NULL "
+            "AND length(trim(attachment_verification_source)) BETWEEN 1 AND 64 "
+            "AND attachment_verified_at IS NOT NULL)",
+            name="ck_form_plans_attachment_evidence_metadata",
         ),
         CheckConstraint(
             "llm_model_digest IS NULL OR "
@@ -853,13 +863,61 @@ class BrowserQualificationRun(Base):
     terminal_reason = Column(String(64), nullable=False)
     qualified = Column(Boolean, nullable=False, default=False)
     trace_json = Column(Text, nullable=False)
+    adapter_name = Column(String(64), nullable=True)
+    adapter_version = Column(String(32), nullable=True)
+    qualification_tier = Column(String(32), nullable=True)
+    form_fingerprint = Column(String(64), nullable=True)
+    fixture_digest = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     __table_args__ = (
+        CheckConstraint(
+            "qualification_tier IS NULL OR qualification_tier IN "
+            "('disabled', 'dry_run_only', 'fixture_qualified', "
+            "'dry_run_qualified', 'live_canary_qualified')",
+            name="ck_browser_qualification_tier",
+        ),
+        CheckConstraint(
+            "(adapter_name IS NULL AND adapter_version IS NULL "
+            "AND qualification_tier IS NULL AND form_fingerprint IS NULL "
+            "AND fixture_digest IS NULL) OR "
+            "(adapter_name IS NOT NULL AND adapter_version IS NOT NULL "
+            "AND qualification_tier IS NOT NULL AND fixture_digest IS NOT NULL "
+            "AND length(trim(adapter_name)) BETWEEN 1 AND 64 "
+            "AND length(trim(adapter_version)) BETWEEN 1 AND 32)",
+            name="ck_browser_qualification_metadata_complete",
+        ),
+        CheckConstraint(
+            f"(fixture_digest IS NULL OR {_sha256_check_sql('fixture_digest')}) "
+            f"AND (form_fingerprint IS NULL OR "
+            f"{_sha256_check_sql('form_fingerprint')})",
+            name="ck_browser_qualification_digests",
+        ),
+        CheckConstraint(
+            "qualification_tier IS NULL "
+            "OR qualification_tier != 'live_canary_qualified' "
+            "OR (qualified = true "
+            "AND terminal_reason = 'LIVE_CANARY_CONFIRMED' "
+            "AND form_fingerprint IS NOT NULL)",
+            name="ck_browser_qualification_live_evidence",
+        ),
         Index(
             "ix_browser_qualification_selector_reason",
             "selector_version",
             "terminal_reason",
+        ),
+        Index(
+            "ix_browser_qualification_adapter_tier",
+            "adapter_name",
+            "adapter_version",
+            "qualification_tier",
+            "created_at",
+        ),
+        Index(
+            "ix_browser_qualification_adapter_form",
+            "adapter_name",
+            "adapter_version",
+            "form_fingerprint",
         ),
     )
 
@@ -934,6 +992,7 @@ class OperatorApprovedAnswer(Base):
     adapter_version = Column(String(32), nullable=False)
     selector_version = Column(String(64), nullable=False)
     form_fingerprint = Column(String(64), nullable=False)
+    field_contract_fingerprint = Column(String(64), nullable=True)
     policy_version = Column(String(64), nullable=False)
     answer_json = Column(Text, nullable=False)
     evidence_source = Column(
@@ -975,6 +1034,11 @@ class OperatorApprovedAnswer(Base):
             "AND length(answer_json) BETWEEN 1 AND 4000",
             name="ck_operator_approved_answers_bounded_context",
         ),
+        CheckConstraint(
+            "field_contract_fingerprint IS NULL OR "
+            f"{_sha256_check_sql('field_contract_fingerprint')}",
+            name="ck_operator_approved_answers_field_contract",
+        ),
         Index(
             "ix_operator_approved_answers_lookup",
             "canonical_field",
@@ -988,6 +1052,14 @@ class OperatorApprovedAnswer(Base):
             "selector_version",
             "form_fingerprint",
             "policy_version",
+        ),
+        Index(
+            "ix_operator_approved_answers_field_contract",
+            "adapter_name",
+            "adapter_version",
+            "selector_version",
+            "field_contract_fingerprint",
+            "revoked_at",
         ),
         Index("ix_operator_approved_answers_revoked_at", "revoked_at"),
     )

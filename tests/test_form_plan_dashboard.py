@@ -23,7 +23,7 @@ def test_dashboard_renders_exact_observed_fields_and_confirmation_controls() -> 
     assert "plan_id: plan.plan_id" in APP_JS
 
 
-def test_confirmation_refreshes_a_stale_plan_without_logging_the_answer() -> None:
+def test_confirmation_preserves_api_detail_and_refreshes_only_stale_plans() -> None:
     confirmation_flow = APP_JS.split(
         "async function confirmFormAnswer(appId, plan, index)",
         maxsplit=1,
@@ -32,11 +32,48 @@ def test_confirmation_refreshes_a_stale_plan_without_logging_the_answer() -> Non
         maxsplit=1,
     )[0]
     assert "if (result.status === 409)" in confirmation_flow
-    assert "Loading the latest plan" in confirmation_flow
+    assert "boundedApiError(" in confirmation_flow
+    assert "['FORM_CHANGED', 'ANSWER_POLICY_CHANGED'].includes(reasonCode)" in confirmation_flow
     assert "renderFormPlanPanel(appId, refreshed.data)" in confirmation_flow
     assert "showToast(value" not in confirmation_flow
     assert "console." not in confirmation_flow
     assert "Answer confirmed. Review the updated plan, then prepare again." in confirmation_flow
+    assert "Reusable answer saved. Reinspect the employer form" in confirmation_flow
+    assert "The form changed while you were reviewing it" not in confirmation_flow
+
+
+def test_partial_plan_requires_scoped_reuse_then_reinspection() -> None:
+    control = APP_JS.split(
+        "function formAnswerControl(field, decision, index, reviewable, partialPlan)",
+        maxsplit=1,
+    )[1].split(
+        "function renderFormPlanPanel",
+        maxsplit=1,
+    )[0]
+    confirmation = APP_JS.split(
+        "async function confirmFormAnswer(appId, plan, index)",
+        maxsplit=1,
+    )[1].split(
+        "window.openReviewModal",
+        maxsplit=1,
+    )[0]
+    panel = APP_JS.split(
+        "function renderFormPlanPanel(appId, plan)",
+        maxsplit=1,
+    )[1].split(
+        "function readFormAnswer",
+        maxsplit=1,
+    )[0]
+
+    assert "checked required" in control
+    assert "save as a scoped reusable answer" in control
+    assert "partialPlan && !field.canonical_name" in control
+    assert "Partial plans require a scoped reusable answer" in confirmation
+    assert "this partial plan cannot be prepared" in confirmation
+    assert "FORM_PLAN_INCOMPLETE" in panel
+    assert "Preparation is unavailable for this partial plan" in panel
+    assert "run Inspect application form again" in panel
+    assert "A partial inspection cannot be prepared" in INDEX_HTML
 
 
 def test_browser_constraints_supplement_authoritative_server_validation() -> None:
@@ -127,6 +164,34 @@ def test_send_requires_exact_audited_model_identities() -> None:
     assert "application?.form_plan_uses_local_llm === true" in blockers
     assert "application.form_plan_llm_prompt_version !== QUALIFIED_FORM_PROMPT_VERSION" in blockers
     assert "application.form_plan_llm_model_digest !== runtimeModel.digest" in blockers
+
+
+def test_send_requires_exact_live_qualified_adapter_and_form_scope() -> None:
+    assert "probeJson('/api/ats/adapters')" in APP_JS
+    assert "adapterCapabilities: null" in APP_JS
+    assert "function cacheFormPlanIdentity(application, plan)" in APP_JS
+    qualification = APP_JS.split(
+        "function adapterQualificationBlockers(application)",
+        maxsplit=1,
+    )[1].split(
+        "function liveSendBlockers",
+        maxsplit=1,
+    )[0]
+    assert "adapter.adapter_version === adapterVersion" in qualification
+    assert "adapter.selector_version === selectorVersion" in qualification
+    assert "capability.final_execution_enabled !== true" in qualification
+    assert "capability.qualified_form_scope" in qualification
+    assert "!qualifiedScope.includes(fingerprint)" in qualification
+    assert "outside the qualified live scope" in qualification
+
+    blockers = APP_JS.split(
+        "function liveSendBlockers(application)",
+        maxsplit=1,
+    )[1].split(
+        "function renderApplications",
+        maxsplit=1,
+    )[0]
+    assert "blockers.push(...adapterQualificationBlockers(application));" in blockers
 
 
 def test_send_rechecks_form_plan_expiry_and_invalidation_at_click_time() -> None:
