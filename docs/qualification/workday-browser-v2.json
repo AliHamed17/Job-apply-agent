@@ -1,9 +1,9 @@
 {
   "adapter": {
     "adapter_name": "workday",
-    "adapter_version": "2.0.0",
+    "adapter_version": "2.0.3",
     "execution_contract_version": "two-phase-v2",
-    "selector_version": "workday-candidate-v2",
+    "selector_version": "workday-candidate-v2.4",
     "transport": "browser"
   },
   "achieved_tier": "fixture_qualified",
@@ -49,7 +49,7 @@
         "expected_reason_code": null,
         "expected_state": "review",
         "file": "review.html",
-        "sha256": "e317aff838db55bf06e9ca83756b8ecd345d7c96fcbadcfc7cb19c74d771d77a"
+        "sha256": "626b88380a54c833e2cb83c81c03e8a26064fc1c78c8b8459da9fa1d0813d0cd"
       },
       {
         "expected_reason_code": "SELECTOR_DRIFT",
@@ -64,9 +64,9 @@
         "sha256": "06c71ce3703beec7c374989b4556813b2754261ff16b4ab04e63358e57ebdec0"
       }
     ],
-    "digest_algorithm": "sha256-manifest-v1",
+    "digest_algorithm": "sha256-lf-normalized-manifest-v1",
     "fixture_count": 9,
-    "fixture_digest": "2f0dcda0a633b37472010ca7d87ba3681a7b9a28f39ecba893c04020c252dc99",
+    "fixture_digest": "b803a391f157e3cc98fcbb3ff9f8cf04083beab6f1adb326e66cf09262116fc2",
     "fixture_directory": "tests/fixtures/workday_v2"
   },
   "interpretation": "Sanitized offline fixture qualification only. It does not qualify a real form, a live canary, or an external final action.",
@@ -81,6 +81,14 @@
   "safety_observations": {
     "external_network_used": false,
     "final_action_performed": false,
+    "final_request_resource_type": "document",
+    "final_control_guards": [
+      "enabled",
+      "aria_enabled",
+      "outside_inert_subtree",
+      "visible_positive_geometry",
+      "pointer_actionable"
+    ],
     "private_data_used": false,
     "real_application_used": false,
     "stored_content_scope": [

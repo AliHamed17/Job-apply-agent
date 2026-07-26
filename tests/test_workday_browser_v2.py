@@ -37,6 +37,9 @@ from submitters.workday_v2 import (
     WorkdayAttachmentProof,
     WorkdayBrowserSnapshot,
     WorkdayBrowserV2,
+    WorkdayFinalActionAmbiguousError,
+    WorkdayFinalActionReceipt,
+    WorkdayFinalCommitExpectation,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "workday_v2"
@@ -59,6 +62,12 @@ class _FakeSession:
         step_html: tuple[str, ...] | None = None,
         browser_confirmation_visible: bool = True,
         mutate_path_on_upload: Path | None = None,
+        pre_click_html: str | None = None,
+        pre_click_url: str | None = None,
+        invalidate_attachment_before_commit: bool = False,
+        post_receipt_snapshot_error: ReasonCode | None = None,
+        post_receipt_confirmation_error: ReasonCode | None = None,
+        confirmation_reference_override: str = "",
     ) -> None:
         self._steps = list(step_html or (_fixture(initial), _fixture("review.html")))
         self.html = self._steps.pop(0)
@@ -67,15 +76,25 @@ class _FakeSession:
         self.click_error = click_error
         self.browser_confirmation_visible = browser_confirmation_visible
         self.mutate_path_on_upload = mutate_path_on_upload
+        self.pre_click_html = pre_click_html
+        self.pre_click_url = pre_click_url
+        self.invalidate_attachment_before_commit = invalidate_attachment_before_commit
+        self.post_receipt_snapshot_error = post_receipt_snapshot_error
+        self.post_receipt_confirmation_error = post_receipt_confirmation_error
+        self.confirmation_reference_override = confirmation_reference_override
         self.attachment: WorkdayAttachmentProof | None = None
+        self.committed = False
         self.uploaded_bytes: list[bytes] = []
         self.navigate_calls: list[str] = []
         self.open_form_calls = 0
         self.fill_calls = []
         self.prepare_calls = 0
         self.click_calls = 0
+        self.snapshot_calls = 0
+        self.verify_attachment_calls = 0
         self.close_calls = 0
         self.close_loop_ids: list[int] = []
+        self.current_url = JOB_URL
 
     async def navigate(self, url: str) -> None:
         self.navigate_calls.append(url)
@@ -84,7 +103,15 @@ class _FakeSession:
         self.open_form_calls += 1
 
     async def snapshot(self) -> WorkdayBrowserSnapshot:
-        return WorkdayBrowserSnapshot(html=self.html, url=JOB_URL, locale="en")
+        self.snapshot_calls += 1
+        if self.committed and self.post_receipt_snapshot_error is not None:
+            raise WorkdayAdapterBlockedError(self.post_receipt_snapshot_error)
+        if self.snapshot_calls == 3:
+            if self.pre_click_html is not None:
+                self.html = self.pre_click_html
+            if self.pre_click_url is not None:
+                self.current_url = self.pre_click_url
+        return WorkdayBrowserSnapshot(html=self.html, url=self.current_url, locale="en")
 
     async def ensure_resume_attachment(
         self,
@@ -111,6 +138,13 @@ class _FakeSession:
         cv_id: str,
         expected_sha256: str,
     ) -> WorkdayAttachmentProof:
+        self.verify_attachment_calls += 1
+        if self.invalidate_attachment_before_commit and self.verify_attachment_calls >= 2:
+            return WorkdayAttachmentProof(
+                cv_id=cv_id,
+                cv_sha256=expected_sha256,
+                upload_complete=False,
+            )
         return self.attachment or WorkdayAttachmentProof(
             cv_id=cv_id,
             cv_sha256=expected_sha256,
@@ -126,13 +160,32 @@ class _FakeSession:
             raise AssertionError("unexpected reversible step advance")
         self.html = self._steps.pop(0)
 
-    async def click_final_action(self) -> None:
+    async def commit_final_action(
+        self,
+        expectation: WorkdayFinalCommitExpectation,
+    ) -> WorkdayFinalActionReceipt:
         self.click_calls += 1
         if self.click_error:
-            raise TimeoutError("synthetic post-click ambiguity")
+            raise WorkdayFinalActionAmbiguousError("synthetic post-click ambiguity")
         self.html = self.post_click_html
+        self.committed = True
+        payload_sha256 = "c" * 64
+        request_digest = hashlib.sha256(
+            (
+                f"workday-final-request-v1|{expectation.request_contract.digest}|{payload_sha256}"
+            ).encode()
+        ).hexdigest()
+        return WorkdayFinalActionReceipt(
+            target_digest=expectation.request_contract.digest,
+            payload_sha256=payload_sha256,
+            request_digest=request_digest,
+        )
 
     async def confirmation_reference(self) -> str | None:
+        if self.post_receipt_confirmation_error is not None:
+            raise WorkdayAdapterBlockedError(self.post_receipt_confirmation_error)
+        if self.confirmation_reference_override:
+            return self.confirmation_reference_override
         if not self.browser_confirmation_visible:
             return None
         node = BeautifulSoup(self.html, "html.parser").select_one(
@@ -258,6 +311,29 @@ def _email_step() -> str:
     """
 
 
+def _review_with_field_drift() -> str:
+    return f"""
+    <form data-automation-id="reviewPage" action="{JOB_URL}/apply" method="post"
+          enctype="multipart/form-data">
+      <div data-automation-id="formField" data-field-id="first_name"
+           data-canonical-name="first_name" aria-required="true">
+        <label for="changed-first-name">Changed first name</label>
+        <input id="changed-first-name" type="text" maxlength="40" required>
+      </div>
+      <button data-automation-id="submitApplication" type="submit">Submit</button>
+    </form>
+    """
+
+
+def _review_with_action(action: str) -> str:
+    return f"""
+    <form data-automation-id="reviewPage" action="{action}" method="post"
+          enctype="multipart/form-data">
+      <button data-automation-id="submitApplication" type="submit">Submit</button>
+    </form>
+    """
+
+
 async def _inspect(
     tmp_path: Path,
     session: _FakeSession,
@@ -314,6 +390,28 @@ def _live_descriptor(fingerprint: str):
         qualification=QualificationTier.LIVE_CANARY_QUALIFIED,
         qualified_form_scope=(fingerprint,),
     )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://status.workday.com/job/fake",
+        "https://api.wd5.myworkdayjobs.com/job/fake",
+        "https://www.myworkday.com/job/fake",
+    ],
+)
+def test_non_candidate_workday_hosts_cannot_enter_adapter(url: str) -> None:
+    factory = _SessionFactory()
+    adapter = WorkdayBrowserV2(
+        browser_factory=factory,
+        clock=lambda: NOW,
+    )
+
+    assert (
+        adapter.can_inspect(JobData(title="Spoofed role", company="Spoofed", apply_url=url))
+        is False
+    )
+    assert factory.urls == []
 
 
 @pytest.mark.asyncio
@@ -393,6 +491,34 @@ async def test_preflight_never_advances_through_an_unplanned_later_step(tmp_path
     assert result.reason_code is ReasonCode.FORM_CHANGED
     assert preflight_session.prepare_calls == 1
     assert len(preflight_session.fill_calls) == 1
+    assert preflight_session.click_calls == 0
+    await adapter.cleanup_prepared_action(action=None)
+
+
+@pytest.mark.asyncio
+async def test_review_to_preflight_action_drift_cannot_prepare_a_click(tmp_path) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        step_html=(
+            _fixture("resume_upload.html"),
+            _review_with_action(f"{JOB_URL}/apply?source=changed"),
+        )
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+
+    outcome = await adapter.preflight(
+        plan=plan,
+        permit=_permit(plan),
+        context=_context(resume_path, cv_hash),
+    )
+
+    assert isinstance(outcome, NeedsReviewOutcome)
+    assert outcome.reason_code is ReasonCode.FORM_CHANGED
     assert preflight_session.click_calls == 0
     await adapter.cleanup_prepared_action(action=None)
 
@@ -707,6 +833,253 @@ async def test_static_confirmation_markup_without_browser_visibility_is_unknown(
 
     assert isinstance(outcome, UnknownOutcome)
     assert outcome.reason_code is ReasonCode.FINAL_ACTION_UNCONFIRMED
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", ["snapshot", "reference"])
+async def test_every_post_receipt_guard_error_is_unknown(
+    tmp_path,
+    failure_point,
+) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        post_receipt_snapshot_error=(
+            ReasonCode.FORM_CHANGED if failure_point == "snapshot" else None
+        ),
+        post_receipt_confirmation_error=(
+            ReasonCode.SESSION_EXPIRED if failure_point == "reference" else None
+        ),
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert isinstance(outcome, UnknownOutcome)
+    assert outcome.reason_code is ReasonCode.FINAL_ACTION_UNCONFIRMED
+    assert preflight_session.click_calls == 1
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+async def test_browser_reference_must_match_exact_post_action_snapshot(
+    tmp_path,
+) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        confirmation_reference_override="DIFFERENT-SANITIZED-REFERENCE",
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert isinstance(outcome, UnknownOutcome)
+    assert outcome.reason_code is ReasonCode.FINAL_ACTION_UNCONFIRMED
+    assert preflight_session.click_calls == 1
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+async def test_post_receipt_evidence_verifier_error_is_unknown(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession()
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    def _raise_after_receipt(*_args, **_kwargs):
+        raise RuntimeError("synthetic evidence verifier failure")
+
+    monkeypatch.setattr(
+        "submitters.workday_v2.verify_submission_evidence",
+        _raise_after_receipt,
+    )
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert isinstance(outcome, UnknownOutcome)
+    assert outcome.reason_code is ReasonCode.FINAL_ACTION_UNCONFIRMED
+    assert preflight_session.click_calls == 1
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_confirmation_inserted_after_preflight_before_click(
+    tmp_path,
+) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        pre_click_html=_fixture("verified_confirmation.html"),
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert not isinstance(outcome, ConfirmedSubmittedOutcome)
+    assert preflight_session.click_calls == 0
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_form_fingerprint_drift_before_click(tmp_path) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        pre_click_html=_review_with_field_drift(),
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert isinstance(outcome, NeedsReviewOutcome)
+    assert outcome.reason_code is ReasonCode.FORM_CHANGED
+    assert preflight_session.click_calls == 0
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_final_action_target_drift_before_click(tmp_path) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        pre_click_html=_review_with_action(f"{JOB_URL}/apply"),
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert isinstance(outcome, NeedsReviewOutcome)
+    assert outcome.reason_code is ReasonCode.FORM_CHANGED
+    assert preflight_session.click_calls == 0
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_attachment_invalidation_before_click(tmp_path) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        invalidate_attachment_before_commit=True,
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert isinstance(outcome, NeedsReviewOutcome)
+    assert outcome.reason_code is ReasonCode.ATTACHMENT_UNVERIFIED
+    assert preflight_session.click_calls == 0
+    await adapter.cleanup_prepared_action(action=action)
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_same_tenant_other_job_redirect_before_click(
+    tmp_path,
+) -> None:
+    inspect_session = _FakeSession()
+    _adapter, plan, resume_path, cv_hash = await _inspect(tmp_path, inspect_session)
+    preflight_session = _FakeSession(
+        pre_click_url="https://fixture.wd5.myworkdayjobs.com/en-US/jobs/job/REQ-999",
+    )
+    adapter = WorkdayBrowserV2(
+        browser_factory=_SessionFactory(preflight_session),
+        descriptor=_live_descriptor(plan.form_fingerprint),
+        clock=lambda: NOW,
+    )
+    permit = _permit(plan)
+    action = await adapter.preflight(
+        plan=plan,
+        permit=permit,
+        context=_context(resume_path, cv_hash),
+    )
+    assert isinstance(action, PreparedFinalActionV1)
+
+    outcome = await adapter.commit(action=action, permit=permit)
+
+    assert isinstance(outcome, NeedsReviewOutcome)
+    assert outcome.reason_code is ReasonCode.FORM_CHANGED
+    assert preflight_session.click_calls == 0
     await adapter.cleanup_prepared_action(action=action)
 
 
