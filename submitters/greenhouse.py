@@ -13,6 +13,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -98,12 +99,16 @@ class GreenhouseSubmitter(BaseSubmitter):
                 )
 
                 if resp.status_code in (200, 201):
-                    data = resp.json()
+                    try:
+                        data = resp.json()
+                    except ValueError:
+                        data = {}
                     return SubmissionResult(
                         success=True,
                         platform=self.platform_name,
                         status="submitted",
                         confirmation_id=str(data.get("id", "")),
+                        reason_code="SUBMITTED",
                     )
                 else:
                     return SubmissionResult(
@@ -145,8 +150,10 @@ class GreenhouseSubmitter(BaseSubmitter):
             if self.detect_captcha(await page.content()):
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform="greenhouse", status="captcha_blocked",
-                    error="CAPTCHA detected on Greenhouse application page"
+                    success=False,
+                    platform="greenhouse",
+                    status="captcha_blocked",
+                    error="CAPTCHA detected on Greenhouse application page",
                 )
 
             personal = user_profile.get("personal", {})
@@ -170,7 +177,6 @@ class GreenhouseSubmitter(BaseSubmitter):
             ph_loc = page.locator('input[name="phone"], input[type="tel"]').first
             if await ph_loc.is_visible(timeout=3000):
                 await ph_loc.fill(personal.get("phone", ""))
-
 
             # Resume
             if resume_path:
@@ -203,32 +209,46 @@ class GreenhouseSubmitter(BaseSubmitter):
                 logger.info("greenhouse_needs_review", blocked=blocked)
                 await browser.close()
                 return SubmissionResult(
-                    success=True, platform="greenhouse", status="draft_only",
-                    error=needs_review_error(blocked)
+                    success=True,
+                    platform="greenhouse",
+                    status="draft_only",
+                    error=needs_review_error(blocked),
                 )
 
-            # Submit
-            await page.click('button#submit_app')
-            await page.wait_for_timeout(3000)
-
-            success = (
-                "confirmation" in page.url
-                or "applied" in page.url.lower()
-                or "success" in page.url.lower()
-            )
-
+            submit_btn = page.locator("button#submit_app").first
+            if not await submit_btn.is_visible(timeout=2000):
+                await browser.close()
+                return SubmissionResult(
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error="NEEDS_REVIEW:SUBMIT_BUTTON_UNAVAILABLE",
+                    reason_code="SELECTOR_DRIFT",
+                )
+            try:
+                await submit_btn.click()
+                await page.wait_for_timeout(3000)
+                result = browser_submission_result(
+                    platform=self.platform_name,
+                    page_url=page.url,
+                    html=await page.content(),
+                )
+            except Exception:
+                result = SubmissionResult(
+                    success=False,
+                    platform=self.platform_name,
+                    status="unknown",
+                    error="SUBMIT_OUTCOME_UNKNOWN",
+                    reason_code="SUBMIT_UNCONFIRMED",
+                )
             await browser.close()
-            return SubmissionResult(
-                success=success,
-                platform="greenhouse",
-                status="submitted" if success else "failed",
-                error=None if success else "Redirected to unknown page after submission"
-            )
+            return result
 
     @staticmethod
     def _extract_job_id(url: str) -> str | None:
         """Extract the Greenhouse job ID from a URL."""
         import re
+
         # Pattern: /jobs/12345 or /jobs/12345-...
         match = re.search(r"/jobs/(\d+)", url)
         return match.group(1) if match else None

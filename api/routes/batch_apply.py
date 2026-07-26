@@ -21,6 +21,8 @@ class BatchApplyResponse(BaseModel):
     triggered_count: int
     skipped_count: int
     job_ids: list[int] = Field(default_factory=list)
+    application_ids: list[int] = Field(default_factory=list)
+    message: str
 
 
 @router.post("/control/batch-apply", response_model=BatchApplyResponse)
@@ -28,7 +30,7 @@ async def trigger_batch_apply_queue(
     payload: BatchApplyRequest,
     db: Session = Depends(get_db),
 ):
-    """Trigger batch auto-application queue for top-scoring jobs."""
+    """Preview a score-filtered batch; this endpoint never approves it."""
     summary = trigger_batch_auto_apply(
         db,
         min_score=payload.min_score,
@@ -39,4 +41,9 @@ async def trigger_batch_apply_queue(
         triggered_count=summary.triggered_count,
         skipped_count=summary.skipped_count,
         job_ids=summary.job_ids,
+        application_ids=summary.application_ids,
+        message=(
+            "Review the listed applications, then approve the exact IDs with "
+            "POST /api/applications/batch-approve."
+        ),
     )

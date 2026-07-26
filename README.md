@@ -69,7 +69,13 @@ copy .env.example .env
 
 ### 3. Edit your profile
 
-Edit `user_profile.yaml` with your real details (name, resume, preferences).
+```bash
+copy user_profile.yaml.example user_profile.yaml
+```
+
+Edit the ignored `user_profile.yaml` with your real details. Personal profiles,
+`cv_routing.yaml`, and the `cvs/` directory are local-only; commit only their
+sanitized `.example` templates.
 
 ### 4. Run the server
 
@@ -121,27 +127,31 @@ curl -X POST http://localhost:8000/api/ingest \
 | Mode | Env Var | Default | Behavior |
 |------|---------|---------|----------|
 | Draft Only | `DRAFT_ONLY=true` | **true** | Generate applications but never auto-submit |
-| Auto Apply | `AUTO_APPLY=true` | **false** | Auto-submit high-score jobs (only if DRAFT_ONLY=false) |
+| Auto Prepare | `AUTO_APPLY=true` | **false** | Mark high-score jobs eligible for an explicit review batch |
+| Dry Run | `DRY_RUN=true` | **true in `.env.example`** | Prevent every external submitter from running |
 
-## Full-Auto Mode
+## Continuous preparation and controlled submission
 
-The agent can run end-to-end without a human clicking "approve" for every job: discover LinkedIn jobs on a schedule, score them, generate application materials, and submit — all inside governor-enforced safety rails. This is the `FULL_AUTO` preset.
+The scheduler can discover, score, route a CV, and prepare every suitable job
+without repeated instructions. A score never approves an employment
+application. Review one application or select an exact batch in the dashboard;
+the submission worker then handles the approved set.
 
-### Enabling the FULL_AUTO preset
+### Enabling continuous preparation
 
 Set these in `.env` (see `.env.example`):
 
 ```bash
-DRAFT_ONLY=false
 AUTO_APPLY=true
 MIN_APPLY_SCORE=40
 TASKS_ALWAYS_EAGER=false
 ```
 
-- `DRAFT_ONLY=false` — allows the submit task to actually submit (instead of only drafting).
-- `AUTO_APPLY=true` — lets the pipeline auto-submit jobs that clear the score bar, instead of always parking them for manual approval.
-- `MIN_APPLY_SCORE=40` — the minimum match score (0–100) a job must reach before auto-apply will submit it; lower-scoring jobs still land in the dashboard for manual review.
-- `TASKS_ALWAYS_EAGER=false` — runs Celery tasks asynchronously through Redis/`celery-worker`/`celery-beat` instead of synchronously in-process. Full-auto discovery and scheduled beat tasks **require** a real broker, so this must be `false` for full-auto (it can stay `true` for local dev without Redis/Docker).
+- `AUTO_APPLY=true` — computes eligibility for the review queue; it does not
+  bypass approval.
+- `MIN_APPLY_SCORE=40` — minimum score for batch-review eligibility.
+- `TASKS_ALWAYS_EAGER=false` — uses Redis, Celery worker, and Celery Beat for
+  scheduled processing.
 
 Bring up the full stack (Postgres, Redis, web API, worker, and the scheduler) with:
 
@@ -151,7 +161,7 @@ docker-compose up -d
 
 `celery-beat` is the scheduler that periodically triggers LinkedIn discovery (`DISCOVERY_INTERVAL_H`) and digest/outbound jobs; `celery-worker` consumes the `ingestion`, `processing`, `llm`, `submission`, and `discovery` queues.
 
-### One-time LinkedIn login
+### One-time browser sessions
 
 LinkedIn discovery and Easy Apply drive a real, persistent browser profile rather than the LinkedIn API (there is no public API for this). Before enabling full-auto, log in once interactively so the session cookie is saved to `LINKEDIN_BROWSER_PROFILE_DIR` (default `.linkedin_profile/`):
 
@@ -160,6 +170,17 @@ python -m discovery.login
 ```
 
 A browser window opens to the LinkedIn login page — complete login and any 2FA challenge manually. The script detects a successful login (redirect to `/feed`) and closes the window, leaving the authenticated profile on disk for the worker to reuse. Re-run this whenever the session expires or LinkedIn forces a re-login.
+
+For Workday and employer portals, create a tenant-isolated session without
+extracting browser passwords:
+
+```bash
+python -m scripts.portal_session_bootstrap "https://employer.wd5.myworkdayjobs.com/job/..."
+```
+
+See [Employer application automation](docs/employer-automation.md) for the
+NVIDIA/Workday flow, exact batch approval, confirmed evidence, platform
+coverage, audit history, and deployment constraints.
 
 ### Uploading your CV
 
@@ -280,7 +301,7 @@ job-agent/
 │   └── tasks.py            # 5-stage pipeline with approval enforcement
 ├── tests/                  # Unit tests
 ├── .env.example            # Environment variables template
-├── user_profile.yaml       # User profile template
+├── user_profile.yaml.example # Sanitized profile template
 └── pyproject.toml          # Project metadata and dependencies
 ```
 
@@ -288,13 +309,15 @@ job-agent/
 
 | Item | Status | Notes |
 |------|--------|-------|
-| No plaintext credentials | ✅ | All secrets via env vars / `.env` |
+| No plaintext portal credentials | ✅ | Dedicated signed-in profiles; no Chrome/Edge password extraction |
 | Webhook signature verification | ✅ | X-Hub-Signature-256 from Meta |
 | API bearer token auth | ✅ | Middleware checks `SECRET_KEY` |
 | Rate limiting | ✅ | Per-IP middleware, Celery rate limits |
 | Allowed sender whitelist | ✅ | `ALLOWED_SENDERS` env var |
-| DRAFT_ONLY default | ✅ | No auto-submission without explicit opt-in |
-| Approval enforcement | ✅ | Submit task validates `status == APPROVED` |
+| DRAFT_ONLY default | ✅ | No external submission by default |
+| Approval enforcement | ✅ | Score eligibility never replaces exact operator approval |
+| Verified confirmation | ✅ | Clicks/timeouts never count as submitted |
+| Unknown reconciliation | ✅ | Indeterminate outcomes cannot auto-retry |
 | robots.txt compliance | ✅ | Checked before fetching pages |
 | Polite crawling | ✅ | Configurable delay between fetches |
 | No CAPTCHA bypass | ✅ | Detects and switches to draft-only |

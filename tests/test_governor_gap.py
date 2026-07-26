@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import random
+from concurrent.futures import ThreadPoolExecutor
 
 from core.config import Settings
 from core.governor import RateGovernor
@@ -65,3 +66,78 @@ def test_gap_does_not_affect_shared_can_act():
     assert ok is True  # can_act unaffected
     ok_li, _ = gov.can_apply_linkedin()
     assert ok_li is False  # only the LinkedIn-apply gate blocks
+
+
+def test_final_action_reservation_is_idempotent_and_consumes_unknown_click_budget():
+    gov = _gov(_Clock())
+
+    assert gov.reserve_final_action(
+        reservation_id="attempt-1",
+        platform="linkedin",
+    )[0]
+    assert gov.applications_today() == 1
+    assert gov.reserve_final_action(
+        reservation_id="attempt-1",
+        platform="linkedin",
+    )[0]
+    assert gov.applications_today() == 1
+    allowed, reason = gov.reserve_final_action(
+        reservation_id="attempt-2",
+        platform="linkedin",
+    )
+    assert allowed is False
+    assert "gap" in reason
+
+
+def test_existing_reservation_cannot_bypass_a_new_kill_switch():
+    gov = _gov(_Clock())
+    reservation = {
+        "reservation_id": "attempt-killed-after-reservation",
+        "platform": "linkedin",
+    }
+
+    assert gov.reserve_final_action(**reservation) == (True, "reserved")
+    assert gov.applications_today() == 1
+    gov.kill()
+
+    allowed, reason = gov.reserve_final_action(**reservation)
+
+    assert allowed is False
+    assert reason == "kill switch active"
+    assert gov.applications_today() == 1
+
+
+def test_existing_reservation_cannot_bypass_a_new_challenge_cooldown():
+    gov = _gov(_Clock())
+    reservation = {
+        "reservation_id": "attempt-cooled-after-reservation",
+        "platform": "linkedin",
+    }
+
+    assert gov.reserve_final_action(**reservation) == (True, "reserved")
+    assert gov.applications_today() == 1
+    gov.trip_cooldown()
+
+    allowed, reason = gov.reserve_final_action(**reservation)
+
+    assert allowed is False
+    assert reason == "in challenge cooldown"
+    assert gov.applications_today() == 1
+
+
+def test_concurrent_final_action_reservations_have_one_winner():
+    gov = _gov(_Clock())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda attempt_id: gov.reserve_final_action(
+                    reservation_id=attempt_id,
+                    platform="linkedin",
+                ),
+                ("attempt-a", "attempt-b"),
+            )
+        )
+
+    assert sum(allowed for allowed, _reason in results) == 1
+    assert gov.applications_today() == 1

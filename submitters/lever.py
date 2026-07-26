@@ -12,6 +12,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -97,12 +98,16 @@ class LeverSubmitter(BaseSubmitter):
                     )
 
                     if resp.status_code in (200, 201):
-                        data = resp.json()
+                        try:
+                            data = resp.json()
+                        except ValueError:
+                            data = {}
                         return SubmissionResult(
                             success=True,
                             platform=self.platform_name,
                             status="submitted",
                             confirmation_id=str(data.get("applicationId", "")),
+                            reason_code="SUBMITTED",
                         )
                     else:
                         return SubmissionResult(
@@ -155,8 +160,10 @@ class LeverSubmitter(BaseSubmitter):
             if self.detect_captcha(await page.content()):
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform="lever", status="captcha_blocked",
-                    error="CAPTCHA detected on Lever application page"
+                    success=False,
+                    platform="lever",
+                    status="captcha_blocked",
+                    error="CAPTCHA detected on Lever application page",
                 )
 
             personal = user_profile.get("personal", {})
@@ -166,7 +173,7 @@ class LeverSubmitter(BaseSubmitter):
             await page.fill('input[name="name"]', personal.get("name", ""))
             await page.fill('input[name="email"]', personal.get("email", ""))
             await page.fill('input[name="phone"]', personal.get("phone", ""))
-            await page.fill('input[name="org"]', "") # current company
+            await page.fill('input[name="org"]', "")  # current company
 
             # Links
             if links.get("linkedin"):
@@ -196,28 +203,46 @@ class LeverSubmitter(BaseSubmitter):
             if blocked:
                 await browser.close()
                 return SubmissionResult(
-                    success=True, platform="lever", status="draft_only",
-                    error=needs_review_error(blocked)
+                    success=True,
+                    platform="lever",
+                    status="draft_only",
+                    error=needs_review_error(blocked),
                 )
 
-            # Submit
-            await page.click('button#btn-submit')
-            await page.wait_for_timeout(3000)
-
-            success = "thank-you" in page.url or "applied" in page.url.lower()
-
+            submit_btn = page.locator("button#btn-submit").first
+            if not await submit_btn.is_visible(timeout=2000):
+                await browser.close()
+                return SubmissionResult(
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error="NEEDS_REVIEW:SUBMIT_BUTTON_UNAVAILABLE",
+                    reason_code="SELECTOR_DRIFT",
+                )
+            try:
+                await submit_btn.click()
+                await page.wait_for_timeout(3000)
+                result = browser_submission_result(
+                    platform=self.platform_name,
+                    page_url=page.url,
+                    html=await page.content(),
+                )
+            except Exception:
+                result = SubmissionResult(
+                    success=False,
+                    platform=self.platform_name,
+                    status="unknown",
+                    error="SUBMIT_OUTCOME_UNKNOWN",
+                    reason_code="SUBMIT_UNCONFIRMED",
+                )
             await browser.close()
-            return SubmissionResult(
-                success=success,
-                platform="lever",
-                status="submitted" if success else "failed",
-                error=None if success else "Redirected to unknown page after submission"
-            )
+            return result
 
     @staticmethod
     def _extract_posting_id(url: str) -> str | None:
         """Extract the Lever posting UUID from a URL."""
         import re
+
         # Pattern: lever.co/company/UUID or jobs.lever.co/company/UUID
         match = re.search(
             r"lever\.co/[^/]+/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
@@ -229,6 +254,7 @@ class LeverSubmitter(BaseSubmitter):
     def _extract_company(url: str) -> str | None:
         """Extract the company slug from a Lever URL."""
         import re
+
         # Match company slug after lever.co/
         match = re.search(r"lever\.co/([^/]+)", url)
         return match.group(1) if match else None

@@ -22,12 +22,13 @@ _ALLOWED_KEYS = {
 
 @dataclass
 class RedactedTrace:
+    selector_version: str = SELECTOR_VERSION
     events: list[dict[str, Any]] = field(default_factory=list)
 
     def record(self, event: str, **details: Any) -> None:
         payload = {
             "event": event,
-            "selector_version": SELECTOR_VERSION,
+            "selector_version": self.selector_version,
             "timestamp": datetime.now(UTC).isoformat(),
             **details,
         }
@@ -44,7 +45,7 @@ class RedactedTrace:
         )
         report = {
             "qualified": qualified,
-            "selector_version": SELECTOR_VERSION,
+            "selector_version": self.selector_version,
             "terminal_reason": terminal,
             "events": self.events,
             "privacy": (
@@ -52,6 +53,4 @@ class RedactedTrace:
                 "emails, or phone numbers are retained."
             ),
         }
-        Path(path).write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        Path(path).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -39,9 +39,11 @@ except ImportError:  # pragma: no cover - exercised in dependency-light smokes
             for name in metric_names
         ).encode()
 
+
 from api.routes.ab_testing import router as ab_testing_router
 from api.routes.analytics import router as analytics_router
 from api.routes.applications import router as applications_router
+from api.routes.ats import router as ats_router
 from api.routes.audit import router as audit_router
 from api.routes.batch_apply import router as batch_apply_router
 from api.routes.batch_rescore import router as batch_rescore_router
@@ -63,6 +65,7 @@ from api.routes.jobs import router as jobs_router
 from api.routes.outreach import router as outreach_router
 from api.routes.profile import router as profile_router
 from api.routes.realign import router as realign_router
+from api.routes.runtime import router as runtime_router
 from api.routes.salary import router as salary_router
 from api.routes.skill_gaps import router as skill_gaps_router
 from api.routes.spotlight import router as spotlight_router
@@ -75,20 +78,61 @@ from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
 from core.operations import rate_limit_allowed, readiness_report
+from core.runtime_identity import (
+    compute_source_digest,
+    compute_ui_asset_digest,
+    get_runtime_identity,
+)
+from core.single_instance import acquire_dashboard_instance_lock
 from db.session import init_db
 
 # Setup structured logging
 setup_logging()
 logger = structlog.get_logger(__name__)
 
+_PUBLIC_READ_PATHS = frozenset(
+    {
+        "/",
+        "/health",
+        "/health/live",
+        "/health/ready",
+        "/metrics",
+        "/openapi.json",
+        "/favicon.ico",
+    }
+)
+_PUBLIC_READ_PREFIXES = ("/static", "/docs", "/redoc")
+
+
+def _is_public_read(request: Request) -> bool:
+    """Return whether a dependency probe or static UI request is read-only."""
+    if request.method not in {"GET", "HEAD"}:
+        return False
+    path = request.url.path
+    return path in _PUBLIC_READ_PATHS or path.startswith(_PUBLIC_READ_PREFIXES)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings.validate_runtime()
-    init_db()
-    logger.info(
-        "app_started", draft_only=settings.draft_only, auto_apply=settings.auto_apply
+    identity = get_runtime_identity()
+    instance_lock = acquire_dashboard_instance_lock(
+        app_env=settings.app_env,
+        boot_id=identity.boot_id,
     )
-    yield
+    try:
+        init_db()
+        logger.info(
+            "app_started",
+            draft_only=settings.draft_only,
+            auto_apply=settings.auto_apply,
+            build_sha=identity.build_sha,
+            boot_id=identity.boot_id,
+        )
+        yield
+    finally:
+        if instance_lock is not None:
+            instance_lock.release()
 
 
 # ── App creation ─────────────────────────────────────────
@@ -113,8 +157,9 @@ app.add_middleware(
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """Redis-backed rate limiting, consistent across API processes."""
-    # Skip rate limiting for webhook (Meta sends bursts)
-    if request.url.path.startswith("/webhook"):
+    # Signed webhooks can arrive in bursts. Public probes and static dashboard
+    # assets must remain observable when Redis is the dependency that is down.
+    if request.url.path.startswith("/webhook") or _is_public_read(request):
         return await call_next(request)
 
     peer_ip = request.client.host if request.client else "unknown"
@@ -126,9 +171,7 @@ async def rate_limit_middleware(request: Request, call_next):
     if client_ip == "127.0.0.1":
         return await call_next(request)
     try:
-        allowed = rate_limit_allowed(
-            client_ip, settings.rate_limit_requests_per_minute, settings
-        )
+        allowed = rate_limit_allowed(client_ip, settings.rate_limit_requests_per_minute, settings)
     except Exception:
         logger.exception("rate_limit_backend_unavailable")
         if settings.app_env == "production":
@@ -162,22 +205,24 @@ async def auth_middleware(request: Request, call_next):
 
     Exempt: signed webhook, liveness, metrics, and API documentation.
     """
-    exempt_paths = {
-        "/webhook/whatsapp",
-        "/health",
-        "/health/live",
-        "/metrics",
-        "/docs",
-        "/openapi.json",
-        "/redoc",
-        "/static",
-        "/favicon.ico",
-    }
-    if request.url.path == "/" or any(request.url.path.startswith(p) for p in exempt_paths):
+    if request.url.path == "/webhook/whatsapp" or _is_public_read(request):
         return await call_next(request)
 
-    if settings.app_env == "development" and settings.secret_key == "change-me":
-        return await call_next(request)
+    if settings.app_env == "development" and settings.operator_auth_is_placeholder:
+        prepare_only = (
+            settings.dry_run or settings.draft_only or not settings.portal_final_submit_enabled
+        )
+        if prepare_only:
+            return await call_next(request)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": {
+                    "code": "OPERATOR_AUTH_REQUIRED",
+                    "message": "Configure a strong operator API secret before live sending.",
+                }
+            },
+        )
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -201,6 +246,7 @@ async def auth_middleware(request: Request, call_next):
 async def correlation_id_middleware(request: Request, call_next):
     """Attach a correlation ID to every request for log tracing."""
     import structlog.contextvars
+
     correlation_id = request.headers.get("X-Correlation-ID", new_correlation_id())
     structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
     response = await call_next(request)
@@ -226,12 +272,14 @@ app.include_router(webhook_router)
 app.include_router(ingest_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
+app.include_router(ats_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
 app.include_router(profile_router)
 app.include_router(control_router)
 app.include_router(cv_routing_router, prefix="/api")
 app.include_router(realign_router, prefix="/api")
+app.include_router(runtime_router, prefix="/api")
 app.include_router(interview_prep_router, prefix="/api")
 app.include_router(widgets_router, prefix="/api")
 app.include_router(export_router, prefix="/api")
@@ -256,16 +304,6 @@ app.include_router(skill_gaps_router, prefix="/api")
 app.include_router(whatsapp_ingest_router, prefix="/api")
 
 
-
-
-
-
-
-
-
-
-
-
 # ── Static and Templates ─────────────────────────────────
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -274,6 +312,7 @@ os.makedirs(templates_dir, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates = Jinja2Templates(directory=templates_dir)
+
 
 # ── Health + Metrics ─────────────────────────────────────
 @app.get("/health")
@@ -295,7 +334,20 @@ async def health_ready():
 @app.get("/")
 async def serve_dashboard(request: Request):
     """Serve the main dashboard UI."""
-    return templates.TemplateResponse(request, "index.html")
+    identity = get_runtime_identity()
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "runtime_build_sha": identity.build_sha,
+            "runtime_ui_asset_digest": compute_ui_asset_digest(),
+            "runtime_source_digest": compute_source_digest(),
+            "runtime_protocol_version": identity.protocol_version,
+            "runtime_boot_id": identity.boot_id,
+            "runtime_started_at": identity.started_at.isoformat().replace("+00:00", "Z"),
+        },
+    )
+
 
 @app.get("/metrics")
 async def metrics():

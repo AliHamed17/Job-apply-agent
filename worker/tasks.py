@@ -39,6 +39,11 @@ def _get_db():
     return factory()
 
 
+def _validated_submit_command_available(_db, _application_id: int) -> bool:
+    """Fail closed until PR2 adds a durable, permit-backed command lookup."""
+    return False
+
+
 # ── Task 1: Process a message ─────────────────────────────
 
 
@@ -48,6 +53,7 @@ def process_message_task(self, message_id: int):
     db = _get_db()
     try:
         from db.models import Message
+
         msg = db.query(Message).filter(Message.id == message_id).first()
         if not msg:
             logger.warning("message_not_found", id=message_id)
@@ -61,9 +67,7 @@ def process_message_task(self, message_id: int):
             uhash = url_hash(normalized)
 
             # Dedup
-            existing = db.query(ExtractedURL).filter(
-                ExtractedURL.url_hash == uhash
-            ).first()
+            existing = db.query(ExtractedURL).filter(ExtractedURL.url_hash == uhash).first()
             if existing:
                 continue
 
@@ -137,6 +141,7 @@ def process_url_task(self, url_id: int):
         if not extraction.has_jobs:
             logger.info("try_vision_fallback", url=db_url.normalized_url)
             from jobs.extractor import extract_jobs_with_vision
+
             try:
                 extraction = run_async(extract_jobs_with_vision(db_url.normalized_url))
             except Exception as e:
@@ -149,9 +154,7 @@ def process_url_task(self, url_id: int):
 
         for job_data in extraction.jobs:
             # Dedup by job signature
-            sig = job_signature(
-                job_data.title, job_data.company, job_data.location
-            )
+            sig = job_signature(job_data.title, job_data.company, job_data.location)
             existing_job = db.query(Job).filter(Job.job_signature == sig).first()
             if existing_job:
                 logger.debug("duplicate_job", title=job_data.title)
@@ -160,9 +163,7 @@ def process_url_task(self, url_id: int):
             # Also dedup by apply_url
             apply_hash = url_hash(job_data.apply_url) if job_data.apply_url else None
             if apply_hash:
-                existing_apply = db.query(Job).filter(
-                    Job.apply_url_hash == apply_hash
-                ).first()
+                existing_apply = db.query(Job).filter(Job.apply_url_hash == apply_hash).first()
                 if existing_apply:
                     logger.debug("duplicate_apply_url", url=job_data.apply_url)
                     continue
@@ -228,23 +229,43 @@ def score_job_task(self, job_id: int):
         db_job = db.query(Job).filter(Job.id == job_id).first()
         if not db_job:
             return
+        app = db.query(Application).filter(Application.job_id == job_id).first()
+        if app is not None and app.status in {
+            JobStatus.SUBMITTED,
+            JobStatus.SKIPPED,
+        }:
+            logger.warning(
+                "terminal_application_regeneration_blocked",
+                application_id=app.id,
+                status=app.status.value,
+            )
+            return
+        expected_application_id = app.id if app is not None else None
+        expected_application_revision = int(app.revision or 1) if app is not None else None
+        expected_job_status = db_job.status
+        job_title = db_job.title
 
         profile = get_profile()
 
         # Convert DB model to JobData for scoring
         job_data = JobData(
-            title=db_job.title,
-            company=db_job.company,
-            location=db_job.location,
-            employment_type=db_job.employment_type,
-            seniority=db_job.seniority,
-            description=db_job.description,
-            requirements=db_job.requirements,
-            apply_url=db_job.apply_url,
+            title=db_job.title or "",
+            company=db_job.company or "",
+            location=db_job.location or "",
+            employment_type=db_job.employment_type or "",
+            seniority=db_job.seniority or "",
+            description=db_job.description or "",
+            requirements=db_job.requirements or "",
+            apply_url=db_job.apply_url or "",
             source_url=db_job.source_url,
-            date_posted=db_job.date_posted,
+            date_posted=db_job.date_posted or "",
             keywords=json.loads(db_job.keywords) if db_job.keywords else [],
         )
+
+        # Scoring can be CPU-heavy and can invoke profile loaders.  Keep no
+        # database transaction open while it runs, then re-lock the current
+        # Application -> Job state immediately before any persistence.
+        db.rollback()
 
         breakdown = score_job(job_data, profile)
         action = decide_action(
@@ -255,14 +276,74 @@ def score_job_task(self, job_id: int):
             min_apply_score=settings.min_apply_score,
         )
 
+        from core.application_mutations import (
+            ApplicationMutationBlockedError,
+            ApplicationMutationIntent,
+            lock_application_for_mutation,
+            lock_job_without_application_for_mutation,
+        )
+
+        if expected_application_id is not None:
+            try:
+                locked = lock_application_for_mutation(
+                    db,
+                    application_id=expected_application_id,
+                    intent=ApplicationMutationIntent.CONTENT,
+                    expected_revision=expected_application_revision,
+                )
+            except ApplicationMutationBlockedError as exc:
+                db.rollback()
+                logger.warning(
+                    "job_scoring_write_blocked",
+                    job_id=job_id,
+                    application_id=expected_application_id,
+                    reason_code=exc.reason_code,
+                )
+                return
+            assert locked is not None and locked.job is not None
+            # Once an application exists its lifecycle is authoritative.  A
+            # rescore may refresh the numeric score under the app-first lock,
+            # but it must not rewrite status or enqueue regeneration.
+            locked.job.score = breakdown.total
+            db.commit()
+            logger.info(
+                "existing_application_rescored",
+                job_id=job_id,
+                application_id=expected_application_id,
+                score=breakdown.total,
+            )
+            return
+
+        try:
+            db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
+        except ApplicationMutationBlockedError as exc:
+            db.rollback()
+            logger.warning(
+                "job_scoring_write_blocked",
+                job_id=job_id,
+                reason_code=exc.reason_code,
+            )
+            return
+        if db_job.status != expected_job_status:
+            db.rollback()
+            logger.warning(
+                "job_scoring_write_blocked",
+                job_id=job_id,
+                reason_code="JOB_STATUS_CHANGED",
+            )
+            return
+
         db_job.score = breakdown.total
-        db_job.status = JobStatus.SCORED
 
         if action == Action.SKIP:
             db_job.status = JobStatus.SKIPPED
             db.commit()
-            logger.info("job_skipped", title=db_job.title, score=breakdown.total,
-                        reason=breakdown.skip_reason)
+            logger.info(
+                "job_skipped",
+                title=job_title,
+                score=breakdown.total,
+                reason=breakdown.skip_reason,
+            )
             return
 
         # Create application draft
@@ -275,8 +356,12 @@ def score_job_task(self, job_id: int):
         else:
             generate_application_task.delay(job_id)
 
-        logger.info("job_scored_and_queued", title=db_job.title,
-                     score=breakdown.total, action=action.value)
+        logger.info(
+            "job_scored_and_queued",
+            title=job_title,
+            score=breakdown.total,
+            action=action.value,
+        )
 
     except Exception as exc:
         db.rollback()
@@ -292,7 +377,7 @@ def score_job_task(self, job_id: int):
 @shared_task(name="worker.tasks.generate_application_task", bind=True, max_retries=2)
 def generate_application_task(self, job_id: int):
     """Generate cover letter, recruiter message, and Q&A answers via LLM."""
-    from profile.loader import get_profile
+    from profile.versioned_snapshot import load_versioned_profile_snapshot
 
     from jobs.models import JobData
     from llm.generation import generate_full_application
@@ -302,8 +387,25 @@ def generate_application_task(self, job_id: int):
         db_job = db.query(Job).filter(Job.id == job_id).first()
         if not db_job:
             return
+        app = db.query(Application).filter(Application.job_id == job_id).first()
+        if app is not None and app.status in {
+            JobStatus.SUBMITTED,
+            JobStatus.SKIPPED,
+        }:
+            logger.warning(
+                "terminal_application_regeneration_blocked",
+                application_id=app.id,
+                status=app.status.value,
+            )
+            return
+        expected_application_id = app.id if app is not None else None
+        expected_revision = int(app.revision or 1) if app is not None else None
 
-        profile = get_profile()
+        from db.models import UserProfileVersion
+
+        profile_snapshot = load_versioned_profile_snapshot(db)
+        expected_profile_version = profile_snapshot.version
+        profile = profile_snapshot.profile
 
         job_data = JobData(
             title=db_job.title,
@@ -330,12 +432,16 @@ def generate_application_task(self, job_id: int):
 
         routing_job = RoutingJob(
             title=db_job.title or "",
-            description=" ".join(
-                filter(None, [db_job.description, db_job.requirements])
-            ),
+            description=" ".join(filter(None, [db_job.description, db_job.requirements])),
             seniority=db_job.seniority or "",
             required_skills=parse_required_skills(db_job.keywords),
         )
+        job_score = db_job.score or 0.0
+
+        # Do not keep a transaction (and especially not a row lock) open while
+        # local routing and LLM generation run.  The application revision and
+        # submission lifecycle are locked and rechecked at the final write.
+        db.rollback()
 
         routing_path = Path(settings.cv_routing_path)
         if routing_path.exists():
@@ -344,7 +450,8 @@ def generate_application_task(self, job_id: int):
             if (
                 settings.llm_cv_routing
                 and not routing.overridden
-                and routing.fallback_reason in {
+                and routing.fallback_reason
+                in {
                     "confidence_below_threshold",
                     "abstained_low_confidence",
                 }
@@ -379,6 +486,7 @@ def generate_application_task(self, job_id: int):
         cv_text = None
         if routing.selected_cv_id:
             from profile.cv_content_cache import get_cv_text_by_id
+
             cv_text = get_cv_text_by_id(
                 routing.selected_cv_id,
                 cv_routing_path=settings.cv_routing_path,
@@ -388,12 +496,10 @@ def generate_application_task(self, job_id: int):
         # Run async generation in sync context using the selected CV text
         generated = run_async(generate_full_application(job_data, profile, cv_text=cv_text))
 
-        # Decide whether to auto-approve immediately
-        from datetime import datetime
-
         from match.scoring import Action, decide_action
+
         action = decide_action(
-            score=db_job.score or 0.0,
+            score=job_score,
             auto_apply_enabled=settings.auto_apply,
             draft_only=settings.draft_only,
             threshold=settings.auto_apply_threshold,
@@ -401,21 +507,12 @@ def generate_application_task(self, job_id: int):
         )
         # Unfilled [PLACEHOLDER: ...] markers and uncertain CV routes must
         # never reach an employer without review.
-        auto_approve = (
+        auto_eligible = (
             action == Action.AUTO_APPLY
             and routing.selected_cv_id is not None
             and routing.fallback_reason is None
             and not generated.has_placeholders
         )
-
-        from db.models import UserProfileVersion
-
-        latest_profile = (
-            db.query(UserProfileVersion)
-            .order_by(UserProfileVersion.version.desc())
-            .first()
-        )
-        profile_version = latest_profile.version if latest_profile else None
 
         # Application.job_id is UNIQUE — this task can run more than once for
         # the same job (a regenerate action, or Celery's own retry landing
@@ -423,16 +520,74 @@ def generate_application_task(self, job_id: int):
         # in place instead of blindly inserting, which used to raise
         # IntegrityError and burn a full (real, non-mock) LLM generation on
         # every retry without ever persisting the result.
-        app = db.query(Application).filter(Application.job_id == job_id).first()
-        if app is None:
+        from core.application_mutations import (
+            ApplicationMutationBlockedError,
+            ApplicationMutationIntent,
+            lock_application_for_mutation,
+            lock_job_without_application_for_mutation,
+        )
+
+        if expected_application_id is None:
+            try:
+                db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
+            except ApplicationMutationBlockedError as exc:
+                db.rollback()
+                logger.warning(
+                    "application_generation_write_blocked",
+                    job_id=job_id,
+                    reason_code=exc.reason_code,
+                )
+                return
             app = Application(job_id=job_id)
             db.add(app)
+        else:
+            try:
+                locked = lock_application_for_mutation(
+                    db,
+                    application_id=expected_application_id,
+                    intent=ApplicationMutationIntent.CONTENT,
+                    expected_revision=expected_revision,
+                )
+            except ApplicationMutationBlockedError as exc:
+                db.rollback()
+                logger.warning(
+                    "application_generation_write_blocked",
+                    application_id=expected_application_id,
+                    reason_code=exc.reason_code,
+                )
+                return
+            assert locked is not None and locked.job is not None
+            app = locked.application
+            db_job = locked.job
+            from core.application_revision import bump_application_revision
+
+            bump_application_revision(
+                db,
+                app,
+                reason_code="APPLICATION_REGENERATED",
+            )
+
+        latest_profile = (
+            db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
+        )
+        current_profile_version = latest_profile.version if latest_profile else None
+        if current_profile_version != expected_profile_version:
+            db.rollback()
+            logger.warning(
+                "application_generation_write_blocked",
+                job_id=job_id,
+                reason_code="PROFILE_VERSION_CHANGED",
+            )
+            return
 
         app.cover_letter = generated.cover_letter
         app.recruiter_message = generated.recruiter_message
         app.qa_answers = json.dumps(generated.qa_answers)
-        app.status = JobStatus.APPROVED if auto_approve else JobStatus.DRAFT
-        app.approved_at = datetime.utcnow() if auto_approve else None
+        # A score can make an application eligible for a review batch, but
+        # never constitutes consent to send an employment application.
+        app.status = JobStatus.DRAFT
+        app.approved_at = None
+        app.approval_source = None
         app.selected_cv_id = routing.selected_cv_id
         app.cv_routing_confidence = routing.confidence
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
@@ -444,11 +599,24 @@ def generate_application_task(self, job_id: int):
             app.needs_review_reason = f"UNFILLED_PLACEHOLDERS:{fields}"
         else:
             app.needs_review_reason = None
-        app.profile_version = profile_version
+        app.profile_version = expected_profile_version
         db.flush()
 
-        if auto_approve:
-            db_job.status = JobStatus.APPROVED
+        db_job.status = JobStatus.DRAFT
+
+        from core.application_audit import record_application_event
+
+        record_application_event(
+            db,
+            app.id,
+            "application_generated",
+            actor="worker",
+            details={
+                "selected_cv_id": app.selected_cv_id,
+                "profile_version": app.profile_version,
+                "state": "draft",
+            },
+        )
 
         db.commit()
 
@@ -458,17 +626,17 @@ def generate_application_task(self, job_id: int):
             score=db_job.score,
             threshold=settings.auto_apply_threshold,
             has_placeholders=generated.has_placeholders,
-            auto_approved=auto_approve,
+            auto_eligible=auto_eligible,
             reason=(
-                "Score above threshold"
-                if auto_approve
+                "Eligible for explicit batch approval"
+                if auto_eligible
                 else "Score below threshold, draft-only, or CV routing review required"
             ),
         )
 
         # ── Notify originating WhatsApp sender (Cloud API) ────────────────
         # Only when draft (not auto-approved) and Cloud API is configured
-        if not auto_approve and settings.whatsapp_api_token and settings.whatsapp_phone_number_id:
+        if settings.whatsapp_api_token and settings.whatsapp_phone_number_id:
             try:
                 # Walk: Job → ExtractedURL → Message to get sender
                 url_record = (
@@ -480,14 +648,17 @@ def generate_application_task(self, job_id: int):
                     sender = url_record.message.sender_phone
                     if sender and sender not in ("manual", "whatsapp-bridge", "dashboard"):
                         from api.routes.webhook import _send_approval_buttons
-                        run_async(_send_approval_buttons(
-                            sender,
-                            job_id,
-                            db_job.title,
-                            db_job.company,
-                            db_job.score or 0.0,
-                            settings,
-                        ))
+
+                        run_async(
+                            _send_approval_buttons(
+                                sender,
+                                job_id,
+                                db_job.title,
+                                db_job.company,
+                                db_job.score or 0.0,
+                                settings,
+                            )
+                        )
                         logger.info(
                             "whatsapp_approval_sent",
                             job=db_job.title,
@@ -496,16 +667,12 @@ def generate_application_task(self, job_id: int):
             except Exception as notify_err:
                 logger.warning("whatsapp_notify_failed", error=str(notify_err))
 
-        # Immediately chain to submission only in local/eager dev mode.
-        # With a real broker, the application stays APPROVED and the
-        # priority drainer (Task 3.6, worker.drainer.drain_apply_queue_task)
-        # submits it highest-score-first under governor pacing.
-        if auto_approve:
-            if settings.tasks_always_eager:
-                logger.info("auto_apply_queued", job=db_job.title, app_id=app.id)
-                submit_application_task.apply(args=[app.id])
-            else:
-                logger.info("auto_apply_queued_for_drainer", job=db_job.title, app_id=app.id)
+        if auto_eligible:
+            logger.info(
+                "application_ready_for_batch_review",
+                job=db_job.title,
+                app_id=app.id,
+            )
 
     except Exception as exc:
         db.rollback()
@@ -520,16 +687,31 @@ def generate_application_task(self, job_id: int):
 
 @shared_task(name="worker.tasks.submit_application_task", bind=True, max_retries=1)
 def submit_application_task(self, application_id: int):
-    """Submit an approved application to the job board.
+    """Fail-closed compatibility handler for stale application-ID messages.
 
-    CRITICAL: Enforces that the application must be APPROVED before submission.
-    Falls back to draft_only for unsupported platforms.
+    PR2 commands are addressed by command ID in ``worker.submission_commands``.
+    Reinterpreting an old application ID as a command ID could target the wrong
+    external action, so this task intentionally performs no database mutation
+    and invokes no adapter.
     """
+    del self
+    logger.warning(
+        "legacy_submission_task_blocked",
+        application_id=application_id,
+        reason_code="DATABASE_COMMAND_REQUIRED",
+    )
+    return {
+        "state": "blocked",
+        "reason_code": "DATABASE_COMMAND_REQUIRED",
+    }
+
+    # Unreachable v3 implementation retained for one release as migration
+    # context. It is removed after old broker messages have expired.
     from profile.loader import get_profile
 
     from jobs.models import JobData
     from submitters.ashby import AshbySubmitter
-    from submitters.base import DraftOnlySubmitter
+    from submitters.base import DraftOnlySubmitter, SubmissionResult
     from submitters.comeet import ComeetSubmitter
     from submitters.greenhouse import GreenhouseSubmitter
     from submitters.indeed import IndeedSubmitter
@@ -538,13 +720,42 @@ def submit_application_task(self, application_id: int):
     from submitters.linkedin_v2 import LinkedInV2Submitter
     from submitters.smartrecruiters import SmartRecruitersSubmitter
     from submitters.workable import WorkableSubmitter
-    from submitters.portal_login import PortalLoginSubmitter
     from submitters.workday import WorkdaySubmitter
 
     db = _get_db()
     attempt = None
     try:
         settings = get_settings()
+        if (
+            not settings.dry_run
+            and not settings.draft_only
+            and not _validated_submit_command_available(db, application_id)
+        ):
+            app = db.get(Application, application_id)
+            if app is not None and app.status == JobStatus.APPROVED:
+                app.status = JobStatus.NEEDS_REVIEW
+                app.needs_review_reason = "SUBMIT_PERMIT_REQUIRED"
+                if app.job:
+                    app.job.status = JobStatus.NEEDS_REVIEW
+                from core.application_audit import record_application_event
+
+                record_application_event(
+                    db,
+                    app.id,
+                    "submission_dispatch_blocked",
+                    actor="worker",
+                    details={
+                        "reason_code": "SUBMIT_PERMIT_REQUIRED",
+                        "external_action_started": False,
+                    },
+                )
+                db.commit()
+            logger.warning(
+                "submission_dispatch_blocked",
+                application_id=application_id,
+                reason_code="SUBMIT_PERMIT_REQUIRED",
+            )
+            return
 
         from worker.submission_attempts import claim_attempt
 
@@ -587,14 +798,16 @@ def submit_application_task(self, application_id: int):
             ),
             IcimsSubmitter(),
             ComeetSubmitter(),
-            PortalLoginSubmitter(),
-            # Tier 3: Draft-only — Workday SSO wall, never auto-submit
-            WorkdaySubmitter(),
+            # Authenticated Workday browser session; final click remains
+            # independently gated by PORTAL_FINAL_SUBMIT_ENABLED.
+            WorkdaySubmitter(db=db),
         ]
 
         job_ref = JobData(
-            title=db_job.title, company=db_job.company,
-            location=db_job.location, apply_url=db_job.apply_url,
+            title=db_job.title,
+            company=db_job.company,
+            location=db_job.location,
+            apply_url=db_job.apply_url,
             source_url=db_job.source_url,
         )
 
@@ -611,9 +824,7 @@ def submit_application_task(self, application_id: int):
         from db.models import UserProfileVersion
 
         latest_profile = (
-            db.query(UserProfileVersion)
-            .order_by(UserProfileVersion.version.desc())
-            .first()
+            db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
         )
         if app.selected_cv_id:
             from profile.cv_routing import load_routing_config
@@ -621,11 +832,7 @@ def submit_application_task(self, application_id: int):
             try:
                 routing_config = load_routing_config(settings.cv_routing_path)
                 cv = next(
-                    (
-                        item
-                        for item in routing_config.cvs
-                        if item.id == app.selected_cv_id
-                    ),
+                    (item for item in routing_config.cvs if item.id == app.selected_cv_id),
                     None,
                 )
                 root = Path(settings.cv_directory).resolve()
@@ -656,77 +863,135 @@ def submit_application_task(self, application_id: int):
         )
         db.commit()
 
-        # Cascade: try each matching submitter, stop on first success
+        # Route to the matching submitter and preserve its authoritative result.
         result = None
-        if settings.draft_only:
+        if settings.dry_run:
+            result = SubmissionResult(
+                success=True,
+                platform="dry_run",
+                status="draft_only",
+                error="DRY_RUN",
+                reason_code="DRY_RUN_DISCARDED",
+            )
+        elif settings.draft_only:
             result = run_async(
                 DraftOnlySubmitter().submit(
-                    job_ref, generated, profile_dict, resume_path
+                    job_ref,
+                    generated,
+                    profile_dict,
+                    resume_path,
                 )
             )
         else:
-            for sub in all_submitters:
-                if not sub.can_submit(job_ref):
-                    continue
-                if isinstance(sub, LinkedInV2Submitter):
-                    # can_apply_linkedin() adds the inter-action gap on top of
-                    # can_act(), so a submission enqueued directly (e.g. the
-                    # approve endpoint) can't run back-to-back inside the gap.
-                    ok, reason = governor.can_apply_linkedin()
-                    if not ok:
-                        from datetime import UTC as _UTC
-                        from datetime import datetime as _dt
+            from submitters.platforms import adapter_for_url, detect_platform
 
-                        attempt.status = SubmissionStatus.FAILED
-                        attempt.reason_code = "GOVERNOR_DEFERRED"
-                        attempt.finished_at = _dt.now(_UTC).replace(tzinfo=None)
-                        db.commit()
-                        logger.info(
-                            "linkedin_submit_deferred",
-                            application_id=application_id,
-                            job=db_job.title,
-                            reason=reason,
+            route_url = job_ref.apply_url or job_ref.source_url
+            descriptor = adapter_for_url(route_url)
+            detected_platform = detect_platform(route_url)
+            if descriptor is None or not descriptor.allows_live_submission:
+                selector_version = (
+                    descriptor.selector_version if descriptor is not None else "unregistered"
+                )
+                qualification = (
+                    descriptor.qualification.value if descriptor is not None else "unregistered"
+                )
+                logger.warning(
+                    "adapter_not_qualified",
+                    platform=detected_platform,
+                    adapter_version=(
+                        descriptor.adapter_version if descriptor is not None else "unregistered"
+                    ),
+                    qualification=qualification,
+                )
+                result = SubmissionResult(
+                    success=False,
+                    platform=detected_platform,
+                    status="failed",
+                    error="NEEDS_REVIEW:ADAPTER_NOT_QUALIFIED",
+                    reason_code="ADAPTER_NOT_QUALIFIED",
+                    diagnostic_details={
+                        "selector_version": selector_version,
+                        "terminal_reason": "ADAPTER_NOT_QUALIFIED",
+                    },
+                )
+            else:
+                matching_submitter = next(
+                    (
+                        submitter
+                        for submitter in all_submitters
+                        if submitter.platform_name == descriptor.platform
+                        and submitter.can_submit(job_ref)
+                    ),
+                    None,
+                )
+                if matching_submitter is None:
+                    result = SubmissionResult(
+                        success=False,
+                        platform=descriptor.platform,
+                        status="failed",
+                        error="NEEDS_REVIEW:ADAPTER_ROUTE_MISMATCH",
+                        reason_code="ADAPTER_ROUTE_MISMATCH",
+                        diagnostic_details={
+                            "selector_version": descriptor.selector_version,
+                            "terminal_reason": "ADAPTER_ROUTE_MISMATCH",
+                        },
+                    )
+                else:
+                    if isinstance(matching_submitter, LinkedInV2Submitter):
+                        # can_apply_linkedin() adds the inter-action gap on top of
+                        # can_act(), so a submission enqueued directly (e.g. the
+                        # approve endpoint) can't run back-to-back inside the gap.
+                        ok, reason = governor.can_apply_linkedin()
+                        if not ok:
+                            from datetime import UTC as _UTC
+                            from datetime import datetime as _dt
+
+                            attempt.status = SubmissionStatus.FAILED
+                            attempt.reason_code = "GOVERNOR_DEFERRED"
+                            attempt.finished_at = _dt.now(_UTC).replace(tzinfo=None)
+                            db.commit()
+                            logger.info(
+                                "linkedin_submit_deferred",
+                                application_id=application_id,
+                                job=db_job.title,
+                                reason=reason,
+                            )
+                            # Leave the application APPROVED — the drainer
+                            # (Task 3.6) will retry once the governor allows it.
+                            return
+                    # NOT `attempt` — that name holds the claimed Submission ORM
+                    # row, and rebinding it here would leave the row unfinalized
+                    # below (and break the except-handler's db.get on .id).
+                    result = run_async(
+                        matching_submitter.submit(
+                            job_ref,
+                            generated,
+                            profile_dict,
+                            resume_path,
                         )
-                        # Leave the application APPROVED — the drainer
-                        # (Task 3.6) will retry once the governor allows it.
-                        return
-                # NOT `attempt` — that name holds the claimed Submission ORM
-                # row, and rebinding it here would leave the row unfinalized
-                # below (and break the except-handler's db.get on .id).
-                sub_result = run_async(
-                    sub.submit(job_ref, generated, profile_dict, resume_path)
-                )
-                logger.info(
-                    "submitter_attempt",
-                    platform=sub.platform_name,
-                    status=sub_result.status,
-                    success=sub_result.success,
-                )
-                if sub_result.success and sub_result.status == "submitted":
-                    result = sub_result
-                    break
-                if result is None or sub_result.status != "failed":
-                    # Keep best result seen (prefer draft_only over failed)
-                    result = sub_result
+                    )
+                    logger.info(
+                        "submitter_attempt",
+                        platform=matching_submitter.platform_name,
+                        adapter_version=descriptor.adapter_version,
+                        status=result.status,
+                        success=result.success,
+                    )
 
         # abort-don't-lie: a blocked required field is surfaced as
         # NEEDS_REVIEW rather than silently drafted or failed.
         #
-        # Read this BEFORE the draft fallback below. The fallback replaces
-        # `result` wholesale with DraftOnlySubmitter's (error=None), so
-        # extracting afterwards silently dropped the reason for any submitter
-        # that reported the block as status="failed" — the application landed
-        # in DRAFT with no record of which question stopped it.
+        # Read this before unsupported-platform fallback so the operator sees
+        # which required question stopped the adapter.
         needs_review_reason = None
         if result is not None and result.error and result.error.startswith("NEEDS_REVIEW:"):
             needs_review_reason = result.error.split("NEEDS_REVIEW:", 1)[1]
 
-        # Always fall back to draft_only if no real submission succeeded
-        if result is None or result.status == "failed":
+        # Fall back only when no adapter handled the platform. A handled
+        # failure/unknown outcome is authoritative and must remain visible.
+        if result is None:
             result = run_async(
-                DraftOnlySubmitter().submit(
-                    job_ref, generated, profile_dict, resume_path
-                )
+                DraftOnlySubmitter().submit(job_ref, generated, profile_dict, resume_path)
             )
 
         # Finalize the pre-committed attempt. No external action can run before
@@ -734,15 +999,41 @@ def submit_application_task(self, application_id: int):
         from datetime import UTC as _UTC
         from datetime import datetime as _dt
 
+        from core.submission_truth import (
+            EMPLOYER_VERIFIED_REASON_CODES,
+            has_nonblank_employer_evidence,
+        )
         from worker.submission_attempts import (
             classify_reason,
-            redacted_diagnostics,
+            redacted_result_diagnostics,
         )
 
-        if result.status == "submitted" and result.success:
+        claimed_submitted = result.status == "submitted" and result.success
+        result_reason_code = result.reason_code or classify_reason(
+            result.error,
+            result.status,
+        )
+        employer_verified = (
+            claimed_submitted
+            and result_reason_code in EMPLOYER_VERIFIED_REASON_CODES
+            and has_nonblank_employer_evidence(
+                result.confirmation_id,
+                result.confirmation_url,
+            )
+        )
+        diagnostic_details = dict(result.diagnostic_details)
+        if employer_verified:
             sub_status = SubmissionStatus.SUCCESS
+        elif claimed_submitted:
+            # A click, redirect, generic success phrase, or adapter boolean is
+            # not employer evidence. The irreversible action is indeterminate.
+            sub_status = SubmissionStatus.UNKNOWN
+            result_reason_code = "FINAL_ACTION_UNCONFIRMED"
+            diagnostic_details["terminal_reason"] = "FINAL_ACTION_UNCONFIRMED"
         elif result.status == "draft_only":
             sub_status = SubmissionStatus.DRAFT_ONLY
+        elif result.status == "unknown":
+            sub_status = SubmissionStatus.UNKNOWN
         else:
             sub_status = SubmissionStatus.FAILED
 
@@ -752,30 +1043,36 @@ def submit_application_task(self, application_id: int):
         attempt.confirmation_url = result.confirmation_url
         attempt.confirmation_id = result.confirmation_id
         attempt.error_message = None
-        attempt.reason_code = classify_reason(result.error, result.status)
-        attempt.diagnostic_details = redacted_diagnostics(result.error)
-        attempt.finished_at = now
-        attempt.submitted_at = (
-            now if result.success and result.status == "submitted" else None
+        attempt.reason_code = result_reason_code
+        attempt.diagnostic_details = redacted_result_diagnostics(
+            result.error,
+            diagnostic_details,
         )
+        attempt.finished_at = now
+        attempt.submitted_at = now if employer_verified else None
 
         # Job/application status mirrors submission outcome.
         #
-        # CRITICAL: app.status must leave APPROVED on every one of these
-        # branches. The drainer (worker.drainer.select_next_application)
-        # re-selects any Application still APPROVED, so if a completed
-        # attempt left it APPROVED the same app would be re-submitted
-        # every drain tick — re-driving a live LinkedIn apply and hitting
-        # the Submission.application_id UNIQUE constraint (IntegrityError
-        # retry loop), starving every other approved job behind it.
-        if result.status == "submitted" and result.success:
+        # CRITICAL: app.status must leave APPROVED on every terminal branch.
+        # Otherwise the drainer can select it again and create a new attempt.
+        if employer_verified:
             db_job.status = JobStatus.SUBMITTED
             app.status = JobStatus.SUBMITTED
             if result.platform == "linkedin":
                 governor.record_application()
                 app.submission_channel = "linkedin_easy"
+        elif claimed_submitted:
+            app.needs_review_reason = (
+                "Final action was reported without employer-verifiable evidence."
+            )
+            app.status = JobStatus.NEEDS_REVIEW
+            db_job.status = JobStatus.NEEDS_REVIEW
         elif needs_review_reason is not None:
             app.needs_review_reason = needs_review_reason
+            app.status = JobStatus.NEEDS_REVIEW
+            db_job.status = JobStatus.NEEDS_REVIEW
+        elif result.status == "unknown":
+            app.needs_review_reason = "Submission outcome is unknown; reconcile manually."
             app.status = JobStatus.NEEDS_REVIEW
             db_job.status = JobStatus.NEEDS_REVIEW
         elif result.status in ("draft_only", "captcha_blocked"):
@@ -784,14 +1081,31 @@ def submit_application_task(self, application_id: int):
         else:
             db_job.status = JobStatus.FAILED
             app.status = JobStatus.FAILED
+
+        from core.application_audit import record_application_event
+
+        record_application_event(
+            db,
+            app.id,
+            "submission_attempt_finished",
+            actor="worker",
+            details={
+                "attempt_number": attempt.attempt_number,
+                "platform": result.platform,
+                "reason_code": attempt.reason_code,
+                "selected_cv_id": attempt.selected_cv_id,
+                "profile_version": attempt.profile_version,
+                "state": attempt.status.value,
+            },
+        )
         db.commit()
 
         logger.info(
             "submission_completed",
             job=db_job.title,
             platform=result.platform,
-            status=result.status,
-            success=result.success,
+            status=attempt.status.value,
+            employer_verified=employer_verified,
         )
 
     except Exception as exc:

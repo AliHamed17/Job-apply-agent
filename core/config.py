@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     llm_cv_alignment: bool = True
 
     # ── Application Modes ───────────────────────────────
-    draft_only: bool = False
+    draft_only: bool = True
     auto_apply: bool = False
     auto_apply_threshold: float = 80.0
     tasks_always_eager: bool = True  # If True, runs tasks synchronously (no Redis needed)
@@ -62,6 +62,8 @@ class Settings(BaseSettings):
 
     # ── Allowed Senders ─────────────────────────────────
     allowed_senders: str = ""  # comma-separated phone numbers
+    notification_recipient_email: str = ""
+    notification_recipient_phone: str = ""
 
     # ── Job Board API Keys ───────────────────────────────
     greenhouse_api_key: str = ""
@@ -97,6 +99,20 @@ class Settings(BaseSettings):
     linkedin_browser_profile_dir: str = ".linkedin_profile"
     dry_run: bool = False
 
+    # ── Authenticated employer portals ──────────────────
+    # Dedicated Playwright profiles are used instead of password extraction.
+    portal_browser_profile_root: str = ".portal_profiles"
+    portal_browser_headless: bool = True
+    portal_final_submit_enabled: bool = False
+    portal_reuse_last_application: bool = True
+    portal_session_lock_minutes: int = 30
+    employer_workflow_path: str = "employer_workflows.yaml"
+    form_plan_ttl_minutes: int = 30
+    submit_permit_ttl_seconds: int = 300
+    submission_command_claim_ttl_seconds: int = 900
+    submission_command_drain_interval_seconds: int = 15
+    submission_command_drain_batch_size: int = 25
+
     # ── Discovery ───────────────────────────────────────
     discovery_interval_h: int = 3
     discovery_pages_per_query: int = 3
@@ -130,12 +146,28 @@ class Settings(BaseSettings):
     def trusted_proxy_list(self) -> list[str]:
         return [proxy.strip() for proxy in self.trusted_proxies.split(",") if proxy.strip()]
 
+    @property
+    def operator_auth_is_placeholder(self) -> bool:
+        """Whether development may use the explicit prepare-only auth bypass."""
+
+        return self.secret_key in {
+            "",
+            "change-me",
+            "change-me-to-a-random-secret",
+        }
+
+    @property
+    def operator_auth_configured(self) -> bool:
+        """Whether bearer authentication is strong enough to authorize live send."""
+
+        return not self.operator_auth_is_placeholder and len(self.secret_key) >= 32
+
     def validate_runtime(self) -> None:
         """Reject unsafe production settings before the process accepts traffic."""
         if self.app_env != "production":
             return
         errors: list[str] = []
-        if self.secret_key in {"", "change-me", "change-me-to-a-random-secret"}:
+        if self.operator_auth_is_placeholder:
             errors.append("SECRET_KEY must be a non-default value")
         if len(self.secret_key) < 32:
             errors.append("SECRET_KEY must be at least 32 characters")
@@ -143,17 +175,36 @@ class Settings(BaseSettings):
             errors.append("WHATSAPP_APP_SECRET is required for webhook signatures")
         if "*" in self.cors_origin_list:
             errors.append("CORS_ORIGINS cannot contain '*'")
-        live_requested = self.auto_apply or not self.draft_only or not self.dry_run
+        live_requested = (
+            self.auto_apply
+            or not self.draft_only
+            or not self.dry_run
+            or self.portal_final_submit_enabled
+        )
         if live_requested and not self.live_automation_acknowledged:
             errors.append(
                 "LIVE_AUTOMATION_ACKNOWLEDGED=true is required for non-dry-run automation"
             )
+        if self.portal_final_submit_enabled and self.dry_run:
+            errors.append("PORTAL_FINAL_SUBMIT_ENABLED cannot be used with DRY_RUN=true")
+        if self.portal_final_submit_enabled and self.draft_only:
+            errors.append("PORTAL_FINAL_SUBMIT_ENABLED cannot be used with DRAFT_ONLY=true")
+        if self.portal_final_submit_enabled and not self.db_is_postgres:
+            errors.append("PORTAL_FINAL_SUBMIT_ENABLED requires PostgreSQL")
+        if self.submission_command_drain_interval_seconds >= self.submit_permit_ttl_seconds:
+            errors.append("submission command drain interval must be below permit TTL")
+        if not 1 <= self.submission_command_drain_batch_size <= 100:
+            errors.append("submission command drain batch size must be between 1 and 100")
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
 
     @property
     def db_is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def db_is_postgres(self) -> bool:
+        return self.database_url.lower().startswith(("postgresql://", "postgresql+"))
 
     @property
     def profile_path(self) -> Path:

@@ -19,7 +19,7 @@ import structlog
 from ingestion.text_post_parser import ParsedPost, looks_like_job  # noqa: F401 (re-exported)
 from jobs.models import JobData
 from match.scoring import Action, decide_action, score_job
-from worker.outbound_dedup import can_contact, record_contact
+from worker.outbound_dedup import can_contact
 
 logger = structlog.get_logger(__name__)
 
@@ -34,7 +34,8 @@ async def process_text_post(text, db, settings, profile, governor, deps, sender=
     posts that carry no phone/email in the body.
 
     Returns one of: "not_job" | "low_score" | "duplicate" | "capped" |
-    "draft_only" | "sent_whatsapp" | "sent_email" | "no_contact".
+    "draft_only" | "permit_required" | "no_contact". Legacy sent outcomes
+    remain unreachable until a one-use final-submit permit is implemented.
     """
     parsed = await deps.parse(text)
     if not parsed.is_job:
@@ -92,24 +93,9 @@ async def process_text_post(text, db, settings, profile, governor, deps, sender=
         logger.info("outbound_draft_only", title=job.title, contact=contact_value)
         return "draft_only"
 
-    message = await deps.gen_msg(job, profile)
-    pdf_path = profile.resume.pdf_path or None
-
-    if channel == "whatsapp":
-        success = await deps.bridge(contact_value, message, pdf_path, settings)
-    else:
-        subject = f"Application for {job.title}" if job.title else "Job application"
-        success = await deps.email(contact_value, subject, message, pdf_path, settings)
-
-    if not success:
-        logger.warning("outbound_send_failed", channel=channel, contact=contact_value)
-        return "no_contact"
-
-    record_contact(
-        db, contact_value,
-        "whatsapp_dm" if channel == "whatsapp" else "email",
-        job_id=None, now=now,
-    )
-    governor.wa_record()
-    logger.info("outbound_sent", channel=channel, contact=contact_value, title=job.title)
-    return "sent_whatsapp" if channel == "whatsapp" else "sent_email"
+    # Recruiter DMs and emails are external application actions too. The
+    # legacy score/governor gates are not operator consent, so this path stays
+    # hard-disabled until the same one-use submit permit used by ATS adapters
+    # is available.
+    logger.info("outbound_submit_permit_required", title=job.title, channel=channel)
+    return "permit_required"

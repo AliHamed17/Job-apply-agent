@@ -71,7 +71,9 @@ resume when profile persistence fails.
 
 ### Phase 9: Scaling & Platform Expansion
 **Goal**: Support more job boards and a larger volume of messages.
-1.  **Workday Parser/Submitter**: Investigate Workday's candidate APIs (requires cautious handling due to authentication variability).
+1.  **Workday Parser/Submitter**: Implemented with a dedicated persistent
+    browser session, reusable last-application flow, confirmed-evidence field
+    resolution, exact approval gating, and authoritative confirmation checks.
 2.  **PostgreSQL Migration**: Switch from SQLite to Postgres for better concurrency and PII data encryption at rest.
 3.  **PDF Parsing**: Allow the `LOADER` to read actual PDF resumes instead of just `user_profile.yaml` text.
 

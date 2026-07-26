@@ -3,7 +3,7 @@
 Handles:
 - GET  /webhook/whatsapp — Meta verification challenge
 - POST /webhook/whatsapp — Incoming messages + interactive button replies
-                           (approve_, skip_, edit_ actions)
+                           (legacy approve_, skip_, edit_ actions)
 """
 
 from __future__ import annotations
@@ -21,6 +21,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from core.application_mutations import (
+    ApplicationMutationBlockedError,
+    ApplicationMutationIntent,
+    lock_application_for_mutation,
+    lock_job_without_application_for_mutation,
+    mark_locked_application_prepared,
+    transition_locked_application_to_skipped,
+)
+from core.application_revision import preparation_is_current
 from core.config import Settings, get_settings
 from db.models import Application, ExtractedURL, Job, JobStatus, Message
 from db.session import get_db
@@ -82,6 +91,7 @@ async def _route_text_post(
         sender=sender,
     )
 
+
 # ── URL extraction regex ────────────────────────────────
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')\]},;]+", re.IGNORECASE)
 
@@ -99,9 +109,7 @@ def _verify_signature(body: bytes, signature: str, app_secret: str) -> bool:
     """Verify the X-Hub-Signature-256 header from Meta."""
     if not app_secret:
         return True
-    expected = "sha256=" + hmac.new(
-        app_secret.encode(), body, hashlib.sha256
-    ).hexdigest()
+    expected = "sha256=" + hmac.new(app_secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
@@ -118,9 +126,8 @@ def _extract_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 # ── WhatsApp API helpers ────────────────────────────────
 
-async def _send_whatsapp_message(
-    phone: str, text: str, settings: Settings
-) -> None:
+
+async def _send_whatsapp_message(phone: str, text: str, settings: Settings) -> None:
     """Send a text message via WhatsApp Cloud API."""
     if not settings.whatsapp_api_token or not settings.whatsapp_phone_number_id:
         logger.warning("whatsapp_api_not_configured")
@@ -171,9 +178,8 @@ async def _handle_document(msg: dict, db, settings: Settings) -> bool:
             return True
 
         from profile.cv_intake import bytes_to_temp, ingest_cv_from_temp
-        tmp = bytes_to_temp(
-            content, settings.profile_path.parent, settings.max_resume_bytes
-        )
+
+        tmp = bytes_to_temp(content, settings.profile_path.parent, settings.max_resume_bytes)
         result = await ingest_cv_from_temp(
             tmp, settings=settings, db=db, max_bytes=settings.max_resume_bytes
         )
@@ -193,10 +199,14 @@ async def _handle_document(msg: dict, db, settings: Settings) -> bool:
 
 
 async def _send_approval_buttons(
-    phone: str, job_id: int, title: str, company: str, score: float,
+    phone: str,
+    job_id: int,
+    title: str,
+    company: str,
+    score: float,
     settings: Settings,
 ) -> None:
-    """Send an interactive approval message with approve/skip/edit buttons."""
+    """Send an interactive preparation message with prepare/skip/edit buttons."""
     if not settings.whatsapp_api_token:
         return
     try:
@@ -221,7 +231,10 @@ async def _send_approval_buttons(
                             "buttons": [
                                 {
                                     "type": "reply",
-                                    "reply": {"id": f"approve_{job_id}", "title": "✅ Approve"},
+                                    "reply": {
+                                        "id": f"approve_{job_id}",
+                                        "title": "📝 Prepare",
+                                    },
                                 },
                                 {
                                     "type": "reply",
@@ -243,57 +256,116 @@ async def _send_approval_buttons(
 
 # ── Interactive action handlers ─────────────────────────
 
+
 async def _handle_approve(job_id: int, sender: str, db: Session, settings: Settings) -> None:
-    """Handle approve_ action: mark application as approved and enqueue submission."""
-    app = db.query(Application).filter(Application.job_id == job_id).first()
-    if not app:
+    """Handle the legacy approve action as preparation only."""
+    try:
+        locked = lock_application_for_mutation(
+            db,
+            job_id=job_id,
+            intent=ApplicationMutationIntent.PREPARE,
+        )
+    except ApplicationMutationBlockedError as exc:
+        db.rollback()
+        if exc.reason_code == "APPLICATION_NOT_FOUND":
+            message = f"❌ Application for job #{job_id} not found."
+        else:
+            message = "⚠️ This application requires dashboard review or reconciliation."
         await _send_whatsapp_message(
             sender,
-            f"❌ Application for job #{job_id} not found.",
+            message,
+            settings,
+        )
+        return
+    assert locked is not None
+    app = locked.application
+    job = locked.job
+
+    if preparation_is_current(app):
+        db.rollback()
+        await _send_whatsapp_message(sender, "ℹ️ Already prepared.", settings)
+        return
+    if app.status not in (JobStatus.DRAFT, JobStatus.APPROVED):
+        db.rollback()
+        await _send_whatsapp_message(
+            sender,
+            "⚠️ This application requires dashboard review or reconciliation.",
+            settings,
+        )
+        return
+    if not app.selected_cv_id:
+        db.rollback()
+        await _send_whatsapp_message(
+            sender,
+            "⚠️ Select and review a CV in the dashboard before approval.",
             settings,
         )
         return
 
-    if app.status == JobStatus.APPROVED:
-        await _send_whatsapp_message(sender, "ℹ️ Already approved.", settings)
-        return
-
-    app.status = JobStatus.APPROVED
-    app.approved_at = datetime.utcnow()
-
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if job:
-        job.status = JobStatus.APPROVED
-
+    mark_locked_application_prepared(
+        db,
+        locked,
+        actor="whatsapp_operator",
+        source="whatsapp_prepare",
+    )
     db.commit()
-
-    # Enqueue submission
-    from worker.tasks import submit_application_task
-    submit_application_task.delay(app.id)
 
     await _send_whatsapp_message(
         sender,
         (
-            f"✅ Approved! Application for *{job.title if job else 'Unknown'}* "
-            "has been queued for submission."
+            f"ℹ️ Application for *{job.title if job else 'Unknown'}* was prepared. "
+            "Nothing was submitted. Final Send is available only from the reviewed dashboard."
         ),
         settings,
     )
-    logger.info("application_approved_via_whatsapp", job_id=job_id)
+    logger.info("application_prepared_via_whatsapp", job_id=job_id)
 
 
 async def _handle_skip(job_id: int, sender: str, db: Session, settings: Settings) -> None:
     """Handle skip_ action: mark application as rejected."""
-    app = db.query(Application).filter(Application.job_id == job_id).first()
-    job = db.query(Job).filter(Job.id == job_id).first()
+    try:
+        locked = lock_application_for_mutation(
+            db,
+            job_id=job_id,
+            intent=ApplicationMutationIntent.TERMINAL,
+            allow_missing=True,
+        )
+    except ApplicationMutationBlockedError:
+        db.rollback()
+        await _send_whatsapp_message(
+            sender,
+            "⚠️ This application may already have reached the employer. "
+            "Review or reconcile it in the dashboard before skipping.",
+            settings,
+        )
+        return
 
-    if app:
-        app.status = JobStatus.SKIPPED
-        app.rejected_at = datetime.utcnow()
-        app.rejection_reason = "Skipped by user via WhatsApp"
-    if job:
+    if locked is not None:
+        transition_locked_application_to_skipped(
+            db,
+            locked,
+            actor="whatsapp_operator",
+            reason_code="OPERATOR_CANCELLED",
+            rejection_reason="Skipped by user via WhatsApp",
+        )
+        job = locked.job
+    else:
+        try:
+            job = lock_job_without_application_for_mutation(
+                db,
+                job_id=job_id,
+                intent=ApplicationMutationIntent.TERMINAL,
+            )
+        except ApplicationMutationBlockedError:
+            db.rollback()
+            await _send_whatsapp_message(
+                sender,
+                "⚠️ This application may already have reached the employer. "
+                "Review or reconcile it in the dashboard before skipping.",
+                settings,
+            )
+            return
         job.status = JobStatus.SKIPPED
-
     db.commit()
 
     await _send_whatsapp_message(
@@ -318,13 +390,14 @@ async def _handle_edit(job_id: int, sender: str, db: Session, settings: Settings
         f"✏️ *Application for {job.title} at {job.company}*\n\n"
         f"*Cover Letter:*\n{(app.cover_letter or '')[:1000]}\n\n"
         f"*Recruiter Message:*\n{(app.recruiter_message or '')[:500]}\n\n"
-        f"Reply with 'approve_{job_id}' to approve or 'skip_{job_id}' to skip."
+        f"Reply with 'approve_{job_id}' to prepare or 'skip_{job_id}' to skip."
     )
     await _send_whatsapp_message(sender, preview, settings)
     logger.info("application_edit_preview_sent", job_id=job_id)
 
 
 # ── Webhook Endpoints ───────────────────────────────────
+
 
 @router.get("/whatsapp")
 async def verify_webhook(
@@ -452,6 +525,7 @@ async def receive_message(
 
             # Enqueue URL processing
             from worker.tasks import process_url_task
+
             if settings.tasks_always_eager:
                 process_url_task.apply(args=[db_url.id])
             else:
@@ -479,6 +553,7 @@ async def receive_message(
 
 
 # ── Text-post ingestion (Task 5.5) ──────────────────────
+
 
 @ingest_router.post("/ingest-text")
 async def ingest_text(

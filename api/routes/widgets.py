@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from core.application_state import prepared_application_count
+from core.submission_truth import is_employer_verified, latest_employer_verified_count
 from db.models import Application, JobStatus
 from db.session import get_db
 
@@ -24,27 +26,36 @@ class WidgetSummaryResponse(BaseModel):
 async def get_widget_summary(db: Session = Depends(get_db)):
     """Return compact mobile widget summary payload."""
     total = db.query(Application).count()
-    approved = db.query(Application).filter(Application.status == JobStatus.APPROVED).count()
+    approved = prepared_application_count(db)
     review = db.query(Application).filter(Application.status == JobStatus.NEEDS_REVIEW).count()
-    submitted = db.query(Application).filter(Application.status == JobStatus.SUBMITTED).count()
+    submitted = latest_employer_verified_count(db)
 
-    recent_apps = (
-        db.query(Application)
-        .order_by(Application.created_at.desc())
-        .limit(5)
-        .all()
-    )
+    recent_apps = db.query(Application).order_by(Application.created_at.desc()).limit(5).all()
 
-    actions = [
-        {
-            "id": a.id,
-            "job_title": a.job.title if a.job else "Unknown",
-            "company": a.job.company if a.job else "Unknown",
-            "status": a.status.value if hasattr(a.status, "value") else str(a.status),
-            "selected_cv_id": a.selected_cv_id,
-        }
-        for a in recent_apps
-    ]
+    actions = []
+    for application in recent_apps:
+        source_status = (
+            application.status.value
+            if hasattr(application.status, "value")
+            else str(application.status)
+        )
+        employer_verified = is_employer_verified(application.submission)
+        display_status = (
+            "submitted"
+            if employer_verified
+            else ("unverified" if source_status == "submitted" else source_status)
+        )
+        actions.append(
+            {
+                "id": application.id,
+                "job_title": application.job.title if application.job else "Unknown",
+                "company": application.job.company if application.job else "Unknown",
+                "status": display_status,
+                "source_status": source_status,
+                "employer_verified": employer_verified,
+                "selected_cv_id": application.selected_cv_id,
+            }
+        )
 
     return WidgetSummaryResponse(
         total_applications=total,

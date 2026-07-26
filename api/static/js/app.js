@@ -18,12 +18,25 @@ const SHORT_HOSTS = [
     'rb.gy', 'cutt.ly', 'buff.ly', 'tiny.cc', 'is.gd', 's.id',
 ];
 
+function runtimeMeta(name) {
+    return document.querySelector(`meta[name="${name}"]`)?.content || '';
+}
+
+const LOADED_DASHBOARD_RELEASE = Object.freeze({
+    build_sha: runtimeMeta('job-agent-build-sha'),
+    ui_asset_digest: runtimeMeta('job-agent-ui-digest'),
+    source_digest: runtimeMeta('job-agent-source-digest'),
+    protocol_version: runtimeMeta('job-agent-protocol'),
+    boot_id: runtimeMeta('job-agent-boot-id'),
+});
+
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
     currentTab: 'dashboard',
     authToken: '',
     dashboardData: null,
     applications: [],
+    selectedApplications: new Set(),
     jobs: [],
     urls: [],
     messages: [],
@@ -35,6 +48,9 @@ const state = {
     },
     autoRefresh: false,
     autoRefreshTimer: null,
+    runtimeCapabilities: null,
+    readiness: null,
+    runtimeProbeStatus: 'loading',
 };
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -78,8 +94,11 @@ function setupListeners() {
         appFilters().forEach(b => b.classList.remove('active'));
         e.currentTarget.classList.add('active');
         state.filters.applications = e.currentTarget.dataset.status;
+        state.selectedApplications.clear();
         renderApplications();
     }));
+    const batchApproveBtn = $('btn-batch-approve');
+    if (batchApproveBtn) batchApproveBtn.addEventListener('click', handleBatchApprove);
 
     // Job filters
     jobFilters().forEach(btn => btn.addEventListener('click', e => {
@@ -109,41 +128,6 @@ function setupListeners() {
         sessionStorage.setItem('job_agent_token', state.authToken);
         refreshAllData();
     });
-
-    // Command Hub Handlers
-    const btnDaemon = $('cmd-btn-daemon');
-    if (btnDaemon) {
-        btnDaemon.addEventListener('click', async () => {
-            const output = $('command-console-output');
-            if (output) output.textContent += '\n[ACTION] Launching Autonomous Auto-Apply Daemon...\n[STATUS] Running score_job & 12 CV routing across high-tech positions...';
-            try {
-                const res = await fetch('/api/batch-apply', { method: 'POST' });
-                const data = await res.json();
-                if (output) output.textContent += `\n[SUCCESS] Batch Auto-Apply Completed: ${data.submitted_count || 10} Applications Submitted!`;
-            } catch (err) {
-                if (output) output.textContent += '\n[SUCCESS] Daemon Active & Executing Submissions.';
-            }
-            refreshAllData();
-        });
-    }
-
-    const btnPlaywright = $('cmd-btn-playwright');
-    if (btnPlaywright) {
-        btnPlaywright.addEventListener('click', () => {
-            const output = $('command-console-output');
-            if (output) output.textContent += '\n[ACTION] Launching Playwright Visible Browser Engine...\n[STATUS] Navigating Workday/Greenhouse/Lever live portals...';
-        });
-    }
-
-    const btnVerifyDb = $('cmd-btn-verify-db');
-    if (btnVerifyDb) {
-        btnVerifyDb.addEventListener('click', async () => {
-            const output = $('command-console-output');
-            if (output) output.textContent += '\n[ACTION] Querying Database job_agent.db...\n[STATUS] Fetching real submitted application records...';
-            refreshAllData();
-        });
-    }
-
 
     // Governor kill / resume
     $('btn-kill').addEventListener('click', handleKill);
@@ -210,7 +194,7 @@ function isInputFocused() {
 // ── Tab Switching ─────────────────────────────────────────────────────────────
 const TAB_TITLES = {
     dashboard: 'Dashboard',
-    applications: 'Approvals',
+    applications: 'Preparation',
     jobs: 'Job Pipeline',
     urls: 'URL Queue',
     whatsapp: 'WhatsApp',
@@ -231,6 +215,16 @@ function switchTab(tabId) {
 }
 
 // ── API Layer ──────────────────────────────────────────────────────────────────
+function boundedApiError(body, fallback) {
+    const detail = body?.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (detail && typeof detail === 'object') {
+        if (typeof detail.message === 'string' && detail.message.trim()) return detail.message;
+        if (typeof detail.code === 'string' && detail.code.trim()) return detail.code;
+    }
+    return fallback;
+}
+
 async function apiCall(endpoint, method = 'GET', body = null) {
     const headers = { 'Content-Type': 'application/json' };
     if (state.authToken) headers['Authorization'] = `Bearer ${state.authToken}`;
@@ -248,7 +242,7 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         }
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `HTTP ${res.status}`);
+            throw new Error(boundedApiError(err, `HTTP ${res.status}`));
         }
         return await res.json();
     } catch (err) {
@@ -257,7 +251,22 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     }
 }
 
+async function probeJson(endpoint, method = 'GET', body = null) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (state.authToken) headers['Authorization'] = `Bearer ${state.authToken}`;
+    try {
+        const config = { method, headers };
+        if (body) config.body = JSON.stringify(body);
+        const response = await fetch(endpoint, config);
+        const data = await response.json().catch(() => null);
+        return { ok: response.ok, status: response.status, data };
+    } catch {
+        return { ok: false, status: 0, data: null };
+    }
+}
+
 async function refreshAllData() {
+    await fetchRuntimeStatus();
     await fetchDashboard();
     await fetchOverview();
     // Always keep jobs current (used by dashboard histogram + CSV export)
@@ -266,6 +275,152 @@ async function refreshAllData() {
     if (state.currentTab === 'applications') await fetchApplications();
     if (state.currentTab === 'urls') await fetchUrls();
     if (state.currentTab === 'whatsapp') { await fetchMessages(); await fetchBridgeStatus(); }
+}
+
+// ── Runtime safety / effective mode ──────────────────────────────────────────
+async function fetchRuntimeStatus() {
+    const [capabilities, readiness] = await Promise.all([
+        probeJson('/api/runtime/capabilities'),
+        probeJson('/health/ready'),
+    ]);
+
+    state.runtimeCapabilities = capabilities.ok ? capabilities.data : null;
+    state.readiness = state.runtimeCapabilities?.readiness || readiness.data || null;
+    state.runtimeProbeStatus = capabilities.ok
+        ? 'available'
+        : capabilities.status === 401 || capabilities.status === 403
+            ? 'authentication_required'
+            : 'unavailable';
+    renderRuntimeModeBanner();
+
+    if (state.applications.length) renderApplications();
+}
+
+function runtimeSubmissionState() {
+    const capabilities = state.runtimeCapabilities;
+    const mode = capabilities?.mode || {};
+    const readiness = capabilities?.readiness || state.readiness || {};
+    const submission = capabilities?.submission || {};
+    const worker = capabilities?.worker || {};
+    const release = capabilities?.release || {};
+    const reasons = [];
+
+    if (!capabilities) {
+        reasons.push(
+            state.runtimeProbeStatus === 'authentication_required'
+                ? 'Enter the API Secret to verify submission safety'
+                : 'Runtime capabilities are unavailable'
+        );
+    }
+    if (mode.dry_run === true) reasons.push('DRY_RUN is enabled');
+    if (mode.draft_only === true) reasons.push('Draft-only mode is enabled');
+    if (mode.live_submit_enabled !== true) reasons.push('Live submission is disabled');
+    if (readiness.status !== 'ready') {
+        const failedChecks = Object.entries(readiness.checks || {})
+            .filter(([, result]) => result !== true && result?.ok !== true)
+            .map(([name]) => name.replace(/_/g, ' '));
+        reasons.push(
+            failedChecks.length
+                ? `Dependencies unavailable: ${failedChecks.join(', ')}`
+                : 'Runtime readiness is degraded'
+        );
+    }
+    if (worker.compatible === false) reasons.push('Runner build is incompatible');
+    const loadedReleaseValues = Object.values(LOADED_DASHBOARD_RELEASE);
+    const loadedReleaseKnown = !loadedReleaseValues.some(
+        value => !value || value === 'unavailable'
+    );
+    const releaseMatches = Boolean(
+        capabilities
+        && loadedReleaseKnown
+        && release.build_sha === LOADED_DASHBOARD_RELEASE.build_sha
+        && release.ui_asset_digest === LOADED_DASHBOARD_RELEASE.ui_asset_digest
+        && release.source_digest === LOADED_DASHBOARD_RELEASE.source_digest
+        && release.protocol_version === LOADED_DASHBOARD_RELEASE.protocol_version
+        && release.boot_id === LOADED_DASHBOARD_RELEASE.boot_id
+    );
+    if (!loadedReleaseKnown) {
+        reasons.push('Dashboard release identity is unavailable');
+    } else if (capabilities && !releaseMatches) {
+        reasons.push('Dashboard and API releases do not match; reload this page');
+    }
+    for (const reason of submission.reasons || []) {
+        const text = typeof reason === 'string'
+            ? reason
+            : reason?.message || reason?.code;
+        if (text) reasons.push(String(text).replace(/_/g, ' '));
+    }
+    if (capabilities && submission.allowed !== true && reasons.length === 0) {
+        reasons.push('Runtime did not authorize live submission');
+    }
+
+    const allowed = capabilities !== null
+        && submission.allowed === true
+        && mode.live_submit_enabled === true
+        && mode.dry_run !== true
+        && mode.draft_only !== true
+        && readiness.status === 'ready'
+        && worker.compatible !== false
+        && releaseMatches;
+
+    return {
+        allowed,
+        reasons: [...new Set(reasons)],
+        modeName: mode.name || (mode.dry_run ? 'dry run' : mode.draft_only ? 'draft only' : 'unknown'),
+        release,
+    };
+}
+
+function renderRuntimeModeBanner() {
+    const banner = $('runtime-mode-banner');
+    if (!banner) return;
+
+    const runtime = runtimeSubmissionState();
+    const capabilities = state.runtimeCapabilities;
+    const mode = capabilities?.mode || {};
+    const isSafeMode = mode.dry_run === true || mode.draft_only === true;
+    const variant = runtime.allowed ? 'live' : isSafeMode ? 'safe' : 'blocked';
+    const title = runtime.allowed
+        ? 'Live Send is available — final submission is always explicit'
+        : isSafeMode
+            ? 'Preparation only — this mode cannot submit an application'
+            : 'Send application is disabled';
+    const detail = runtime.allowed
+        ? 'A green result appears only after the employer confirms this exact attempt.'
+        : runtime.reasons.join(' · ') || 'Submission safety could not be verified.';
+    const build = runtime.release.build_sha
+        ? String(runtime.release.build_sha).slice(0, 10)
+        : 'unknown';
+    const protocol = runtime.release.protocol_version || 'unknown';
+
+    banner.className = `runtime-mode-banner runtime-mode-${variant}`;
+    banner.innerHTML = `
+        <i data-lucide="${runtime.allowed ? 'shield-check' : isSafeMode ? 'file-clock' : 'shield-alert'}"></i>
+        <div class="runtime-mode-copy">
+            <div class="runtime-mode-title">${esc(title)}</div>
+            <div class="runtime-mode-detail">${esc(detail)}</div>
+        </div>
+        <div class="runtime-mode-meta" aria-label="Runtime release information">
+            <span>${esc(runtime.modeName)}</span>
+            <span>build ${esc(build)}</span>
+            <span>protocol ${esc(protocol)}</span>
+        </div>`;
+
+    const indicator = $('runtime-status-indicator');
+    const indicatorText = $('runtime-status-text');
+    const indicatorDot = $('runtime-status-dot');
+    if (indicator) indicator.title = detail;
+    if (indicatorText) {
+        indicatorText.textContent = runtime.allowed
+            ? 'Live Send Ready'
+            : isSafeMode
+                ? 'Preparation Only'
+                : 'Send Disabled';
+    }
+    if (indicatorDot) {
+        indicatorDot.className = `dot ${runtime.allowed ? 'mode-live' : isSafeMode ? 'mode-safe' : 'mode-blocked'}`;
+    }
+    lucide.createIcons();
 }
 
 // ── Rendering: Automation Control (governor / budget / needs-review) ──────────
@@ -398,7 +553,7 @@ async function handleResume() {
     btn.disabled = true;
     const res = await apiCall('/api/control/resume', 'POST');
     if (res) {
-        showToast('Automation resumed', 'success');
+        showToast('Automation resumed', 'info');
         await fetchOverview();
     } else {
         btn.disabled = false;
@@ -471,9 +626,9 @@ function renderDashboard() {
             <div class="stat-sub">Draft applications</div>
         </div>
         <div class="stat-card success-card">
-            <div class="stat-header"><i data-lucide="send" style="color:var(--success)"></i> Submitted</div>
+            <div class="stat-header"><i data-lucide="badge-check" style="color:var(--success)"></i> Employer Verified</div>
             <div class="stat-value count-anim text-success">${d.submissions_success ?? 0}</div>
-            <div class="stat-sub">of ${d.submissions_total ?? 0} attempts</div>
+            <div class="stat-sub">confirmed of ${d.submissions_total ?? 0} attempts</div>
         </div>
 
         <div class="stat-card">
@@ -487,7 +642,7 @@ function renderDashboard() {
             <div class="stat-sub">${skipRate !== null ? skipRate + '% skip rate' : 'No jobs yet'}</div>
         </div>
         <div class="stat-card ${successRate !== null && successRate < 50 ? 'warning-card' : ''}">
-            <div class="stat-header"><i data-lucide="percent"></i> Submit Success Rate</div>
+            <div class="stat-header"><i data-lucide="percent"></i> Verified Submit Rate</div>
             <div class="stat-value count-anim ${successRate !== null && successRate < 50 ? 'text-warning' : 'text-success'}">${successRate !== null ? successRate + '%' : '—'}</div>
             <div class="stat-sub">${d.submission_failures ?? 0} failure${d.submission_failures !== 1 ? 's' : ''}</div>
         </div>
@@ -518,8 +673,8 @@ function renderPipelineFunnel(d) {
         { label: 'URLs', value: d.total_urls ?? 0, icon: 'link', cls: '' },
         { label: 'Jobs', value: d.total_jobs ?? 0, icon: 'briefcase', cls: '' },
         { label: 'Applications', value: (d.applications_pending ?? 0) + (d.applications_approved ?? 0) + (d.applications_skipped ?? 0), icon: 'file-text', cls: '' },
-        { label: 'Approved', value: d.applications_approved ?? 0, icon: 'check-circle-2', cls: 'approved' },
-        { label: 'Submitted', value: d.submissions_success ?? 0, icon: 'send', cls: 'submitted' },
+        { label: 'Prepared', value: d.applications_approved ?? 0, icon: 'clipboard-check', cls: 'approved' },
+        { label: 'Employer verified', value: d.submissions_success ?? 0, icon: 'badge-check', cls: 'submitted' },
     ];
 
     const max = Math.max(...steps.map(s => s.value), 1);
@@ -654,13 +809,13 @@ async function uploadResume() {
         }
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `HTTP ${res.status}`);
+            throw new Error(boundedApiError(err, `HTTP ${res.status}`));
         }
         const data = await res.json();
         renderProfileSummary(data);
         showToast(
             `CV processed — profile v${data.version} rebuilt, ${data.rescored} job${data.rescored !== 1 ? 's' : ''} rescored`,
-            'success'
+            'info'
         );
     } catch (err) {
         showToast(err.message, 'error');
@@ -726,14 +881,15 @@ function applyJobFilter(status) {
 
 function exportJobsCSV() {
     if (!state.jobs.length) { showToast('No jobs to export', 'info'); return; }
-    const headers = ['Title', 'Company', 'Location', 'Employment Type', 'Score', 'Status', 'Date'];
+    const headers = ['Title', 'Company', 'Location', 'Employment Type', 'Score', 'Status', 'Employer Verified', 'Date'];
     const rows = state.jobs.map(j => [
         j.title || '',
         j.company || '',
         j.location || '',
         j.employment_type || '',
         j.score ?? '',
-        j.status || '',
+        j.display_status || (j.status === 'submitted' ? 'unverified' : j.status) || '',
+        j.employer_verified === true ? 'yes' : 'no',
         j.created_at ? new Date(j.created_at).toLocaleDateString() : '',
     ]);
     const csv = [headers, ...rows]
@@ -746,7 +902,7 @@ function exportJobsCSV() {
     a.download = `jobs-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast(`Exported ${state.jobs.length} jobs`, 'success');
+    showToast(`Exported ${state.jobs.length} jobs`, 'info');
 }
 
 function renderActivityFeed() {
@@ -758,7 +914,11 @@ function renderActivityFeed() {
     const events = [
         ...apps.map(a => ({
             ts: new Date(a.created_at),
-            type: a.status,
+            type: a.status === 'submitted' && a.submission_verified !== true
+                ? 'unverified'
+                : isPreparedApplication(a)
+                    ? 'approved'
+                    : a.status,
             title: a.job_title,
             meta: a.job_company,
             score: a.job_score,
@@ -782,9 +942,10 @@ function renderActivityFeed() {
         ingested: { icon: 'globe', cls: 'ingested', label: 'Discovered' },
         scored: { icon: 'target', cls: 'scored', label: 'Scored' },
         draft: { icon: 'file-edit', cls: 'drafted', label: 'Draft ready' },
-        approved: { icon: 'check-circle-2', cls: 'approved', label: 'Approved' },
+        approved: { icon: 'clipboard-check', cls: 'approved', label: 'Prepared' },
         skipped: { icon: 'skip-forward', cls: 'skipped', label: 'Skipped' },
-        submitted: { icon: 'send', cls: 'submitted', label: 'Submitted' },
+        submitted: { icon: 'badge-check', cls: 'submitted', label: 'Employer verified' },
+        unverified: { icon: 'circle-help', cls: 'unverified', label: 'Unverified result' },
     };
 
     container.innerHTML = events.map(ev => {
@@ -808,47 +969,175 @@ function renderActivityFeed() {
 }
 
 // ── Rendering: Applications ────────────────────────────────────────────────────
+function latestAttempt(application) {
+    const attempts = application?.attempts || [];
+    return attempts.length ? attempts[attempts.length - 1] : application?.attempt || null;
+}
+
+function isEmployerVerified(value) {
+    if (!value) return false;
+    if (value.submission_verified === true || value.verified === true) return true;
+    return value.attempt?.verified === true || latestAttempt(value)?.verified === true;
+}
+
+function attemptOutcome(value) {
+    const attempt = value?.attempt || latestAttempt(value);
+    return String(
+        attempt?.outcome
+        || attempt?.status
+        || value?.outcome
+        || value?.state
+        || value?.submission_status
+        || value?.status
+        || ''
+    ).toLowerCase();
+}
+
+function applicationStatusLabel(application) {
+    if (isPreparedApplication(application)) return 'prepared';
+    if (application.status === 'approved') return 'prepared';
+    if (application.status === 'submitted') {
+        return isEmployerVerified(application) ? 'employer verified' : 'unverified';
+    }
+    return String(application.status || 'unknown').replace(/_/g, ' ');
+}
+
+function isPreparedApplication(application) {
+    return ['approved', 'prepared', 'ready'].includes(application?.status)
+        || (application?.status === 'draft' && Boolean(application?.approved_at));
+}
+
+function isReviewableApplication(application) {
+    return application?.status === 'draft' && !isPreparedApplication(application);
+}
+
+function matchesApplicationFilter(application, filter) {
+    if (filter === 'draft') return isReviewableApplication(application);
+    if (filter === 'approved') return isPreparedApplication(application);
+    return application.status === filter;
+}
+
+function hasValidFormPlan(application) {
+    const plan = application?.form_plan || application?.latest_form_plan || {};
+    const explicitlyValid = application?.form_plan_valid === true
+        || application?.form_plan_status === 'valid'
+        || plan.valid === true
+        || plan.is_valid === true
+        || plan.status === 'valid';
+    if (!explicitlyValid) return false;
+
+    const expiresAt = plan.expires_at || application?.form_plan_expires_at;
+    return !expiresAt || new Date(expiresAt).getTime() > Date.now();
+}
+
+const ACTIVE_SUBMISSION_STAGES = new Set([
+    'queued',
+    'inspecting',
+    'preparing',
+    'ready',
+    'committing',
+    'verifying',
+]);
+
+function hasActiveSubmissionAttempt(application) {
+    const stage = String(latestAttempt(application)?.stage || '').toLowerCase();
+    return ACTIVE_SUBMISSION_STAGES.has(stage);
+}
+
+function liveSendBlockers(application) {
+    const blockers = [...runtimeSubmissionState().reasons];
+    if (hasActiveSubmissionAttempt(application)) {
+        blockers.push('A submission attempt is already in progress');
+    }
+    if (!hasValidFormPlan(application)) blockers.push('A current validated form plan is required');
+    if (application?.portal_session_ready === false) blockers.push('Sign in to the employer portal');
+    return [...new Set(blockers)];
+}
+
 function renderApplications() {
-    const filtered = state.applications.filter(a => a.status === state.filters.applications);
+    const filtered = state.applications.filter(
+        application => matchesApplicationFilter(application, state.filters.applications)
+    );
     const container = $('applications-list');
+    updateBatchApproveButton();
 
     if (!filtered.length) {
+        const filterLabel = {
+            draft: 'reviewable',
+            approved: 'prepared',
+            submitted: 'submission-record',
+        }[state.filters.applications] || state.filters.applications;
         container.innerHTML = `
             <div class="empty-state">
                 <i data-lucide="inbox"></i>
-                <h3>No ${state.filters.applications} applications</h3>
-                <p>Applications with status '${state.filters.applications}' will appear here.</p>
+                <h3>No ${filterLabel} applications</h3>
+                <p>Applications in the '${filterLabel}' view will appear here.</p>
             </div>`;
         lucide.createIcons();
         return;
     }
 
     container.innerHTML = filtered.map(app => {
-        const isPending = app.status === 'draft';
-        const canRetry = app.submission_status === 'failed' || app.submission_status === 'draft_only';
+        const isPending = isReviewableApplication(app);
+        const isPrepared = isPreparedApplication(app);
+        const outcome = attemptOutcome(app);
+        const verified = isEmployerVerified(app);
+        const canRetry = ['failed', 'failed_before_commit', 'draft_only'].includes(outcome);
 
         // Submission badge
         let subBadge = '';
         if (app.submission_status) {
-            const badgeMap = {
-                success:    ['sub-badge-success', '✅ Submitted'],
-                draft_only: ['sub-badge-draft',   '⚠️ Draft Only'],
-                failed:     ['sub-badge-failed',  '❌ Failed'],
-            };
-            const [cls, label] = badgeMap[app.submission_status] || ['sub-badge-draft', app.submission_status];
+            let cls = 'sub-badge-pending';
+            let label = String(outcome || app.submission_status).replace(/_/g, ' ');
+            if (verified) {
+                cls = 'sub-badge-success';
+                label = '✅ Employer confirmed';
+            } else if (['success', 'confirmed_submitted', 'legacy_unverified', 'operator_confirmed'].includes(outcome)) {
+                cls = 'sub-badge-unverified';
+                label = '⚠️ Unverified — not counted';
+            } else if (outcome === 'draft_only') {
+                cls = 'sub-badge-draft';
+                label = '⚠️ Draft only — not submitted';
+            } else if (['failed', 'failed_before_commit'].includes(outcome)) {
+                cls = 'sub-badge-failed';
+                label = '❌ Failed before confirmation';
+            } else if (outcome === 'unknown') {
+                cls = 'sub-badge-unverified';
+                label = '⚠️ Unknown — review required';
+            } else if (outcome === 'already_applied') {
+                cls = 'sub-badge-pending';
+                label = 'Already applied — not a new submission';
+            }
             const platform = app.submission_platform ? ` · ${app.submission_platform.replace(/_/g, ' ')}` : '';
             subBadge = `<div class="sub-badge ${cls}">${label}${esc(platform)}</div>`;
         }
+
+        const statusClass = app.status === 'submitted' && !verified
+            ? 'unverified'
+            : isPrepared
+                ? 'approved'
+                : app.status;
 
         return `
         <div class="app-card">
             <div>
                 <div class="app-meta mb-1">
-                    <span class="status ${app.status}">${app.status.replace('_', ' ')}</span>
+                    <span class="status ${statusClass}">${esc(applicationStatusLabel(app))}</span>
                     <span class="text-sm">${fmtDate(app.created_at)}</span>
                 </div>
+                ${isPending ? `<label class="batch-select">
+                    <input type="checkbox"
+                           ${state.selectedApplications.has(app.id) ? 'checked' : ''}
+                           onchange="toggleApplicationSelection(${app.id}, this.checked)">
+                    Select for batch preparation
+                </label>` : ''}
                 <h3 class="app-title" title="${esc(app.job_title)}">${esc(app.job_title)}</h3>
                 <div class="text-dim mb-1" style="font-size:0.85rem;">${esc(app.job_company)}</div>
+                <div class="text-dim mb-1" style="font-size:0.78rem;">
+                    ${esc((app.platform || 'unknown').replace(/_/g, ' '))}
+                    ${app.portal_session_ready === true ? ' · Session ready' : ''}
+                    ${app.portal_session_ready === false ? ' · Sign-in needed' : ''}
+                </div>
                 <div class="app-score mb-1">
                     <i data-lucide="target" style="width:14px;height:14px;"></i>
                     ${app.job_score}/100
@@ -862,15 +1151,15 @@ function renderApplications() {
             <div style="border-top:1px solid var(--border-light);padding-top:14px;margin-top:auto;display:flex;flex-direction:column;gap:8px;">
                 ${isPending
                 ? `<button class="btn btn-primary full-width" onclick="openReviewModal(${app.id})">
-                         <i data-lucide="eye" style="width:14px;height:14px;"></i> Review &amp; Approve
+                         <i data-lucide="eye" style="width:14px;height:14px;"></i> Review &amp; Prepare
                        </button>`
                 : `<button class="btn btn-secondary full-width" onclick="openReviewModal(${app.id})">
-                         <i data-lucide="send" style="width:14px;height:14px;"></i> View Submission
+                         <i data-lucide="file-search" style="width:14px;height:14px;"></i> View application
                        </button>`
                 }
                 ${canRetry
                 ? `<button class="btn btn-retry full-width" onclick="handleRetry(${app.id})">
-                         <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Retry Submission
+                         <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Retry attempt
                        </button>`
                 : ''
                 }
@@ -879,6 +1168,40 @@ function renderApplications() {
     }).join('');
 
     lucide.createIcons();
+}
+
+window.toggleApplicationSelection = (applicationId, selected) => {
+    if (selected) state.selectedApplications.add(applicationId);
+    else state.selectedApplications.delete(applicationId);
+    updateBatchApproveButton();
+};
+
+function updateBatchApproveButton() {
+    const btn = $('btn-batch-approve');
+    if (!btn) return;
+    const count = state.selectedApplications.size;
+    btn.style.display = state.filters.applications === 'draft' && count > 0
+        ? 'inline-flex'
+        : 'none';
+    btn.innerHTML = `<i data-lucide="check-check" style="width:16px"></i> Prepare selected (${count})`;
+    if (count > 0) lucide.createIcons();
+}
+
+async function handleBatchApprove() {
+    const ids = [...state.selectedApplications];
+    if (!ids.length) return;
+    if (!window.confirm(
+        `Prepare exactly ${ids.length} reviewed application${ids.length === 1 ? '' : 's'}? This does not confirm employer submission.`
+    )) return;
+    const result = await apiCall('/api/applications/batch-prepare', 'POST', {
+        application_ids: ids,
+        acknowledgement: 'PREPARE_SELECTED_APPLICATIONS',
+    });
+    if (!result) return;
+    state.selectedApplications.clear();
+    const preparedIds = result.prepared_application_ids || result.queued_application_ids || [];
+    showToast(`${preparedIds.length} application(s) accepted for preparation — not submitted`, 'info');
+    await refreshAllData();
 }
 
 // ── Rendering: Jobs Table ──────────────────────────────────────────────────────
@@ -921,7 +1244,7 @@ function renderJobs() {
                        </div>`
                 : '<span class="text-muted">—</span>'}
             </td>
-            <td><span class="status ${job.status}">${(job.status || 'pending').replace('_', ' ')}</span></td>
+            <td><span class="status ${job.employer_verified === true ? 'submitted' : (job.display_status || 'unverified')}">${esc((job.display_status || (job.status === 'submitted' ? 'unverified' : job.status) || 'pending').replace(/_/g, ' '))}</span></td>
             <td style="color:var(--text-muted);white-space:nowrap;">${fmtDate(job.created_at)}</td>
         </tr>`;
     }).join('');
@@ -1027,23 +1350,31 @@ async function submitIngest() {
     lucide.createIcons();
 
     try {
-        const res = await apiCall('/api/ingest', 'POST', { url: raw, sender: 'dashboard' });
+        const urls = raw.split('\n').map(line => line.trim()).filter(Boolean);
+        const res = await apiCall('/api/dashboard/ingest', 'POST', {
+            urls,
+            sender: 'dashboard',
+        });
         if (res) {
-            const added = res.added ?? 1;
-            const skipped = res.skipped ?? 0;
-            showToast(
-                skipped > 0
-                    ? `${added} URL(s) queued, ${skipped} duplicate(s) skipped`
-                    : `${added} URL(s) queued for processing`,
-                'success'
-            );
+            const results = res.results || [];
+            const counts = results.reduce((summary, item) => {
+                const state = item.state || 'failed';
+                summary[state] = (summary[state] || 0) + 1;
+                return summary;
+            }, {});
+            showToast([
+                `${counts.accepted || 0} accepted`,
+                `${counts.duplicate || 0} duplicate`,
+                `${counts.rejected || 0} rejected`,
+                `${counts.failed || 0} failed`,
+            ].join(' · '), counts.failed || counts.rejected ? 'warning' : 'info');
             $('ingest-url').value = '';
             $('ingest-modal').classList.remove('visible');
             setTimeout(refreshAllData, 2500);
         }
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '<i data-lucide="zap"></i> Process URL(s)';
+        btn.innerHTML = '<i data-lucide="list-plus"></i> Queue URL(s)';
         lucide.createIcons();
     }
 }
@@ -1081,21 +1412,53 @@ window.openReviewModal = async appId => {
     }
     $('modal-qa-list').innerHTML = qaHtml;
 
-    // Submission result (if exists)
+    const events = app.events || [];
+    const attempts = app.attempts || [];
+    const history = [
+        ...events.map(event => ({
+            time: event.created_at,
+            title: event.event_type.replace(/_/g, ' '),
+            detail: `${event.actor}${event.details?.reason_code ? ' · ' + event.details.reason_code : ''}`,
+        })),
+        ...attempts.map(attempt => ({
+            time: attempt.finished_at || attempt.started_at,
+            title: `attempt ${attempt.attempt_number} · ${attempt.status}`,
+            detail: `${attempt.platform || 'unresolved'}${attempt.reason_code ? ' · ' + attempt.reason_code : ''}`,
+        })),
+    ].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+    $('modal-audit-list').innerHTML = history.length
+        ? history.map(item => `<div class="qa-item">
+            <div class="qa-q">${esc(item.title)}</div>
+            <div class="qa-a">${esc(item.detail)} · ${fmtDate(item.time)}</div>
+        </div>`).join('')
+        : '<div class="text-dim text-sm">No automation events yet</div>';
+
+    // Submission result (if exists). Raw "success" is deliberately not enough:
+    // only an explicit employer-verification bit may render the green state.
     if (app.submission_status) {
-        const isSuccess = app.submission_status === 'success';
-        const isDraft   = app.submission_status === 'draft_only';
+        const outcome = attemptOutcome(app);
+        const verified = isEmployerVerified(app);
+        const isDraft = outcome === 'draft_only';
+        const isFailed = ['failed', 'failed_before_commit'].includes(outcome);
         const banner    = $('modal-submission-banner');
         if (banner) {
-            const icon      = isSuccess ? '✅' : isDraft ? '⚠️' : '❌';
-            const headline  = isSuccess ? 'Submitted successfully' : isDraft ? 'Saved as draft — not submitted' : 'Submission failed';
+            const icon = verified ? '✅' : isFailed ? '❌' : '⚠️';
+            const headline = verified
+                ? 'Employer-confirmed submission'
+                : isDraft
+                    ? 'Draft only — not submitted'
+                    : isFailed
+                        ? 'Submission was not confirmed'
+                        : ['success', 'confirmed_submitted'].includes(outcome)
+                            ? 'Unverified result — not proof of submission'
+                            : `${String(outcome || 'Unknown result').replace(/_/g, ' ')} — review required`;
             const platform  = (app.submission_platform || '').replace(/_/g, ' ');
-            banner.className = `submission-banner ${isSuccess ? 'status-success' : isDraft ? 'status-draft' : 'status-failed'}`;
+            banner.className = `submission-banner ${verified ? 'status-success' : isFailed ? 'status-failed' : 'status-unverified'}`;
             banner.style.display = 'flex';
             banner.innerHTML = `<span style="font-size:1.2rem;">${icon}</span>
                 <div>
                     <div style="font-weight:600;">${headline}</div>
-                    <div style="font-size:0.82rem;opacity:0.8;">${platform ? 'Platform: ' + esc(platform) : ''}${app.submission_error ? ' — ' + esc(app.submission_error.slice(0,120)) : ''}</div>
+                    <div style="font-size:0.82rem;opacity:0.8;">${platform ? 'Platform: ' + esc(platform) : ''}${app.submission_reason_code ? ' · ' + esc(app.submission_reason_code) : ''}</div>
                 </div>`;
         }
     } else {
@@ -1103,15 +1466,38 @@ window.openReviewModal = async appId => {
         if (banner) banner.style.display = 'none';
     }
 
-    const isPending = app.status === 'draft';
-    const canRetry  = app.submission_status === 'failed' || app.submission_status === 'draft_only';
+    const isPending = isReviewableApplication(app);
+    const outcome = attemptOutcome(app);
+    const canRetry = ['failed', 'failed_before_commit', 'draft_only'].includes(outcome);
+    const isPrepared = isPreparedApplication(app);
     $('btn-approve-app').style.display = isPending ? 'inline-flex' : 'none';
     $('btn-reject-app').style.display  = isPending ? 'inline-flex' : 'none';
     const retryBtn = $('btn-retry-app');
     if (retryBtn) retryBtn.style.display = canRetry ? 'inline-flex' : 'none';
+    const sendBtn = $('btn-send-app');
+    const sendReason = $('modal-send-disabled-reason');
+    if (sendBtn) {
+        const blockers = liveSendBlockers(app);
+        sendBtn.style.display = (
+            isPrepared
+            && !isEmployerVerified(app)
+            && !hasActiveSubmissionAttempt(app)
+        ) ? 'inline-flex' : 'none';
+        sendBtn.disabled = blockers.length > 0;
+        sendBtn.title = blockers.join(' · ');
+        sendBtn.onclick = () => handleSend(app.id);
+        if (sendReason) {
+            sendReason.style.display = sendBtn.style.display === 'none' || blockers.length === 0
+                ? 'none'
+                : 'block';
+            sendReason.textContent = blockers.join(' · ');
+        }
+    } else if (sendReason) {
+        sendReason.style.display = 'none';
+    }
     $('modal-cover-letter').readOnly = !isPending;
 
-    $('btn-approve-app').onclick = () => handleApprove(app.id);
+    $('btn-approve-app').onclick = () => handlePrepare(app.id);
     $('btn-reject-app').onclick  = () => handleReject(app.id);
     if (retryBtn) retryBtn.onclick = () => handleRetry(app.id);
 
@@ -1122,7 +1508,7 @@ window.openReviewModal = async appId => {
 async function previewCvRoute(appId) {
     const result = await apiCall('/api/cv-routing/preview', 'POST', { application_id: appId });
     if (!result) return;
-    showToast(result.selected_cv_id ? `Selected CV: ${result.selected_cv_id}` : 'Routing abstained — choose a CV', result.selected_cv_id ? 'success' : 'info');
+    showToast(result.selected_cv_id ? `Selected CV: ${result.selected_cv_id}` : 'Routing abstained — choose a CV', 'info');
     await refreshAllData();
     $('review-modal').classList.remove('visible');
 }
@@ -1136,7 +1522,7 @@ async function overrideCvRoute(appId) {
 
     const result = await apiCall(`/api/applications/${appId}/cv-override`, 'POST', { cv_id: cvId });
     if (!result) return;
-    showToast(`CV override saved: ${result.selected_cv_id}`, 'success');
+    showToast(`CV override saved: ${result.selected_cv_id}`, 'info');
     await refreshAllData();
     $('review-modal').classList.remove('visible');
 }
@@ -1146,7 +1532,7 @@ window.copyCoverLetter = () => {
     const text = ta.value;
     if (navigator.clipboard) {
         navigator.clipboard.writeText(text)
-            .then(() => showToast('Cover letter copied to clipboard', 'success'))
+            .then(() => showToast('Cover letter copied to clipboard', 'info'))
             .catch(() => showToast('Copy failed — select text and press Ctrl+C', 'info'));
     } else {
         ta.select();
@@ -1154,19 +1540,161 @@ window.copyCoverLetter = () => {
     }
 };
 
-async function handleApprove(appId) {
+function operationStatusUrl(result) {
+    const raw = result?.status_url || result?.attempt?.status_url;
+    const attemptId = result?.attempt_id || result?.attempt?.id;
+    const candidate = raw || (attemptId ? `/api/submission-attempts/${attemptId}` : '');
+    if (!candidate) return '';
+    try {
+        const parsed = new URL(candidate, location.origin);
+        return parsed.origin === location.origin ? `${parsed.pathname}${parsed.search}` : '';
+    } catch {
+        return '';
+    }
+}
+
+function isTerminalAttemptResult(result) {
+    if (isEmployerVerified(result)) return true;
+    return new Set([
+        'confirmed_submitted',
+        'success',
+        'prepared',
+        'already_applied',
+        'needs_review',
+        'unknown',
+        'failed',
+        'failed_before_commit',
+        'draft_only',
+        'operator_confirmed',
+        'legacy_unverified',
+    ]).has(attemptOutcome(result));
+}
+
+function showAttemptOutcome(result, operation = 'Application') {
+    const outcome = attemptOutcome(result);
+    if (isEmployerVerified(result)) {
+        showToast('Employer confirmed this application submission', 'success');
+        return;
+    }
+    const messages = {
+        prepared: ['Application prepared — nothing was submitted', 'info'],
+        draft_only: ['Draft-only run completed — nothing was submitted', 'warning'],
+        failed: ['Submission failed before employer confirmation', 'error'],
+        failed_before_commit: ['Stopped before the final external action', 'error'],
+        unknown: ['Submission outcome is unknown — manual review is required', 'warning'],
+        needs_review: ['Application needs review — nothing is confirmed', 'warning'],
+        already_applied: ['Employer reports an earlier application; no new submission was counted', 'info'],
+        operator_confirmed: ['Operator reconciliation recorded — employer verification is still unavailable', 'warning'],
+        legacy_unverified: ['Legacy result is unverified and is not counted as submitted', 'warning'],
+        success: ['Backend reported success without employer evidence — not counted', 'warning'],
+        confirmed_submitted: ['Submission claim lacks employer verification evidence — not counted', 'warning'],
+    };
+    const [message, type] = messages[outcome] || [`${operation} status: ${outcome || 'pending'}`, 'info'];
+    showToast(message, type);
+}
+
+async function monitorOperation(result, operation) {
+    if (isTerminalAttemptResult(result)) {
+        showAttemptOutcome(result, operation);
+        await refreshAllData();
+        return;
+    }
+
+    const statusUrl = operationStatusUrl(result);
+    showToast(`${operation} accepted — waiting for the recorded outcome`, 'info');
+    if (!statusUrl) {
+        await refreshAllData();
+        return;
+    }
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        const probe = await probeJson(statusUrl);
+        if (!probe.ok || !probe.data) continue;
+        if (isTerminalAttemptResult(probe.data)) {
+            showAttemptOutcome(probe.data, operation);
+            await refreshAllData();
+            return;
+        }
+    }
+
+    showToast(`${operation} is still in progress — no submission is confirmed yet`, 'info');
+    await refreshAllData();
+}
+
+async function requestPreparation(appId) {
+    const preferred = await probeJson(`/api/applications/${appId}/prepare`, 'POST');
+    if (preferred.ok) return preferred.data;
+    if (preferred.status === 404 || preferred.status === 405) {
+        // Compatibility with an older safe-mode API. A live-capable backend
+        // must expose the preparation endpoint so this legacy route is never
+        // mistaken for a non-submitting action.
+        const mode = state.runtimeCapabilities?.mode || {};
+        if (mode.dry_run !== true && mode.draft_only !== true) {
+            showToast('Preparation endpoint unavailable; refusing an ambiguous legacy action', 'error');
+            return null;
+        }
+        return apiCall(`/api/applications/${appId}/approve`, 'POST');
+    }
+    if (preferred.status === 401 || preferred.status === 403) {
+        showToast('Authentication failed. Check API Secret.', 'error');
+        return null;
+    }
+    showToast(
+        boundedApiError(preferred.data, `Preparation failed (HTTP ${preferred.status})`),
+        'error'
+    );
+    return null;
+}
+
+async function handlePrepare(appId) {
     const btn = $('btn-approve-app');
     btn.disabled = true;
-    btn.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Approving…';
+    btn.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Preparing…';
     lucide.createIcons();
-    const res = await apiCall(`/api/applications/${appId}/approve`, 'POST');
+    const res = await requestPreparation(appId);
     if (res) {
-        showToast('Application approved and queued for submission', 'success');
         $('review-modal').classList.remove('visible');
-        refreshAllData();
+        void monitorOperation(res, 'Preparation');
     }
     btn.disabled = false;
-    btn.innerHTML = 'Approve &amp; Submit';
+    btn.innerHTML = 'Prepare application';
+    lucide.createIcons();
+}
+
+async function handleSend(appId) {
+    const app = state.applications.find(application => application.id === appId);
+    if (!app) return;
+    const blockers = liveSendBlockers(app);
+    if (blockers.length) {
+        showToast(`Send disabled: ${blockers.join(' · ')}`, 'warning');
+        return;
+    }
+    if (!window.confirm(
+        `Send this exact application to ${app.job_company}? This is the final external action.`
+    )) return;
+
+    const btn = $('btn-send-app');
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Sending…';
+    lucide.createIcons();
+    const idempotencyKey = globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : `dashboard-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const result = await apiCall(`/api/applications/${appId}/submit`, 'POST', {
+        acknowledgement: 'SEND_APPLICATION',
+        idempotency_key: idempotencyKey,
+        application_revision: app.revision ?? app.application_revision,
+        form_plan_id: app.form_plan_id,
+        client_release: LOADED_DASHBOARD_RELEASE,
+    });
+    if (result) {
+        $('review-modal').classList.remove('visible');
+        await refreshAllData();
+        void monitorOperation(result, 'Send request');
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="send"></i> Send application';
     lucide.createIcons();
 }
 
@@ -1180,11 +1708,13 @@ async function handleReject(appId) {
 }
 
 window.handleRetry = async appId => {
+    if (!window.confirm(
+        'Prepare a new retry? Nothing will be submitted. Review it, then use Send application separately.'
+    )) return;
     const res = await apiCall(`/api/applications/${appId}/retry`, 'POST');
     if (res) {
-        showToast('Re-queued for submission — check back in a moment', 'success');
         $('review-modal').classList.remove('visible');
-        setTimeout(refreshAllData, 3000);
+        void monitorOperation(res, 'Retry preparation');
     }
 };
 
@@ -1201,7 +1731,7 @@ window.retryUrl = async urlId => {
     if (btn) { btn.disabled = true; btn.textContent = '…'; }
     const res = await apiCall(`/api/urls/${urlId}/retry`, 'POST');
     if (res) {
-        showToast('URL re-queued for processing', 'success');
+        showToast('URL re-queued for processing', 'info');
         setTimeout(fetchUrls, 2000);
     }
     if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
@@ -1317,7 +1847,7 @@ window.copyText = id => {
     const text = el?.textContent || '';
     if (navigator.clipboard) {
         navigator.clipboard.writeText(text)
-            .then(() => showToast('Copied!', 'success'))
+            .then(() => showToast('Copied!', 'info'))
             .catch(() => showToast('Copy failed — try selecting manually', 'info'));
     } else {
         showToast('Copy requires HTTPS — select manually', 'info');

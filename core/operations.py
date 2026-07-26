@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import shutil
 import time
@@ -12,6 +14,7 @@ import redis
 from sqlalchemy import text
 
 from core.config import Settings, get_settings
+from core.runtime_identity import get_runtime_identity
 from db.session import get_engine
 
 HEARTBEAT_PREFIX = "job-agent:heartbeat:"
@@ -35,18 +38,57 @@ def rate_limit_allowed(identity: str, limit: int, settings: Settings | None = No
 
 
 def record_heartbeat(component: str, settings: Settings | None = None) -> None:
-    redis_client(settings).set(f"{HEARTBEAT_PREFIX}{component}", str(time.time()), ex=3600)
+    identity = get_runtime_identity()
+    payload = json.dumps(
+        {
+            "seen_at": time.time(),
+            "build_sha": identity.build_sha,
+            "source_digest": identity.source_digest,
+            "release_id": identity.release_id,
+            "protocol_version": identity.protocol_version,
+        },
+        separators=(",", ":"),
+    )
+    redis_client(settings).set(f"{HEARTBEAT_PREFIX}{component}", payload, ex=3600)
 
 
 def _heartbeat_status(component: str, settings: Settings) -> dict[str, Any]:
     raw = redis_client(settings).get(f"{HEARTBEAT_PREFIX}{component}")
     if not raw:
         return {"ok": False, "detail": "missing"}
-    age = max(0.0, time.time() - float(str(raw)))
-    return {
+    raw_text = str(raw)
+    try:
+        payload = json.loads(raw_text)
+        seen_at = float(payload["seen_at"])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        # Backward compatibility for workers running the timestamp-only
+        # heartbeat format during a rolling upgrade.
+        payload = {}
+        try:
+            seen_at = float(raw_text)
+        except ValueError:
+            return {"ok": False, "detail": "invalid"}
+    if not math.isfinite(seen_at):
+        return {"ok": False, "detail": "invalid"}
+    age = max(0.0, time.time() - seen_at)
+    result = {
         "ok": age <= settings.dependency_heartbeat_ttl_seconds,
         "age_seconds": round(age, 1),
     }
+    if isinstance(payload, dict):
+        build_sha = payload.get("build_sha")
+        source_digest = payload.get("source_digest")
+        release_id = payload.get("release_id")
+        protocol_version = payload.get("protocol_version")
+        if isinstance(build_sha, str):
+            result["build_sha"] = build_sha[:64]
+        if isinstance(source_digest, str):
+            result["source_digest"] = source_digest[:71]
+        if isinstance(release_id, str):
+            result["release_id"] = release_id[:64]
+        if isinstance(protocol_version, str):
+            result["protocol_version"] = protocol_version[:64]
+    return result
 
 
 def browser_available() -> bool:
@@ -85,9 +127,7 @@ def readiness_report(settings: Settings | None = None) -> dict[str, Any]:
         checks["beat"] = {"ok": False, "detail": "unavailable"}
 
     data_dir = cfg.data_dir
-    checks["shared_storage"] = {
-        "ok": data_dir.exists() and os.access(data_dir, os.R_OK | os.W_OK)
-    }
+    checks["shared_storage"] = {"ok": data_dir.exists() and os.access(data_dir, os.R_OK | os.W_OK)}
     try:
         checks["browser"] = _heartbeat_status("browser", cfg)
     except Exception:

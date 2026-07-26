@@ -65,8 +65,17 @@ bridge/session/
 resume.pdf
 .linkedin_profile/
 
+# Employer portal sessions contain authentication cookies and browser state.
+# They are created only by the one-time interactive bootstrap command.
+.portal_profiles/
+employer_workflows.yaml
+
 # Personal role-specific CVs (never commit)
+user_profile.yaml
 cvs/
 cv_routing.yaml
 routing-evaluation-report.json
 linkedin-smoke-qualification.json
+
+# Local Vercel project linkage and deployment metadata.
+.vercel/

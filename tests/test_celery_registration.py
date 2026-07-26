@@ -47,9 +47,7 @@ def test_every_beat_scheduled_task_is_registered():
     assert schedule, "no beat schedule configured — expected drain/expire/discover/digest"
 
     missing = {
-        entry: cfg["task"]
-        for entry, cfg in schedule.items()
-        if cfg["task"] not in registered
+        entry: cfg["task"] for entry, cfg in schedule.items() if cfg["task"] not in registered
     }
     assert not missing, (
         f"Beat schedules tasks that no worker registers: {missing}. "
@@ -77,6 +75,9 @@ def test_core_and_v2_task_modules_all_present():
         "worker.tasks.score_job_task",
         "worker.tasks.generate_application_task",
         "worker.tasks.submit_application_task",
+        "worker.submission_commands.execute_submission_command_task",
+        "worker.submission_commands.drain_submission_commands_task",
+        "worker.submission_commands.reconcile_stale_commands_task",
         "worker.drainer.drain_apply_queue_task",
         "worker.drainer.expire_stale_jobs_task",
         "worker.discovery_tasks.discover_jobs_task",
@@ -84,3 +85,13 @@ def test_core_and_v2_task_modules_all_present():
     }
     missing = sorted(required - registered)
     assert not missing, f"expected pipeline tasks not registered by worker: {missing}"
+
+
+def test_database_outbox_recovery_runs_well_before_permit_expiry():
+    from core.config import get_settings
+    from worker.celery_app import celery_app
+
+    settings = get_settings()
+    schedule = celery_app.conf.beat_schedule["drain-submission-commands"]["schedule"]
+    assert float(schedule) < settings.submit_permit_ttl_seconds
+    assert settings.submission_command_drain_batch_size > 1

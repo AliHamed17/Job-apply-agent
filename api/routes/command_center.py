@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from profile.loader import get_profile
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from api.submission_display import job_submission_display
 from core.config import get_settings
+from core.submission_truth import latest_employer_verified_count
 from db.models import Application, Job, JobStatus
 from db.session import get_db
 
@@ -32,30 +36,35 @@ async def get_command_center_summary(db: Session = Depends(get_db)):
 
     total_jobs = db.query(Job).count()
     total_apps = db.query(Application).count()
-    submitted = db.query(Application).filter(Application.status == JobStatus.SUBMITTED).count()
-    needs_review = db.query(Application).filter(Application.status == JobStatus.NEEDS_REVIEW).count()
+    submitted = latest_employer_verified_count(db)
+    needs_review = (
+        db.query(Application).filter(Application.status == JobStatus.NEEDS_REVIEW).count()
+    )
 
     top_jobs_db = db.query(Job).order_by(Job.score.desc()).limit(5).all()
-    top_jobs = [
-        {
-            "id": j.id,
-            "title": j.title,
-            "company": j.company,
-            "score": j.score,
-            "status": str(j.status),
-        }
-        for j in top_jobs_db
-    ]
+    top_jobs = []
+    for job in top_jobs_db:
+        display = job_submission_display(job)
+        top_jobs.append(
+            {
+                "id": job.id,
+                "title": job.title,
+                "company": job.company,
+                "score": job.score,
+                "status": display.display_status,
+                "source_status": display.source_status,
+                "employer_verified": display.employer_verified,
+            }
+        )
 
     return CommandCenterSummary(
-        candidate_name="Ali Hamed",
+        candidate_name=get_profile().personal.name or "Candidate",
         auto_apply_active=settings.auto_apply,
         score_threshold=settings.auto_apply_threshold,
-        governor_cap=45,
+        governor_cap=settings.linkedin_daily_cap,
         total_jobs_scanned=total_jobs,
         total_applications=total_apps,
         submitted_count=submitted,
         needs_review_count=needs_review,
         top_matched_jobs=top_jobs,
     )
-

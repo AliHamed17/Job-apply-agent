@@ -19,6 +19,7 @@ import structlog
 from jobs.models import JobData
 from llm.generation import GeneratedApplication
 from submitters.base import BaseSubmitter, SubmissionResult
+from submitters.confirmation import browser_submission_result
 from submitters.form_brain import FormBrain
 from submitters.safe_fill import fill_form_safely, needs_review_error
 
@@ -27,9 +28,7 @@ logger = structlog.get_logger(__name__)
 _SR_URL_RE = re.compile(r"smartrecruiters\.com", re.IGNORECASE)
 
 # URL: jobs.smartrecruiters.com/{company-identifier}/{job-id}
-_SR_PARSE_RE = re.compile(
-    r"smartrecruiters\.com/([^/]+)/([^/?#]+)", re.IGNORECASE
-)
+_SR_PARSE_RE = re.compile(r"smartrecruiters\.com/([^/]+)/([^/?#]+)", re.IGNORECASE)
 
 _API_BASE = "https://api.smartrecruiters.com/v1"
 
@@ -102,23 +101,43 @@ class SmartRecruitersSubmitter(BaseSubmitter):
                 resp = await client.post(endpoint, json=candidate, headers=headers)
 
             if resp.status_code in (200, 201):
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = {}
                 return SubmissionResult(
                     success=True,
                     platform=self.platform_name,
                     status="submitted",
                     confirmation_id=str(data.get("id", "")),
+                    reason_code="SUBMITTED",
                 )
-            elif resp.status_code == 401:
-                logger.warning("smartrecruiters_api_auth_failed_trying_browser")
+            if 400 <= resp.status_code < 500:
+                logger.warning(
+                    "smartrecruiters_api_rejected_trying_browser",
+                    status=resp.status_code,
+                )
                 return await self._submit_via_browser(job, application, user_profile, resume_path)
-            else:
-                logger.warning("smartrecruiters_api_failed_trying_browser", status=resp.status_code)
-                return await self._submit_via_browser(job, application, user_profile, resume_path)
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="SMARTRECRUITERS_API_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
+            )
 
         except Exception as exc:
-            logger.warning("smartrecruiters_api_error_trying_browser", error=str(exc))
-            return await self._submit_via_browser(job, application, user_profile, resume_path)
+            logger.warning(
+                "smartrecruiters_api_outcome_unknown",
+                error=type(exc).__name__,
+            )
+            return SubmissionResult(
+                success=False,
+                platform=self.platform_name,
+                status="unknown",
+                error="SMARTRECRUITERS_API_OUTCOME_UNKNOWN",
+                reason_code="SUBMIT_UNCONFIRMED",
+            )
 
     async def _submit_via_browser(
         self,
@@ -132,8 +151,10 @@ class SmartRecruitersSubmitter(BaseSubmitter):
             from playwright.async_api import async_playwright
         except ImportError:
             return SubmissionResult(
-                success=False, platform=self.platform_name, status="failed",
-                error="Playwright not installed for browser fallback"
+                success=False,
+                platform=self.platform_name,
+                status="failed",
+                error="Playwright not installed for browser fallback",
             )
 
         from profile.models import UserProfile
@@ -150,8 +171,10 @@ class SmartRecruitersSubmitter(BaseSubmitter):
             if self.detect_captcha(await page.content()):
                 await browser.close()
                 return SubmissionResult(
-                    success=False, platform=self.platform_name, status="captcha_blocked",
-                    error="CAPTCHA detected on SmartRecruiters page"
+                    success=False,
+                    platform=self.platform_name,
+                    status="captcha_blocked",
+                    error="CAPTCHA detected on SmartRecruiters page",
                 )
 
             # SmartRecruiters often has an initial "Apply" or "Easy Apply" button to launch the form
@@ -191,7 +214,7 @@ class SmartRecruitersSubmitter(BaseSubmitter):
 
             # Cover letter / Messages (Textarea)
             if application.cover_letter:
-                msg_input = page.locator('textarea').first
+                msg_input = page.locator("textarea").first
                 if await msg_input.count() > 0 and await msg_input.is_visible():
                     await msg_input.fill(application.cover_letter)
 
@@ -206,41 +229,43 @@ class SmartRecruitersSubmitter(BaseSubmitter):
                 # application to a human instead of submitting a lie.
                 await browser.close()
                 return SubmissionResult(
-                    success=True, platform=self.platform_name, status="draft_only",
-                    error=needs_review_error(blocked)
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error=needs_review_error(blocked),
                 )
-
-            # Acknowledge / Checkboxes
-            checkboxes = page.locator('input[type="checkbox"]:visible')
-            for i in range(await checkboxes.count()):
-                cb = checkboxes.nth(i)
-                try:
-                    await cb.check()
-                except Exception:
-                    pass
 
             # Submit application
             submit_btn = page.locator(
                 'button[type="submit"]:has-text("Submit"), button:has-text("Submit")'
             ).first
-            if await submit_btn.is_visible():
+            if not await submit_btn.is_visible():
+                await browser.close()
+                return SubmissionResult(
+                    success=True,
+                    platform=self.platform_name,
+                    status="draft_only",
+                    error="NEEDS_REVIEW:SUBMIT_BUTTON_UNAVAILABLE",
+                    reason_code="SELECTOR_DRIFT",
+                )
+            try:
                 await submit_btn.click()
                 await page.wait_for_timeout(3000)
-
-            # Check success
-            success_indicators = ["success", "applied", "thank", "confirmation"]
-            final_content = (await page.content()).lower()
-            success = any(
-                ind in page.url.lower() or ind in final_content for ind in success_indicators
-            )
-
+                result = browser_submission_result(
+                    platform=self.platform_name,
+                    page_url=page.url,
+                    html=await page.content(),
+                )
+            except Exception:
+                result = SubmissionResult(
+                    success=False,
+                    platform=self.platform_name,
+                    status="unknown",
+                    error="SUBMIT_OUTCOME_UNKNOWN",
+                    reason_code="SUBMIT_UNCONFIRMED",
+                )
             await browser.close()
-            return SubmissionResult(
-                success=success, platform=self.platform_name,
-                status="submitted" if success else "failed",
-                error=None if success else "SmartRecruiters browser submission failed"
-            )
-
+            return result
 
     @staticmethod
     def _parse_url(url: str) -> tuple[str, str]:

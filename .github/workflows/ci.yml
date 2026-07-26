@@ -35,12 +35,17 @@ jobs:
       LLM_PROVIDER: mock
       SECRET_KEY: ci-only-secret
       APP_ENV: test
+      USER_PROFILE_PATH: user_profile.yaml.example
+      CV_ROUTING_PATH: cv_routing.yaml.example
+      CV_DIRECTORY: tests/fixtures/no-personal-cvs
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -48,6 +53,15 @@ jobs:
       - run: pip install -e ".[dev,pdf,postgres,email]" pip-audit
       - name: Critical lint
         run: ruff check . --select E9,F63,F7,F82
+      - name: Full lint and format for touched Python modules
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          git diff --name-only --diff-filter=ACM "$BASE_SHA" "$GITHUB_SHA" -- '*.py' > /tmp/changed-python.txt
+          if [ -s /tmp/changed-python.txt ]; then
+            xargs ruff check < /tmp/changed-python.txt
+            xargs ruff format --check < /tmp/changed-python.txt
+          fi
       - name: Full lint for v3 operational modules
         run: >
           ruff check
@@ -61,7 +75,27 @@ jobs:
           submitters/linkedin_v2.py tests/test_cv_routing.py
           tests/test_linkedin_smoke.py
       - name: Typed safety-critical modules
-        run: mypy --ignore-missing-imports --disable-error-code var-annotated core/config.py profile/cv_intake.py profile/writer.py worker/celery_app.py
+        run: >
+          mypy --ignore-missing-imports --disable-error-code var-annotated
+          core/config.py core/portal_sessions.py core/application_audit.py
+          core/submission_domain.py core/submission_state.py
+          profile/cv_intake.py profile/writer.py worker/celery_app.py
+          worker/submission_attempts.py submitters/platforms.py
+          submitters/base.py
+          submitters/employer_workflows.py submitters/confirmation.py
+          submitters/workday.py
+      - name: Typed v4 submission orchestration
+        run: >
+          mypy --ignore-missing-imports
+          --disable-error-code var-annotated
+          --disable-error-code assignment
+          --disable-error-code arg-type
+          --disable-error-code misc
+          --disable-error-code union-attr
+          --disable-error-code return-value
+          core/submission_service.py core/submit_permits.py
+          core/application_mutations.py core/application_revision.py
+          worker/submission_commands.py api/routes/ats.py
       - name: PostgreSQL migrations
         run: |
           alembic upgrade head

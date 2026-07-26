@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from api.submission_display import job_submission_display
 from db.models import ExtractedURL, Job, JobStatus, Message, URLStatus
 from db.session import get_db
 from ingestion.url_utils import normalize_url, url_hash
@@ -28,7 +29,30 @@ class JobResponse(BaseModel):
     date_posted: str
     score: float | None
     status: str
+    display_status: str
+    employer_verified: bool
     created_at: str
+
+
+def _serialize_job(job: Job) -> JobResponse:
+    submission_display = job_submission_display(job)
+    return JobResponse(
+        id=job.id,
+        title=job.title,
+        company=job.company or "",
+        location=job.location or "",
+        employment_type=job.employment_type or "",
+        seniority=job.seniority or "",
+        apply_url=job.apply_url or "",
+        source_url=job.source_url,
+        date_posted=job.date_posted or "",
+        score=job.score,
+        status=submission_display.source_status,
+        display_status=submission_display.display_status,
+        employer_verified=submission_display.employer_verified,
+        created_at=job.created_at.isoformat() if job.created_at else "",
+    )
+
 
 @router.get("/jobs", response_model=list[JobResponse])
 async def list_jobs(
@@ -53,23 +77,7 @@ async def list_jobs(
 
     jobs = query.order_by(Job.created_at.desc()).offset(offset).limit(limit).all()
 
-    return [
-        JobResponse(
-            id=j.id,
-            title=j.title,
-            company=j.company or "",
-            location=j.location or "",
-            employment_type=j.employment_type or "",
-            seniority=j.seniority or "",
-            apply_url=j.apply_url or "",
-            source_url=j.source_url,
-            date_posted=j.date_posted or "",
-            score=j.score,
-            status=j.status.value if j.status else "",
-            created_at=j.created_at.isoformat() if j.created_at else "",
-        )
-        for j in jobs
-    ]
+    return [_serialize_job(job) for job in jobs]
 
 
 class IngestRequest(BaseModel):
@@ -134,19 +142,7 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Job not found")
 
-    return JobResponse(
-        id=job.id,
-        title=job.title,
-        company=job.company or "",
-        location=job.location or "",
-        employment_type=job.employment_type or "",
-        seniority=job.seniority or "",
-        apply_url=job.apply_url or "",
-        source_url=job.source_url,
-        date_posted=job.date_posted or "",
-        score=job.score,
-        status=job.status.value if job.status else "",
-        created_at=job.created_at.isoformat() if job.created_at else "",
-    )
+    return _serialize_job(job)
