@@ -78,10 +78,24 @@ jobs:
         run: >
           mypy --ignore-missing-imports --disable-error-code var-annotated
           core/config.py core/portal_sessions.py core/application_audit.py
+          core/submission_domain.py core/submission_state.py
           profile/cv_intake.py profile/writer.py worker/celery_app.py
           worker/submission_attempts.py submitters/platforms.py
+          submitters/base.py
           submitters/employer_workflows.py submitters/confirmation.py
           submitters/workday.py
+      - name: Typed v4 submission orchestration
+        run: >
+          mypy --ignore-missing-imports
+          --disable-error-code var-annotated
+          --disable-error-code assignment
+          --disable-error-code arg-type
+          --disable-error-code misc
+          --disable-error-code union-attr
+          --disable-error-code return-value
+          core/submission_service.py core/submit_permits.py
+          core/application_mutations.py core/application_revision.py
+          worker/submission_commands.py api/routes/ats.py
       - name: PostgreSQL migrations
         run: |
           alembic upgrade head

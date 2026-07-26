@@ -1,8 +1,10 @@
 import random
 
+import pytest
+
 import core.governor as governor_module
 from core.config import Settings
-from core.governor import RateGovernor, get_governor
+from core.governor import GovernorUnavailableError, RateGovernor, get_governor
 
 
 def _gov(**over):
@@ -10,8 +12,11 @@ def _gov(**over):
     # in-memory store, deterministic clock + rng
     clock = {"h": 12}
     return RateGovernor(
-        s, redis_client=None,
-        now_fn=lambda: type("T", (), {"hour": clock["h"], "strftime": lambda self, f: "20260720"})(),
+        s,
+        redis_client=None,
+        now_fn=lambda: type(
+            "T", (), {"hour": clock["h"], "strftime": lambda self, f: "20260720"}
+        )(),
         rng=random.Random(1),
     ), clock
 
@@ -60,7 +65,8 @@ def test_get_governor_logs_warning_when_redis_unavailable(monkeypatch):
 
     warnings = []
     monkeypatch.setattr(
-        governor_module.logger, "warning",
+        governor_module.logger,
+        "warning",
         lambda event, **kw: warnings.append((event, kw)),
     )
 
@@ -72,3 +78,5 @@ def test_get_governor_logs_warning_when_redis_unavailable(monkeypatch):
 
     assert isinstance(gov, RateGovernor)
     assert any(event == "governor_redis_unavailable_using_memory_store" for event, _ in warnings)
+    with pytest.raises(GovernorUnavailableError):
+        get_governor(require_shared=True)

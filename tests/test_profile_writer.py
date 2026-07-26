@@ -1,8 +1,8 @@
-from pathlib import Path
-import yaml
+from profile import loader
 from profile.models import UserProfile
 from profile.writer import save_profile
-from profile import loader
+
+import yaml
 
 
 def test_save_profile_writes_yaml_and_swaps_cache(tmp_path, monkeypatch):

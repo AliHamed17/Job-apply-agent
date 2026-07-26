@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from core.config import get_settings
@@ -26,6 +26,16 @@ def get_engine():
             connect_args=connect_args,
             echo=False,
         )
+        if settings.db_is_sqlite:
+
+            @event.listens_for(_engine, "connect")
+            def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                finally:
+                    cursor.close()
+
     return _engine
 
 

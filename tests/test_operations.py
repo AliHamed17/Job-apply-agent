@@ -51,6 +51,39 @@ def test_live_production_requires_explicit_acknowledgement() -> None:
         settings.validate_runtime()
 
 
+def test_live_production_requires_postgresql() -> None:
+    settings = Settings(
+        app_env="production",
+        secret_key="s" * 32,
+        whatsapp_app_secret="verified-secret",
+        cors_origins="https://jobs.example.test",
+        database_url="sqlite:///unsafe-live.db",
+        draft_only=False,
+        dry_run=False,
+        portal_final_submit_enabled=True,
+        live_automation_acknowledged=True,
+    )
+    with pytest.raises(ValueError, match="requires PostgreSQL"):
+        settings.validate_runtime()
+
+
+def test_weak_development_auth_cannot_enter_live_api_mode(monkeypatch) -> None:
+    import api.main as api_main
+
+    monkeypatch.setattr(api_main.settings, "app_env", "development")
+    monkeypatch.setattr(api_main.settings, "secret_key", "change-me")
+    monkeypatch.setattr(api_main.settings, "dry_run", False)
+    monkeypatch.setattr(api_main.settings, "draft_only", False)
+    monkeypatch.setattr(api_main.settings, "portal_final_submit_enabled", True)
+    response = TestClient(api_main.app).get(
+        "/api/applications",
+        headers={"Authorization": "Bearer change-me"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "OPERATOR_AUTH_REQUIRED"
+
+
 def test_redis_rate_limit_is_atomic() -> None:
     pipeline = MagicMock()
     pipeline.__enter__.return_value = pipeline

@@ -25,6 +25,7 @@ function runtimeMeta(name) {
 const LOADED_DASHBOARD_RELEASE = Object.freeze({
     build_sha: runtimeMeta('job-agent-build-sha'),
     ui_asset_digest: runtimeMeta('job-agent-ui-digest'),
+    source_digest: runtimeMeta('job-agent-source-digest'),
     protocol_version: runtimeMeta('job-agent-protocol'),
     boot_id: runtimeMeta('job-agent-boot-id'),
 });
@@ -214,6 +215,16 @@ function switchTab(tabId) {
 }
 
 // ── API Layer ──────────────────────────────────────────────────────────────────
+function boundedApiError(body, fallback) {
+    const detail = body?.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (detail && typeof detail === 'object') {
+        if (typeof detail.message === 'string' && detail.message.trim()) return detail.message;
+        if (typeof detail.code === 'string' && detail.code.trim()) return detail.code;
+    }
+    return fallback;
+}
+
 async function apiCall(endpoint, method = 'GET', body = null) {
     const headers = { 'Content-Type': 'application/json' };
     if (state.authToken) headers['Authorization'] = `Bearer ${state.authToken}`;
@@ -231,7 +242,7 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         }
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `HTTP ${res.status}`);
+            throw new Error(boundedApiError(err, `HTTP ${res.status}`));
         }
         return await res.json();
     } catch (err) {
@@ -324,6 +335,7 @@ function runtimeSubmissionState() {
         && loadedReleaseKnown
         && release.build_sha === LOADED_DASHBOARD_RELEASE.build_sha
         && release.ui_asset_digest === LOADED_DASHBOARD_RELEASE.ui_asset_digest
+        && release.source_digest === LOADED_DASHBOARD_RELEASE.source_digest
         && release.protocol_version === LOADED_DASHBOARD_RELEASE.protocol_version
         && release.boot_id === LOADED_DASHBOARD_RELEASE.boot_id
     );
@@ -797,7 +809,7 @@ async function uploadResume() {
         }
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `HTTP ${res.status}`);
+            throw new Error(boundedApiError(err, `HTTP ${res.status}`));
         }
         const data = await res.json();
         renderProfileSummary(data);
@@ -869,14 +881,15 @@ function applyJobFilter(status) {
 
 function exportJobsCSV() {
     if (!state.jobs.length) { showToast('No jobs to export', 'info'); return; }
-    const headers = ['Title', 'Company', 'Location', 'Employment Type', 'Score', 'Status', 'Date'];
+    const headers = ['Title', 'Company', 'Location', 'Employment Type', 'Score', 'Status', 'Employer Verified', 'Date'];
     const rows = state.jobs.map(j => [
         j.title || '',
         j.company || '',
         j.location || '',
         j.employment_type || '',
         j.score ?? '',
-        j.status || '',
+        j.display_status || (j.status === 'submitted' ? 'unverified' : j.status) || '',
+        j.employer_verified === true ? 'yes' : 'no',
         j.created_at ? new Date(j.created_at).toLocaleDateString() : '',
     ]);
     const csv = [headers, ...rows]
@@ -1017,8 +1030,25 @@ function hasValidFormPlan(application) {
     return !expiresAt || new Date(expiresAt).getTime() > Date.now();
 }
 
+const ACTIVE_SUBMISSION_STAGES = new Set([
+    'queued',
+    'inspecting',
+    'preparing',
+    'ready',
+    'committing',
+    'verifying',
+]);
+
+function hasActiveSubmissionAttempt(application) {
+    const stage = String(latestAttempt(application)?.stage || '').toLowerCase();
+    return ACTIVE_SUBMISSION_STAGES.has(stage);
+}
+
 function liveSendBlockers(application) {
     const blockers = [...runtimeSubmissionState().reasons];
+    if (hasActiveSubmissionAttempt(application)) {
+        blockers.push('A submission attempt is already in progress');
+    }
     if (!hasValidFormPlan(application)) blockers.push('A current validated form plan is required');
     if (application?.portal_session_ready === false) blockers.push('Sign in to the employer portal');
     return [...new Set(blockers)];
@@ -1214,7 +1244,7 @@ function renderJobs() {
                        </div>`
                 : '<span class="text-muted">—</span>'}
             </td>
-            <td><span class="status ${job.status}">${(job.status || 'pending').replace('_', ' ')}</span></td>
+            <td><span class="status ${job.employer_verified === true ? 'submitted' : (job.display_status || 'unverified')}">${esc((job.display_status || (job.status === 'submitted' ? 'unverified' : job.status) || 'pending').replace(/_/g, ' '))}</span></td>
             <td style="color:var(--text-muted);white-space:nowrap;">${fmtDate(job.created_at)}</td>
         </tr>`;
     }).join('');
@@ -1448,7 +1478,11 @@ window.openReviewModal = async appId => {
     const sendReason = $('modal-send-disabled-reason');
     if (sendBtn) {
         const blockers = liveSendBlockers(app);
-        sendBtn.style.display = isPrepared && !isEmployerVerified(app) ? 'inline-flex' : 'none';
+        sendBtn.style.display = (
+            isPrepared
+            && !isEmployerVerified(app)
+            && !hasActiveSubmissionAttempt(app)
+        ) ? 'inline-flex' : 'none';
         sendBtn.disabled = blockers.length > 0;
         sendBtn.title = blockers.join(' · ');
         sendBtn.onclick = () => handleSend(app.id);
@@ -1606,8 +1640,10 @@ async function requestPreparation(appId) {
         showToast('Authentication failed. Check API Secret.', 'error');
         return null;
     }
-    const detail = preferred.data?.detail;
-    showToast(typeof detail === 'string' ? detail : `Preparation failed (HTTP ${preferred.status})`, 'error');
+    showToast(
+        boundedApiError(preferred.data, `Preparation failed (HTTP ${preferred.status})`),
+        'error'
+    );
     return null;
 }
 
@@ -1649,10 +1685,12 @@ async function handleSend(appId) {
         acknowledgement: 'SEND_APPLICATION',
         idempotency_key: idempotencyKey,
         application_revision: app.revision ?? app.application_revision,
-        form_plan_id: app.form_plan?.id ?? app.latest_form_plan?.id,
+        form_plan_id: app.form_plan_id,
+        client_release: LOADED_DASHBOARD_RELEASE,
     });
     if (result) {
         $('review-modal').classList.remove('visible');
+        await refreshAllData();
         void monitorOperation(result, 'Send request');
     }
     btn.disabled = false;
@@ -1671,12 +1709,12 @@ async function handleReject(appId) {
 
 window.handleRetry = async appId => {
     if (!window.confirm(
-        'Retry this definitive failed/draft-only attempt? In live mode this may perform the final external action.'
+        'Prepare a new retry? Nothing will be submitted. Review it, then use Send application separately.'
     )) return;
     const res = await apiCall(`/api/applications/${appId}/retry`, 'POST');
     if (res) {
         $('review-modal').classList.remove('visible');
-        void monitorOperation(res, 'Retry');
+        void monitorOperation(res, 'Retry preparation');
     }
 };
 

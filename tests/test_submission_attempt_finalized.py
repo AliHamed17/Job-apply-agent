@@ -1,42 +1,20 @@
-"""Regression: the claimed Submission row must be finalized after a real submit.
+"""The retired v3 task must never manufacture or finalize an attempt.
 
-submit_application_task claims a Submission ORM row up front (status RUNNING)
-so a redelivered task can't double-apply, then writes the outcome back to it at
-the end. The cascade loop used to rebind `attempt` — the name holding that ORM
-row — to the submitter's SubmissionResult dataclass. Three consequences, all
-silent:
-
-  * the DB row stayed RUNNING forever, so mark_stale_attempts_unknown reaped it
-    15 minutes later and forced the Application AND Job to NEEDS_REVIEW — even
-    for submissions that actually succeeded
-  * `attempt.status = sub_status` wrote a SubmissionStatus enum onto the
-    dataclass's `status` (a str), corrupting the value the code then reads back
-  * the except-handler's db.get(Submission, attempt.id) raised AttributeError,
-    losing the intended fail-closed path
-
-Only reachable with draft_only=False, which is why the suite never caught it.
+Attempt finalization now belongs to ``worker.submission_commands`` and is
+covered by the submission-command kernel tests. This compatibility entrypoint
+accepts an application ID only so stale broker messages fail closed.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.config import Settings
-from db.models import (
-    Application,
-    Base,
-    Job,
-    JobStatus,
-    Submission,
-    SubmissionStatus,
-)
+from db.models import Application, Base, Job, JobStatus, Submission
 from submitters.base import SubmissionResult
-from submitters.platforms import QualificationTier, adapter_for_url
 
 
 def _factory(tmp_path):
@@ -76,211 +54,54 @@ def _approved_application(factory):
     return app_id
 
 
-def _settings(**kw):
-    return Settings(
-        _env_file=None,
-        draft_only=False,  # the only mode that reaches the cascade
-        auto_apply=True,
-        cv_routing_path="does-not-exist.yaml",
-        **kw,
-    )
-
-
-def _live_qualified_descriptor(url):
-    descriptor = adapter_for_url(url)
-    assert descriptor is not None
-    return replace(
-        descriptor,
-        qualification=QualificationTier.LIVE_CANARY_QUALIFIED,
-    )
-
-
 @pytest.mark.parametrize(
-    ("submit_result", "expected_status"),
+    "obsolete_result",
     [
-        (
-            SubmissionResult(
-                success=True,
-                platform="greenhouse",
-                status="submitted",
-                confirmation_id="abc123",
-                confirmation_url="https://boards.greenhouse.io/confirm/abc123",
-                reason_code="EMPLOYER_VERIFIED",
-            ),
-            SubmissionStatus.SUCCESS,
+        SubmissionResult(
+            success=True,
+            platform="greenhouse",
+            status="submitted",
+            confirmation_id="abc123",
+            confirmation_url="https://boards.greenhouse.io/confirm/abc123",
+            reason_code="EMPLOYER_VERIFIED",
         ),
-        (
-            SubmissionResult(
-                success=False,
-                platform="greenhouse",
-                status="failed",
-                error="boom",
-            ),
-            SubmissionStatus.FAILED,
+        SubmissionResult(
+            success=False,
+            platform="greenhouse",
+            status="failed",
+            error="boom",
         ),
-        (
-            SubmissionResult(
-                success=False,
-                platform="greenhouse",
-                status="unknown",
-                error="Submit clicked but no success confirmation appeared",
-                reason_code="SUBMIT_UNCONFIRMED",
-            ),
-            SubmissionStatus.UNKNOWN,
+        SubmissionResult(
+            success=False,
+            platform="greenhouse",
+            status="unknown",
+            error="Submit clicked but no success confirmation appeared",
+            reason_code="SUBMIT_UNCONFIRMED",
         ),
     ],
 )
-def test_claimed_submission_row_is_finalized(tmp_path, submit_result, expected_status):
-    factory = _factory(tmp_path)
-    app_id = _approved_application(factory)
-
-    with (
-        patch("worker.tasks.get_session_factory", return_value=factory),
-        patch("worker.tasks.get_settings", return_value=_settings()),
-        patch("worker.tasks._validated_submit_command_available", return_value=True),
-        patch("profile.loader.get_profile"),
-        patch(
-            "submitters.platforms.adapter_for_url",
-            side_effect=_live_qualified_descriptor,
-        ),
-        patch(
-            "submitters.greenhouse.GreenhouseSubmitter.submit",
-            new=AsyncMock(return_value=submit_result),
-        ),
-    ):
-        from worker.tasks import submit_application_task
-
-        submit_application_task.apply(args=[app_id])
-
-    db = factory()
-    row = db.query(Submission).filter(Submission.application_id == app_id).one()
-    # The bug left this at RUNNING forever -> reaped into NEEDS_REVIEW later.
-    assert row.status == expected_status, (
-        f"claimed Submission row not finalized (still {row.status})"
-    )
-    assert row.finished_at is not None, "finished_at never written to the DB row"
-    if expected_status == SubmissionStatus.UNKNOWN:
-        application = db.get(Application, app_id)
-        assert application.status == JobStatus.NEEDS_REVIEW
-        assert "unknown" in (application.needs_review_reason or "").lower()
-    db.close()
-
-
-def test_successful_submission_persists_confirmation(tmp_path):
-    """A real success must land its confirmation on the DB row, not a dataclass."""
-    factory = _factory(tmp_path)
-    app_id = _approved_application(factory)
-
-    ok = SubmissionResult(
-        success=True,
-        platform="greenhouse",
-        status="submitted",
-        confirmation_id="conf-42",
-        confirmation_url="https://boards.greenhouse.io/confirm/conf-42",
-        reason_code="EMPLOYER_VERIFIED",
-    )
-
-    with (
-        patch("worker.tasks.get_session_factory", return_value=factory),
-        patch("worker.tasks.get_settings", return_value=_settings()),
-        patch("worker.tasks._validated_submit_command_available", return_value=True),
-        patch("profile.loader.get_profile"),
-        patch(
-            "submitters.platforms.adapter_for_url",
-            side_effect=_live_qualified_descriptor,
-        ),
-        patch(
-            "submitters.greenhouse.GreenhouseSubmitter.submit",
-            new=AsyncMock(return_value=ok),
-        ),
-    ):
-        from worker.tasks import submit_application_task
-
-        submit_application_task.apply(args=[app_id])
-
-    db = factory()
-    row = db.query(Submission).filter(Submission.application_id == app_id).one()
-    assert row.confirmation_id == "conf-42"
-    assert row.confirmation_url == "https://boards.greenhouse.io/confirm/conf-42"
-    assert row.submitted_at is not None
-    assert row.submitter_name == "greenhouse"
-    db.close()
-
-
-@pytest.mark.parametrize(
-    ("reason_code", "confirmation_url"),
-    [
-        ("SUBMITTED", "https://boards.greenhouse.io/thank-you"),
-        ("EMPLOYER_VERIFIED", "   "),
-    ],
-)
-def test_submit_success_without_valid_employer_evidence_becomes_unknown(
+def test_legacy_task_does_not_interpret_or_finalize_submitter_results(
     tmp_path,
-    reason_code,
-    confirmation_url,
+    obsolete_result,
 ):
     factory = _factory(tmp_path)
     app_id = _approved_application(factory)
-    unverified = SubmissionResult(
-        success=True,
-        platform="greenhouse",
-        status="submitted",
-        confirmation_url=confirmation_url,
-        reason_code=reason_code,
-    )
+    submit = AsyncMock(return_value=obsolete_result)
 
-    with (
-        patch("worker.tasks.get_session_factory", return_value=factory),
-        patch("worker.tasks.get_settings", return_value=_settings()),
-        patch("worker.tasks._validated_submit_command_available", return_value=True),
-        patch("profile.loader.get_profile"),
-        patch(
-            "submitters.platforms.adapter_for_url",
-            side_effect=_live_qualified_descriptor,
-        ),
-        patch(
-            "submitters.greenhouse.GreenhouseSubmitter.submit",
-            new=AsyncMock(return_value=unverified),
-        ),
-    ):
+    with patch("submitters.greenhouse.GreenhouseSubmitter.submit", new=submit):
         from worker.tasks import submit_application_task
 
-        submit_application_task.apply(args=[app_id])
+        result = submit_application_task.apply(args=[app_id]).get()
 
-    db = factory()
-    row = db.query(Submission).filter(Submission.application_id == app_id).one()
-    application = db.get(Application, app_id)
-    assert row.status == SubmissionStatus.UNKNOWN
-    assert row.reason_code == "FINAL_ACTION_UNCONFIRMED"
-    assert row.submitted_at is None
-    assert application.status == JobStatus.NEEDS_REVIEW
-    assert application.job.status == JobStatus.NEEDS_REVIEW
-    db.close()
-
-
-def test_dry_run_never_invokes_an_external_submitter(tmp_path):
-    factory = _factory(tmp_path)
-    app_id = _approved_application(factory)
-
-    with (
-        patch("worker.tasks.get_session_factory", return_value=factory),
-        patch(
-            "worker.tasks.get_settings",
-            return_value=_settings(dry_run=True),
-        ),
-        patch("profile.loader.get_profile"),
-        patch(
-            "submitters.greenhouse.GreenhouseSubmitter.submit",
-            new=AsyncMock(),
-        ) as submit,
-    ):
-        from worker.tasks import submit_application_task
-
-        submit_application_task.apply(args=[app_id])
-
+    assert result == {
+        "state": "blocked",
+        "reason_code": "DATABASE_COMMAND_REQUIRED",
+    }
     submit.assert_not_awaited()
+
     db = factory()
-    row = db.query(Submission).filter(Submission.application_id == app_id).one()
-    assert row.status == SubmissionStatus.DRAFT_ONLY
-    assert row.reason_code == "DRY_RUN_DISCARDED"
+    app = db.get(Application, app_id)
+    assert app.status == JobStatus.APPROVED
+    assert app.job.status == JobStatus.APPROVED
+    assert db.query(Submission).filter(Submission.application_id == app_id).count() == 0
     db.close()

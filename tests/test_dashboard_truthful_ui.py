@@ -24,6 +24,11 @@ def test_preparation_actions_do_not_claim_submission() -> None:
     assert "apiCall('/api/applications/batch-prepare'" in APP_JS
     assert "isPreparedApplication(application)" in APP_JS
     assert "application?.status === 'draft' && Boolean(application?.approved_at)" in APP_JS
+    assert (
+        "Prepare a new retry? Nothing will be submitted. "
+        "Review it, then use Send application separately."
+    ) in APP_JS
+    assert "retry? In live mode this may perform the final external action" not in APP_JS
 
 
 def test_live_send_is_fail_closed_and_runtime_banner_is_persistent() -> None:
@@ -38,6 +43,11 @@ def test_live_send_is_fail_closed_and_runtime_banner_is_persistent() -> None:
     assert 'name="job-agent-ui-digest"' in INDEX_HTML
     assert "A current validated form plan is required" in APP_JS
     assert "sendBtn.disabled = blockers.length > 0" in APP_JS
+    assert "form_plan_id: app.form_plan_id" in APP_JS
+    assert "client_release: LOADED_DASHBOARD_RELEASE" in APP_JS
+    assert "ACTIVE_SUBMISSION_STAGES" in APP_JS
+    assert "A submission attempt is already in progress" in APP_JS
+    assert "&& !hasActiveSubmissionAttempt(app)" in APP_JS
 
 
 def test_attempt_status_is_polled_when_api_supplies_a_status_url() -> None:
@@ -52,3 +62,11 @@ def test_multi_url_ingest_uses_truthful_per_url_endpoint() -> None:
     assert "urls," in APP_JS
     assert "counts.accepted" in APP_JS
     assert "result.prepared_application_ids || result.queued_application_ids" in APP_JS
+
+
+def test_structured_admission_errors_render_a_bounded_operator_message() -> None:
+    assert "function boundedApiError(body, fallback)" in APP_JS
+    assert "detail.message" in APP_JS
+    assert "detail.code" in APP_JS
+    assert "new Error(boundedApiError(err, `HTTP ${res.status}`))" in APP_JS
+    assert "new Error(err.detail ||" not in APP_JS

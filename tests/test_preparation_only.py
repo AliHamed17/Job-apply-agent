@@ -91,11 +91,18 @@ def _application(
     db.flush()
     attempt_id = None
     if attempt_status is not None:
+        terminal_outcome = {
+            SubmissionStatus.FAILED: "failed_before_commit",
+            SubmissionStatus.DRAFT_ONLY: "draft_only",
+            SubmissionStatus.UNKNOWN: "unknown",
+        }.get(attempt_status)
         attempt = Submission(
             application_id=application.id,
             attempt_number=1,
             submitter_name="greenhouse",
             status=attempt_status,
+            stage="finished",
+            outcome=terminal_outcome,
             reason_code=f"TEST_{attempt_status.value.upper()}",
         )
         db.add(attempt)
@@ -180,7 +187,7 @@ def test_application_filters_preserve_reviewable_and_prepared_semantics(
     factory = _factory(tmp_path)
     prepared_id, _job_id, _attempt_id = _application(factory)
     reviewable_id, _job_id, _attempt_id = _application(factory)
-    legacy_prepared_id, _job_id, _attempt_id = _application(
+    _legacy_prepared_id, _job_id, _attempt_id = _application(
         factory,
         status=JobStatus.APPROVED,
     )
@@ -199,7 +206,6 @@ def test_application_filters_preserve_reviewable_and_prepared_semantics(
     assert prepared.status_code == 200
     assert {(item["id"], item["status"]) for item in prepared.json()} == {
         (prepared_id, "prepared"),
-        (legacy_prepared_id, "prepared"),
     }
     assert legacy_alias.json() == prepared.json()
     assert client.get(f"/api/applications/{prepared_id}").json()["status"] == "prepared"
@@ -221,8 +227,7 @@ def test_submit_requires_permit_without_mutating_application(
         },
     )
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "SUBMIT_PERMIT_REQUIRED"
+    assert response.status_code == 422
     db = factory()
     application = db.get(Application, app_id)
     assert application.status == JobStatus.DRAFT
@@ -256,17 +261,19 @@ def test_live_worker_refuses_dispatch_without_validated_command(
         ),
     )
 
-    tasks.submit_application_task.apply(args=[app_id])
+    result = tasks.submit_application_task.apply(args=[app_id]).get()
 
     db = factory()
     application = db.get(Application, app_id)
-    assert application.status == JobStatus.NEEDS_REVIEW
-    assert application.needs_review_reason == "SUBMIT_PERMIT_REQUIRED"
-    assert db.get(Job, job_id).status == JobStatus.NEEDS_REVIEW
+    assert result == {
+        "state": "blocked",
+        "reason_code": "DATABASE_COMMAND_REQUIRED",
+    }
+    assert application.status == JobStatus.APPROVED
+    assert application.needs_review_reason is None
+    assert db.get(Job, job_id).status == JobStatus.APPROVED
     assert db.query(Submission).filter(Submission.application_id == app_id).count() == 0
-    event = db.query(ApplicationEvent).filter(ApplicationEvent.application_id == app_id).one()
-    assert event.event_type == "submission_dispatch_blocked"
-    assert json.loads(event.details)["external_action_started"] is False
+    assert db.query(ApplicationEvent).filter(ApplicationEvent.application_id == app_id).count() == 0
     db.close()
 
 

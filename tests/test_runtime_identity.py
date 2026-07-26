@@ -15,6 +15,8 @@ from core.runtime_identity import (
     PROTOCOL_VERSION,
     RuntimeIdentity,
     build_runtime_capabilities,
+    build_runtime_identity,
+    compute_source_digest,
     compute_ui_asset_digest,
     resolve_build_sha,
 )
@@ -26,12 +28,18 @@ from core.single_instance import (
 )
 
 
-def _identity(build_sha: str = "a" * 40) -> RuntimeIdentity:
+def _identity(
+    build_sha: str = "a" * 40,
+    *,
+    source_digest: str = "sha256:" + "c" * 64,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> RuntimeIdentity:
     return RuntimeIdentity(
         build_sha=build_sha,
         build_source="test",
         ui_asset_digest="sha256:" + "b" * 64,
-        protocol_version=PROTOCOL_VERSION,
+        source_digest=source_digest,
+        protocol_version=protocol_version,
         boot_id="00000000-0000-4000-8000-000000000001",
         started_at=datetime(2026, 7, 26, tzinfo=UTC),
     )
@@ -54,8 +62,11 @@ def _ready_report(
             "browser",
         )
     }
+    worker_identity = _identity(worker_build, protocol_version=worker_protocol)
     checks["worker"].update(
         build_sha=worker_build,
+        source_digest=worker_identity.source_digest,
+        release_id=worker_identity.release_id,
         protocol_version=worker_protocol,
     )
     return {"status": "ready", "checks": checks}
@@ -70,6 +81,8 @@ def _live_settings() -> Settings:
         auto_apply=False,
         portal_final_submit_enabled=True,
         live_automation_acknowledged=True,
+        database_url="postgresql://jobagent:test@localhost/jobagent",
+        secret_key="operator-auth-test-secret-" + "x" * 32,
     )
 
 
@@ -116,7 +129,35 @@ def test_ui_asset_digest_is_deterministic_and_content_sensitive(tmp_path: Path) 
     assert compute_ui_asset_digest(tmp_path) != first
 
 
-def test_capabilities_keep_send_blocked_until_command_protocol_exists() -> None:
+def test_source_digest_is_allowlisted_deterministic_and_content_sensitive(
+    tmp_path: Path,
+) -> None:
+    core_dir = tmp_path / "core"
+    migrations_dir = tmp_path / "migrations" / "versions"
+    private_dir = tmp_path / "cvs"
+    core_dir.mkdir()
+    migrations_dir.mkdir(parents=True)
+    private_dir.mkdir()
+    runtime_source = core_dir / "service.py"
+    migration = migrations_dir / "001_initial.py"
+    runtime_source.write_text("VERSION = 1\n", encoding="utf-8")
+    migration.write_text('revision = "001"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    private_cv = private_dir / "personal.pdf"
+    private_cv.write_bytes(b"private-cv-v1")
+
+    first = compute_source_digest(tmp_path)
+    assert first == compute_source_digest(tmp_path)
+    assert first.startswith("sha256:")
+
+    private_cv.write_bytes(b"private-cv-v2")
+    assert compute_source_digest(tmp_path) == first
+
+    runtime_source.write_text("VERSION = 2\n", encoding="utf-8")
+    assert compute_source_digest(tmp_path) != first
+
+
+def test_capabilities_allow_ready_command_protocol_runtime() -> None:
     result = build_runtime_capabilities(
         _live_settings(),
         _ready_report(),
@@ -129,10 +170,7 @@ def test_capabilities_keep_send_blocked_until_command_protocol_exists() -> None:
         "draft_only": False,
         "live_submit_enabled": True,
     }
-    assert result["submission"] == {
-        "allowed": False,
-        "reasons": ["SUBMIT_COMMAND_UNAVAILABLE"],
-    }
+    assert result["submission"] == {"allowed": True, "reasons": []}
     assert result["worker"]["compatible"] is True
     assert set(result["readiness"]["checks"]) == {
         "database",
@@ -171,14 +209,74 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         "FINAL_SUBMIT_DISABLED",
         "LIVE_AUTOMATION_NOT_ACKNOWLEDGED",
         "UNATTENDED_AUTOMATION_ENABLED",
+        "DATABASE_SERIALIZATION_REQUIRED",
+        "OPERATOR_AUTH_REQUIRED",
         "RUNTIME_NOT_READY",
         "BUILD_MISMATCH",
         "PROTOCOL_MISMATCH",
-        "SUBMIT_COMMAND_UNAVAILABLE",
     ]
     serialized = json.dumps(result)
     assert "person@example.com" not in serialized
     assert "secret-dependency" not in serialized
+
+
+def test_development_default_secret_never_allows_live_submission() -> None:
+    settings = _live_settings().model_copy(
+        update={
+            "app_env": "development",
+            "secret_key": "change-me",
+        }
+    )
+
+    result = build_runtime_capabilities(settings, _ready_report(), _identity())
+
+    assert result["mode"]["name"] == "blocked_auth"
+    assert result["mode"]["live_submit_enabled"] is False
+    assert result["submission"]["allowed"] is False
+    assert result["submission"]["reasons"] == ["OPERATOR_AUTH_REQUIRED"]
+
+
+def test_same_git_build_with_different_backend_source_is_incompatible() -> None:
+    api_identity = _identity()
+    worker_identity = _identity(source_digest="sha256:" + "d" * 64)
+    readiness = _ready_report()
+    readiness["checks"]["worker"].update(
+        source_digest=worker_identity.source_digest,
+        release_id=worker_identity.release_id,
+    )
+
+    result = build_runtime_capabilities(_live_settings(), readiness, api_identity)
+
+    assert result["submission"]["allowed"] is False
+    assert result["submission"]["reasons"] == ["BUILD_MISMATCH"]
+    assert result["worker"]["compatible"] is False
+
+
+def test_source_mutation_after_identity_creation_denies_submission(tmp_path: Path) -> None:
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    runtime_source = core_dir / "service.py"
+    runtime_source.write_text("VERSION = 1\n", encoding="utf-8")
+    identity = build_runtime_identity(
+        environ={"APP_BUILD_SHA": "same-git-head"},
+        project_root=tmp_path,
+    )
+    readiness = _ready_report(worker_build=identity.build_sha)
+    readiness["checks"]["worker"].update(
+        source_digest=identity.source_digest,
+        release_id=identity.release_id,
+    )
+
+    runtime_source.write_text("VERSION = 2\n", encoding="utf-8")
+    result = build_runtime_capabilities(
+        _live_settings(),
+        readiness,
+        identity,
+        current_source_digest=compute_source_digest(tmp_path),
+    )
+
+    assert result["submission"]["allowed"] is False
+    assert result["submission"]["reasons"] == ["BUILD_MISMATCH"]
 
 
 def test_unknown_build_identity_never_enables_submission() -> None:
@@ -194,7 +292,6 @@ def test_unknown_build_identity_never_enables_submission() -> None:
         "reasons": [
             "BUILD_IDENTITY_UNAVAILABLE",
             "WORKER_IDENTITY_UNAVAILABLE",
-            "SUBMIT_COMMAND_UNAVAILABLE",
         ],
     }
     assert result["worker"]["compatible"] is False
@@ -240,6 +337,8 @@ def test_heartbeat_publishes_release_and_protocol_metadata() -> None:
     assert payload == {
         "seen_at": 1234.5,
         "build_sha": identity.build_sha,
+        "source_digest": identity.source_digest,
+        "release_id": identity.release_id,
         "protocol_version": PROTOCOL_VERSION,
     }
     assert kwargs == {"ex": 3600}
@@ -284,12 +383,18 @@ def test_dashboard_embeds_exact_api_release_identity(monkeypatch) -> None:
         "compute_ui_asset_digest",
         lambda: identity.ui_asset_digest,
     )
+    monkeypatch.setattr(
+        api_main,
+        "compute_source_digest",
+        lambda: identity.source_digest,
+    )
 
     response = TestClient(api_main.app).get("/")
 
     assert response.status_code == 200
     assert f'name="job-agent-build-sha" content="{identity.build_sha}"' in response.text
     assert f'name="job-agent-ui-digest" content="{identity.ui_asset_digest}"' in response.text
+    assert f'name="job-agent-source-digest" content="{identity.source_digest}"' in response.text
     assert f'name="job-agent-protocol" content="{identity.protocol_version}"' in response.text
     assert f'name="job-agent-boot-id" content="{identity.boot_id}"' in response.text
 

@@ -22,7 +22,7 @@ from typing import Any
 from core.config import Settings
 
 PROTOCOL_VERSION = "submission-control.v1"
-SUBMIT_COMMAND_PROTOCOL_AVAILABLE = False
+SUBMIT_COMMAND_PROTOCOL_AVAILABLE = True
 
 _BUILD_ENV_KEYS = (
     "APP_BUILD_SHA",
@@ -32,6 +32,7 @@ _BUILD_ENV_KEYS = (
 )
 _SAFE_RELEASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_SOURCE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _READINESS_COMPONENTS = (
     "database",
     "migration",
@@ -40,6 +41,31 @@ _READINESS_COMPONENTS = (
     "beat",
     "shared_storage",
     "browser",
+)
+_RUNTIME_SOURCE_ROOTS = (
+    "api",
+    "bridge",
+    "core",
+    "db",
+    "discovery",
+    "ingestion",
+    "jobs",
+    "llm",
+    "match",
+    "monitoring",
+    "notifications",
+    "profile",
+    "submitters",
+    "worker",
+)
+_RUNTIME_SOURCE_SUFFIXES = frozenset({".py"})
+_RUNTIME_CONFIG_FILES = (
+    "alembic.ini",
+    "docker-compose.yml",
+    "Dockerfile",
+    "pyproject.toml",
+    "requirements.txt",
+    "vercel.json",
 )
 _BOOT_ID = str(uuid.uuid4())
 _STARTED_AT = datetime.now(UTC)
@@ -59,6 +85,8 @@ class SubmissionBlockReason(StrEnum):
     BUILD_MISMATCH = "BUILD_MISMATCH"
     PROTOCOL_MISMATCH = "PROTOCOL_MISMATCH"
     SUBMIT_COMMAND_UNAVAILABLE = "SUBMIT_COMMAND_UNAVAILABLE"
+    DATABASE_SERIALIZATION_REQUIRED = "DATABASE_SERIALIZATION_REQUIRED"
+    OPERATOR_AUTH_REQUIRED = "OPERATOR_AUTH_REQUIRED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +96,20 @@ class RuntimeIdentity:
     build_sha: str
     build_source: str
     ui_asset_digest: str
+    source_digest: str
     protocol_version: str
     boot_id: str
     started_at: datetime
+
+    @property
+    def release_id(self) -> str:
+        """Bounded execution identity persisted on every admitted attempt."""
+
+        digest = hashlib.sha256()
+        for value in (self.build_sha, self.source_digest, self.protocol_version):
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
+        return digest.hexdigest()
 
 
 def _clean_release(value: object) -> str | None:
@@ -202,6 +241,45 @@ def compute_ui_asset_digest(project_root: Path | None = None) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def compute_source_digest(project_root: Path | None = None) -> str:
+    """Hash only allowlisted runtime source/config files deterministically.
+
+    Personal profiles, CVs, browser state, environment files, databases, and
+    other operator-owned content are intentionally outside this allowlist.
+    """
+
+    root = project_root or Path(__file__).resolve().parents[1]
+    files: list[Path] = []
+    for source_name in _RUNTIME_SOURCE_ROOTS:
+        source_root = root / source_name
+        if not source_root.exists():
+            continue
+        files.extend(
+            path
+            for path in source_root.rglob("*")
+            if path.is_file() and path.suffix.lower() in _RUNTIME_SOURCE_SUFFIXES
+        )
+    migrations_root = root / "migrations"
+    if migrations_root.exists():
+        files.extend(path for path in migrations_root.rglob("*.py") if path.is_file())
+    files.extend(path for name in _RUNTIME_CONFIG_FILES if (path := root / name).is_file())
+    files = sorted(set(files), key=lambda path: path.relative_to(root).as_posix())
+    if not files:
+        return "unavailable"
+
+    digest = hashlib.sha256()
+    try:
+        for path in files:
+            relative = path.relative_to(root).as_posix().encode("utf-8")
+            digest.update(relative)
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+    except OSError:
+        return "unavailable"
+    return f"sha256:{digest.hexdigest()}"
+
+
 def build_runtime_identity(
     *,
     environ: Mapping[str, str] | None = None,
@@ -219,10 +297,22 @@ def build_runtime_identity(
         build_sha=build_sha,
         build_source=build_source,
         ui_asset_digest=compute_ui_asset_digest(project_root),
+        source_digest=compute_source_digest(project_root),
         protocol_version=PROTOCOL_VERSION,
         boot_id=boot_id or _BOOT_ID,
         started_at=started_at or _STARTED_AT,
     )
+
+
+def runtime_source_is_current(
+    identity: RuntimeIdentity | None = None,
+    *,
+    project_root: Path | None = None,
+) -> bool:
+    """Return false when allowlisted source changed after process startup."""
+
+    startup_identity = identity or get_runtime_identity()
+    return compute_source_digest(project_root) == startup_identity.source_digest
 
 
 @lru_cache(maxsize=1)
@@ -239,6 +329,8 @@ def _effective_mode(settings: Settings) -> tuple[str, bool]:
         and settings.portal_final_submit_enabled
         and settings.live_automation_acknowledged
         and not settings.auto_apply
+        and settings.db_is_postgres
+        and settings.operator_auth_configured
     )
     if settings.dry_run:
         return "dry_run", live_submit_enabled
@@ -250,6 +342,8 @@ def _effective_mode(settings: Settings) -> tuple[str, bool]:
         return "blocked_unattended", live_submit_enabled
     if not settings.live_automation_acknowledged:
         return "blocked_unacknowledged", live_submit_enabled
+    if not settings.operator_auth_configured:
+        return "blocked_auth", live_submit_enabled
     return "explicit_live", live_submit_enabled
 
 
@@ -257,10 +351,19 @@ def build_runtime_capabilities(
     settings: Settings,
     readiness: Mapping[str, Any],
     identity: RuntimeIdentity | None = None,
+    *,
+    current_source_digest: str | None = None,
 ) -> dict[str, Any]:
     """Build the redacted capability response and fail-closed send decision."""
 
     release = identity or get_runtime_identity()
+    observed_source_digest = (
+        current_source_digest
+        if current_source_digest is not None
+        else compute_source_digest()
+        if identity is None
+        else release.source_digest
+    )
     raw_checks = readiness.get("checks")
     checks_source = raw_checks if isinstance(raw_checks, Mapping) else {}
     checks: dict[str, bool] = {}
@@ -274,15 +377,30 @@ def build_runtime_capabilities(
         worker_detail = {}
     worker_build = _clean_release(worker_detail.get("build_sha"))
     worker_protocol = _clean_release(worker_detail.get("protocol_version"))
+    worker_source_digest = str(worker_detail.get("source_digest") or "")
+    worker_release_id = _clean_release(worker_detail.get("release_id"))
     release_known = release.build_sha not in {"unknown", "unavailable"}
+    source_known = _SOURCE_DIGEST_RE.fullmatch(release.source_digest) is not None
+    source_current = (
+        _SOURCE_DIGEST_RE.fullmatch(observed_source_digest) is not None
+        and observed_source_digest == release.source_digest
+    )
     worker_known = (
-        worker_build not in {None, "unknown", "unavailable"} and worker_protocol is not None
+        worker_build not in {None, "unknown", "unavailable"}
+        and worker_protocol is not None
+        and worker_source_digest.startswith("sha256:")
+        and len(worker_source_digest) == 71
+        and worker_release_id not in {None, "unknown", "unavailable"}
     )
     worker_compatible = (
         release_known
+        and source_known
+        and source_current
         and worker_known
         and worker_build == release.build_sha
         and worker_protocol == release.protocol_version
+        and worker_source_digest == release.source_digest
+        and worker_release_id == release.release_id
     )
 
     mode_name, live_submit_enabled = _effective_mode(settings)
@@ -297,14 +415,24 @@ def build_runtime_capabilities(
         reasons.append(SubmissionBlockReason.LIVE_AUTOMATION_NOT_ACKNOWLEDGED)
     if settings.auto_apply:
         reasons.append(SubmissionBlockReason.UNATTENDED_AUTOMATION_ENABLED)
+    if not settings.db_is_postgres:
+        reasons.append(SubmissionBlockReason.DATABASE_SERIALIZATION_REQUIRED)
+    if not settings.operator_auth_configured:
+        reasons.append(SubmissionBlockReason.OPERATOR_AUTH_REQUIRED)
     if readiness_status != "ready":
         reasons.append(SubmissionBlockReason.RUNTIME_NOT_READY)
-    if not release_known:
+    if not release_known or not source_known:
         reasons.append(SubmissionBlockReason.BUILD_IDENTITY_UNAVAILABLE)
+    elif not source_current:
+        reasons.append(SubmissionBlockReason.BUILD_MISMATCH)
     if not worker_known:
         reasons.append(SubmissionBlockReason.WORKER_IDENTITY_UNAVAILABLE)
     else:
-        if worker_build != release.build_sha:
+        if (
+            worker_build != release.build_sha
+            or worker_source_digest != release.source_digest
+            or worker_release_id != release.release_id
+        ):
             reasons.append(SubmissionBlockReason.BUILD_MISMATCH)
         if worker_protocol != release.protocol_version:
             reasons.append(SubmissionBlockReason.PROTOCOL_MISMATCH)
@@ -315,6 +443,8 @@ def build_runtime_capabilities(
         "release": {
             "build_sha": release.build_sha,
             "ui_asset_digest": release.ui_asset_digest,
+            "source_digest": release.source_digest,
+            "release_id": release.release_id,
             "protocol_version": release.protocol_version,
             "boot_id": release.boot_id,
             "started_at": release.started_at.isoformat().replace("+00:00", "Z"),
@@ -335,11 +465,14 @@ def build_runtime_capabilities(
                 and readiness_status == "ready"
                 and worker_compatible
                 and SUBMIT_COMMAND_PROTOCOL_AVAILABLE
+                and settings.db_is_postgres
             ),
             "reasons": [reason.value for reason in reasons],
         },
         "worker": {
             "build_sha": worker_build,
+            "source_digest": worker_source_digest or None,
+            "release_id": worker_release_id,
             "protocol_version": worker_protocol,
             "compatible": worker_compatible,
         },

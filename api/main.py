@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - exercised in dependency-light smokes
 from api.routes.ab_testing import router as ab_testing_router
 from api.routes.analytics import router as analytics_router
 from api.routes.applications import router as applications_router
+from api.routes.ats import router as ats_router
 from api.routes.audit import router as audit_router
 from api.routes.batch_apply import router as batch_apply_router
 from api.routes.batch_rescore import router as batch_rescore_router
@@ -77,7 +78,11 @@ from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
 from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
 from core.operations import rate_limit_allowed, readiness_report
-from core.runtime_identity import compute_ui_asset_digest, get_runtime_identity
+from core.runtime_identity import (
+    compute_source_digest,
+    compute_ui_asset_digest,
+    get_runtime_identity,
+)
 from core.single_instance import acquire_dashboard_instance_lock
 from db.session import init_db
 
@@ -203,8 +208,21 @@ async def auth_middleware(request: Request, call_next):
     if request.url.path == "/webhook/whatsapp" or _is_public_read(request):
         return await call_next(request)
 
-    if settings.app_env == "development" and settings.secret_key == "change-me":
-        return await call_next(request)
+    if settings.app_env == "development" and not settings.operator_auth_configured:
+        prepare_only = (
+            settings.dry_run or settings.draft_only or not settings.portal_final_submit_enabled
+        )
+        if prepare_only:
+            return await call_next(request)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": {
+                    "code": "OPERATOR_AUTH_REQUIRED",
+                    "message": "Configure a strong operator API secret before live sending.",
+                }
+            },
+        )
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -254,6 +272,7 @@ app.include_router(webhook_router)
 app.include_router(ingest_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
+app.include_router(ats_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
 app.include_router(profile_router)
@@ -322,6 +341,7 @@ async def serve_dashboard(request: Request):
         {
             "runtime_build_sha": identity.build_sha,
             "runtime_ui_asset_digest": compute_ui_asset_digest(),
+            "runtime_source_digest": compute_source_digest(),
             "runtime_protocol_version": identity.protocol_version,
             "runtime_boot_id": identity.boot_id,
             "runtime_started_at": identity.started_at.isoformat().replace("+00:00", "Z"),

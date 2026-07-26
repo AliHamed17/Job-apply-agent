@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
-from profile.models import UserProfile
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.config import Settings
-from db.models import (
-    Application,
-    Base,
-    Job,
-    JobStatus,
-    Submission,
-    SubmissionStatus,
-)
+from db.models import Application, Base, Job, JobStatus, Submission
 from submitters.platforms import (
     QualificationTier,
     adapter_for_platform,
@@ -76,16 +66,6 @@ def _approved_application(factory, apply_url: str) -> int:
     return application_id
 
 
-def _live_settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        draft_only=False,
-        dry_run=False,
-        auto_apply=True,
-        cv_routing_path="does-not-exist.yaml",
-    )
-
-
 def test_detection_and_qualification_share_one_adapter_inventory():
     descriptors = registered_adapters()
 
@@ -128,7 +108,7 @@ def test_detection_and_qualification_share_one_adapter_inventory():
         ),
     ],
 )
-def test_unqualified_live_adapter_never_invokes_external_submit(
+def test_legacy_application_task_never_invokes_external_submit(
     tmp_path,
     apply_url,
     submitter_path,
@@ -137,29 +117,21 @@ def test_unqualified_live_adapter_never_invokes_external_submit(
     application_id = _approved_application(factory, apply_url)
     submit = AsyncMock()
 
-    with (
-        patch("worker.tasks.get_session_factory", return_value=factory),
-        patch("worker.tasks.get_settings", return_value=_live_settings()),
-        patch("worker.tasks._validated_submit_command_available", return_value=True),
-        patch("profile.loader.get_profile", return_value=UserProfile()),
-        patch("core.governor.get_governor", return_value=object()),
-        patch(submitter_path, new=submit),
-    ):
+    with patch(submitter_path, new=submit):
         from worker.tasks import submit_application_task
 
-        submit_application_task.apply(args=[application_id])
+        result = submit_application_task.apply(args=[application_id]).get()
 
+    assert result == {
+        "state": "blocked",
+        "reason_code": "DATABASE_COMMAND_REQUIRED",
+    }
     submit.assert_not_awaited()
 
     db = factory()
     application = db.get(Application, application_id)
-    attempt = db.query(Submission).filter(Submission.application_id == application_id).one()
-    assert application.status == JobStatus.NEEDS_REVIEW
-    assert application.job.status == JobStatus.NEEDS_REVIEW
-    assert application.needs_review_reason == "ADAPTER_NOT_QUALIFIED"
-    assert attempt.status == SubmissionStatus.FAILED
-    assert attempt.reason_code == "ADAPTER_NOT_QUALIFIED"
-    assert attempt.submitted_at is None
-    assert attempt.submitter_name == detect_platform(apply_url)
-    assert json.loads(attempt.diagnostic_details)["terminal_reason"] == ("ADAPTER_NOT_QUALIFIED")
+    assert application.status == JobStatus.APPROVED
+    assert application.job.status == JobStatus.APPROVED
+    assert application.needs_review_reason is None
+    assert db.query(Submission).filter(Submission.application_id == application_id).count() == 0
     db.close()

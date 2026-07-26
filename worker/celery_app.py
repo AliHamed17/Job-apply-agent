@@ -33,6 +33,7 @@ def create_celery_app() -> Celery:
             "worker.discovery_tasks",
             "worker.digest",
             "worker.health",
+            "worker.submission_commands",
         ],
     )
 
@@ -55,6 +56,9 @@ def create_celery_app() -> Celery:
             "worker.tasks.score_job_task": {"queue": "processing"},
             "worker.tasks.generate_application_task": {"queue": "llm"},
             "worker.tasks.submit_application_task": {"queue": "submission"},
+            "worker.submission_commands.execute_submission_command_task": {"queue": "submission"},
+            "worker.submission_commands.drain_submission_commands_task": {"queue": "submission"},
+            "worker.submission_commands.reconcile_stale_commands_task": {"queue": "submission"},
             "worker.drainer.drain_apply_queue_task": {"queue": "submission"},
             "worker.drainer.expire_stale_jobs_task": {"queue": "submission"},
             "worker.drainer.reconcile_stale_attempts_task": {"queue": "submission"},
@@ -72,19 +76,28 @@ def create_celery_app() -> Celery:
     # (Task 3.6) + LinkedIn discovery (Task 4.4).
     # Preserve any beat entries already registered elsewhere.
     app.conf.beat_schedule = getattr(app.conf, "beat_schedule", None) or {}
-    app.conf.beat_schedule["drain-apply-queue"] = {
-        "task": "worker.drainer.drain_apply_queue_task",
-        "schedule": 300.0,  # every 5 min; governor enforces gaps/caps
+    app.conf.beat_schedule["drain-submission-commands"] = {
+        "task": "worker.submission_commands.drain_submission_commands_task",
+        "schedule": float(
+            max(
+                1,
+                min(
+                    settings.submission_command_drain_interval_seconds,
+                    max(1, settings.submit_permit_ttl_seconds // 4),
+                ),
+            )
+        ),
     }
     app.conf.beat_schedule["expire-stale-jobs"] = {
         "task": "worker.drainer.expire_stale_jobs_task",
         "schedule": crontab(hour=3, minute=0),
     }
-    app.conf.beat_schedule["reconcile-stale-submission-attempts"] = {
-        "task": "worker.drainer.reconcile_stale_attempts_task",
+    app.conf.beat_schedule["reconcile-stale-submission-commands"] = {
+        "task": "worker.submission_commands.reconcile_stale_commands_task",
         "schedule": 300.0,
     }
     from core.config import get_settings as _gs  # noqa: E402, F401
+
     _interval = _gs().discovery_interval_h * 3600
     app.conf.beat_schedule["discover-jobs"] = {
         "task": "worker.discovery_tasks.discover_jobs_task",

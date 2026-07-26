@@ -229,23 +229,43 @@ def score_job_task(self, job_id: int):
         db_job = db.query(Job).filter(Job.id == job_id).first()
         if not db_job:
             return
+        app = db.query(Application).filter(Application.job_id == job_id).first()
+        if app is not None and app.status in {
+            JobStatus.SUBMITTED,
+            JobStatus.SKIPPED,
+        }:
+            logger.warning(
+                "terminal_application_regeneration_blocked",
+                application_id=app.id,
+                status=app.status.value,
+            )
+            return
+        expected_application_id = app.id if app is not None else None
+        expected_application_revision = int(app.revision or 1) if app is not None else None
+        expected_job_status = db_job.status
+        job_title = db_job.title
 
         profile = get_profile()
 
         # Convert DB model to JobData for scoring
         job_data = JobData(
-            title=db_job.title,
-            company=db_job.company,
-            location=db_job.location,
-            employment_type=db_job.employment_type,
-            seniority=db_job.seniority,
-            description=db_job.description,
-            requirements=db_job.requirements,
-            apply_url=db_job.apply_url,
+            title=db_job.title or "",
+            company=db_job.company or "",
+            location=db_job.location or "",
+            employment_type=db_job.employment_type or "",
+            seniority=db_job.seniority or "",
+            description=db_job.description or "",
+            requirements=db_job.requirements or "",
+            apply_url=db_job.apply_url or "",
             source_url=db_job.source_url,
-            date_posted=db_job.date_posted,
+            date_posted=db_job.date_posted or "",
             keywords=json.loads(db_job.keywords) if db_job.keywords else [],
         )
+
+        # Scoring can be CPU-heavy and can invoke profile loaders.  Keep no
+        # database transaction open while it runs, then re-lock the current
+        # Application -> Job state immediately before any persistence.
+        db.rollback()
 
         breakdown = score_job(job_data, profile)
         action = decide_action(
@@ -256,15 +276,71 @@ def score_job_task(self, job_id: int):
             min_apply_score=settings.min_apply_score,
         )
 
+        from core.application_mutations import (
+            ApplicationMutationBlockedError,
+            ApplicationMutationIntent,
+            lock_application_for_mutation,
+            lock_job_without_application_for_mutation,
+        )
+
+        if expected_application_id is not None:
+            try:
+                locked = lock_application_for_mutation(
+                    db,
+                    application_id=expected_application_id,
+                    intent=ApplicationMutationIntent.CONTENT,
+                    expected_revision=expected_application_revision,
+                )
+            except ApplicationMutationBlockedError as exc:
+                db.rollback()
+                logger.warning(
+                    "job_scoring_write_blocked",
+                    job_id=job_id,
+                    application_id=expected_application_id,
+                    reason_code=exc.reason_code,
+                )
+                return
+            assert locked is not None and locked.job is not None
+            # Once an application exists its lifecycle is authoritative.  A
+            # rescore may refresh the numeric score under the app-first lock,
+            # but it must not rewrite status or enqueue regeneration.
+            locked.job.score = breakdown.total
+            db.commit()
+            logger.info(
+                "existing_application_rescored",
+                job_id=job_id,
+                application_id=expected_application_id,
+                score=breakdown.total,
+            )
+            return
+
+        try:
+            db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
+        except ApplicationMutationBlockedError as exc:
+            db.rollback()
+            logger.warning(
+                "job_scoring_write_blocked",
+                job_id=job_id,
+                reason_code=exc.reason_code,
+            )
+            return
+        if db_job.status != expected_job_status:
+            db.rollback()
+            logger.warning(
+                "job_scoring_write_blocked",
+                job_id=job_id,
+                reason_code="JOB_STATUS_CHANGED",
+            )
+            return
+
         db_job.score = breakdown.total
-        db_job.status = JobStatus.SCORED
 
         if action == Action.SKIP:
             db_job.status = JobStatus.SKIPPED
             db.commit()
             logger.info(
                 "job_skipped",
-                title=db_job.title,
+                title=job_title,
                 score=breakdown.total,
                 reason=breakdown.skip_reason,
             )
@@ -281,7 +357,10 @@ def score_job_task(self, job_id: int):
             generate_application_task.delay(job_id)
 
         logger.info(
-            "job_scored_and_queued", title=db_job.title, score=breakdown.total, action=action.value
+            "job_scored_and_queued",
+            title=job_title,
+            score=breakdown.total,
+            action=action.value,
         )
 
     except Exception as exc:
@@ -298,7 +377,7 @@ def score_job_task(self, job_id: int):
 @shared_task(name="worker.tasks.generate_application_task", bind=True, max_retries=2)
 def generate_application_task(self, job_id: int):
     """Generate cover letter, recruiter message, and Q&A answers via LLM."""
-    from profile.loader import get_profile
+    from profile.versioned_snapshot import load_versioned_profile_snapshot
 
     from jobs.models import JobData
     from llm.generation import generate_full_application
@@ -308,8 +387,25 @@ def generate_application_task(self, job_id: int):
         db_job = db.query(Job).filter(Job.id == job_id).first()
         if not db_job:
             return
+        app = db.query(Application).filter(Application.job_id == job_id).first()
+        if app is not None and app.status in {
+            JobStatus.SUBMITTED,
+            JobStatus.SKIPPED,
+        }:
+            logger.warning(
+                "terminal_application_regeneration_blocked",
+                application_id=app.id,
+                status=app.status.value,
+            )
+            return
+        expected_application_id = app.id if app is not None else None
+        expected_revision = int(app.revision or 1) if app is not None else None
 
-        profile = get_profile()
+        from db.models import UserProfileVersion
+
+        profile_snapshot = load_versioned_profile_snapshot(db)
+        expected_profile_version = profile_snapshot.version
+        profile = profile_snapshot.profile
 
         job_data = JobData(
             title=db_job.title,
@@ -340,6 +436,12 @@ def generate_application_task(self, job_id: int):
             seniority=db_job.seniority or "",
             required_skills=parse_required_skills(db_job.keywords),
         )
+        job_score = db_job.score or 0.0
+
+        # Do not keep a transaction (and especially not a row lock) open while
+        # local routing and LLM generation run.  The application revision and
+        # submission lifecycle are locked and rechecked at the final write.
+        db.rollback()
 
         routing_path = Path(settings.cv_routing_path)
         if routing_path.exists():
@@ -397,7 +499,7 @@ def generate_application_task(self, job_id: int):
         from match.scoring import Action, decide_action
 
         action = decide_action(
-            score=db_job.score or 0.0,
+            score=job_score,
             auto_apply_enabled=settings.auto_apply,
             draft_only=settings.draft_only,
             threshold=settings.auto_apply_threshold,
@@ -412,23 +514,71 @@ def generate_application_task(self, job_id: int):
             and not generated.has_placeholders
         )
 
-        from db.models import UserProfileVersion
-
-        latest_profile = (
-            db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
-        )
-        profile_version = latest_profile.version if latest_profile else None
-
         # Application.job_id is UNIQUE — this task can run more than once for
         # the same job (a regenerate action, or Celery's own retry landing
         # after a transient error on a later line). Update the existing row
         # in place instead of blindly inserting, which used to raise
         # IntegrityError and burn a full (real, non-mock) LLM generation on
         # every retry without ever persisting the result.
-        app = db.query(Application).filter(Application.job_id == job_id).first()
-        if app is None:
+        from core.application_mutations import (
+            ApplicationMutationBlockedError,
+            ApplicationMutationIntent,
+            lock_application_for_mutation,
+            lock_job_without_application_for_mutation,
+        )
+
+        if expected_application_id is None:
+            try:
+                db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
+            except ApplicationMutationBlockedError as exc:
+                db.rollback()
+                logger.warning(
+                    "application_generation_write_blocked",
+                    job_id=job_id,
+                    reason_code=exc.reason_code,
+                )
+                return
             app = Application(job_id=job_id)
             db.add(app)
+        else:
+            try:
+                locked = lock_application_for_mutation(
+                    db,
+                    application_id=expected_application_id,
+                    intent=ApplicationMutationIntent.CONTENT,
+                    expected_revision=expected_revision,
+                )
+            except ApplicationMutationBlockedError as exc:
+                db.rollback()
+                logger.warning(
+                    "application_generation_write_blocked",
+                    application_id=expected_application_id,
+                    reason_code=exc.reason_code,
+                )
+                return
+            assert locked is not None and locked.job is not None
+            app = locked.application
+            db_job = locked.job
+            from core.application_revision import bump_application_revision
+
+            bump_application_revision(
+                db,
+                app,
+                reason_code="APPLICATION_REGENERATED",
+            )
+
+        latest_profile = (
+            db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
+        )
+        current_profile_version = latest_profile.version if latest_profile else None
+        if current_profile_version != expected_profile_version:
+            db.rollback()
+            logger.warning(
+                "application_generation_write_blocked",
+                job_id=job_id,
+                reason_code="PROFILE_VERSION_CHANGED",
+            )
+            return
 
         app.cover_letter = generated.cover_letter
         app.recruiter_message = generated.recruiter_message
@@ -449,10 +599,24 @@ def generate_application_task(self, job_id: int):
             app.needs_review_reason = f"UNFILLED_PLACEHOLDERS:{fields}"
         else:
             app.needs_review_reason = None
-        app.profile_version = profile_version
+        app.profile_version = expected_profile_version
         db.flush()
 
         db_job.status = JobStatus.DRAFT
+
+        from core.application_audit import record_application_event
+
+        record_application_event(
+            db,
+            app.id,
+            "application_generated",
+            actor="worker",
+            details={
+                "selected_cv_id": app.selected_cv_id,
+                "profile_version": app.profile_version,
+                "state": "draft",
+            },
+        )
 
         db.commit()
 
@@ -523,11 +687,26 @@ def generate_application_task(self, job_id: int):
 
 @shared_task(name="worker.tasks.submit_application_task", bind=True, max_retries=1)
 def submit_application_task(self, application_id: int):
-    """Submit an approved application to the job board.
+    """Fail-closed compatibility handler for stale application-ID messages.
 
-    CRITICAL: Enforces that the application must be APPROVED before submission.
-    Falls back to draft_only for unsupported platforms.
+    PR2 commands are addressed by command ID in ``worker.submission_commands``.
+    Reinterpreting an old application ID as a command ID could target the wrong
+    external action, so this task intentionally performs no database mutation
+    and invokes no adapter.
     """
+    del self
+    logger.warning(
+        "legacy_submission_task_blocked",
+        application_id=application_id,
+        reason_code="DATABASE_COMMAND_REQUIRED",
+    )
+    return {
+        "state": "blocked",
+        "reason_code": "DATABASE_COMMAND_REQUIRED",
+    }
+
+    # Unreachable v3 implementation retained for one release as migration
+    # context. It is removed after old broker messages have expired.
     from profile.loader import get_profile
 
     from jobs.models import JobData

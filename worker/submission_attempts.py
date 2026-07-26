@@ -121,11 +121,14 @@ def mark_stale_attempts_unknown(
         .filter(
             Submission.status.in_((SubmissionStatus.PENDING, SubmissionStatus.RUNNING)),
             Submission.started_at < cutoff,
+            ~Submission.command.has(),
         )
         .all()
     )
     for attempt in rows:
         attempt.status = SubmissionStatus.UNKNOWN
+        attempt.stage = "finished"
+        attempt.outcome = "unknown"
         attempt.reason_code = "STALE_INDETERMINATE"
         attempt.finished_at = now
         app = attempt.application
@@ -156,6 +159,23 @@ def claim_attempt(db, application_id: int) -> Submission | None:
     ):
         db.rollback()
         return None
+    if current and current.status in (
+        SubmissionStatus.FAILED,
+        SubmissionStatus.DRAFT_ONLY,
+    ):
+        # Compatibility for legacy callers that set only the v3 status field.
+        # These are definitively pre-commit outcomes, so closing the typed
+        # lifecycle is safe and releases the unfinished-attempt uniqueness gate.
+        current.stage = "finished"  # type: ignore[assignment]
+        legacy_outcome = (
+            "draft_only"
+            if current.status == SubmissionStatus.DRAFT_ONLY
+            else "failed_before_commit"
+        )
+        current.outcome = legacy_outcome  # type: ignore[assignment]
+        finished_at = current.finished_at or datetime.now(UTC).replace(tzinfo=None)
+        current.finished_at = finished_at  # type: ignore[assignment]
+        db.flush()
 
     next_number = (
         db.query(func.coalesce(func.max(Submission.attempt_number), 0))
@@ -169,6 +189,8 @@ def claim_attempt(db, application_id: int) -> Submission | None:
         idempotency_key=str(uuid.uuid4()),
         submitter_name="unresolved",
         status=SubmissionStatus.RUNNING,
+        stage="inspecting",
+        outcome=None,
         started_at=datetime.now(UTC).replace(tzinfo=None),
     )
     db.add(attempt)
@@ -184,6 +206,8 @@ def claim_attempt(db, application_id: int) -> Submission | None:
 def mark_attempt_unknown(db, attempt: Submission, reason: str) -> None:
     now = datetime.now(UTC).replace(tzinfo=None)
     attempt.status = SubmissionStatus.UNKNOWN  # type: ignore[assignment]
+    attempt.stage = "finished"  # type: ignore[assignment]
+    attempt.outcome = "unknown"  # type: ignore[assignment]
     attempt.reason_code = reason  # type: ignore[assignment]
     attempt.finished_at = now  # type: ignore[assignment]
     app = attempt.application

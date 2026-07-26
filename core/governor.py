@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import threading
 from datetime import UTC, datetime
 
 import structlog
@@ -10,18 +11,27 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
+class GovernorUnavailableError(RuntimeError):
+    """A shared safety gate is required but Redis is unavailable."""
+
+
 class _MemoryStore:
     """Minimal in-process fallback when Redis is unavailable (tests/dev)."""
+
     def __init__(self):
         self._d: dict[str, str] = {}
+
     def get(self, k):  # noqa: D401
         v = self._d.get(k)
         return v.encode() if isinstance(v, str) else v
+
     def set(self, k, v, ex=None):
         self._d[k] = str(v)
+
     def incr(self, k):
         self._d[k] = str(int(self._d.get(k, "0")) + 1)
         return int(self._d[k])
+
     def delete(self, k):
         self._d.pop(k, None)
 
@@ -30,9 +40,11 @@ class RateGovernor:
     def __init__(self, settings, redis_client=None, now_fn=None, sleep_fn=None, rng=None):
         self.s = settings
         self.store = redis_client if redis_client is not None else _MemoryStore()
+        self.shared_backend = redis_client is not None
         self._now = now_fn or (lambda: datetime.now(UTC))
         self._sleep = sleep_fn
         self._rng = rng or random.Random()
+        self._reservation_lock = threading.Lock()
 
     # ── day-scoped counter ────────────────────────────
     def _day_key(self) -> str:
@@ -107,6 +119,117 @@ class RateGovernor:
             return False, "daily cap reached"
         return True, "ok"
 
+    def reserve_final_action(
+        self,
+        *,
+        reservation_id: str,
+        platform: str,
+    ) -> tuple[bool, str]:
+        """Atomically reserve one final action before the ambiguity boundary.
+
+        A reservation is idempotent for one attempt. LinkedIn reservations
+        also consume the daily budget and establish the minimum gap at the
+        boundary, so an unknown/crashed click is still counted conservatively.
+        """
+
+        if not reservation_id or len(reservation_id) > 128:
+            return False, "invalid reservation"
+        if not self.within_active_hours():
+            return False, "outside active hours"
+
+        reservation_key = f"submit:reservation:{reservation_id}"
+        if hasattr(self.store, "pipeline"):
+            return self._reserve_shared(
+                reservation_key=reservation_key,
+                platform=platform,
+            )
+        with self._reservation_lock:
+            if self.store.get(reservation_key):
+                allowed, reason = self._reservation_stop_policy()
+                if not allowed:
+                    return False, reason
+                return True, "already reserved"
+            allowed, reason = self._reservation_policy(platform)
+            if not allowed:
+                return False, reason
+            self.store.set(reservation_key, 1, ex=24 * 3600)
+            if platform == "linkedin":
+                self.store.incr(self._day_key())
+                self.store.set(
+                    "li:next_action_at",
+                    self._epoch() + self.next_gap_seconds(),
+                )
+            return True, "reserved"
+
+    def _reservation_policy(self, platform: str) -> tuple[bool, str]:
+        allowed, reason = self._reservation_stop_policy()
+        if not allowed:
+            return False, reason
+        if platform == "linkedin":
+            if self.budget_remaining() <= 0:
+                return False, "daily cap reached"
+            if not self.gap_ready():
+                return False, f"min gap not elapsed ({self.gap_remaining_s()}s left)"
+        return True, "ok"
+
+    def _reservation_stop_policy(self) -> tuple[bool, str]:
+        """Recheck mutable operator stops even for an existing reservation."""
+        if self.is_killed():
+            return False, "kill switch active"
+        if self.in_cooldown():
+            return False, "in challenge cooldown"
+        return True, "ok"
+
+    def _reserve_shared(
+        self,
+        *,
+        reservation_key: str,
+        platform: str,
+    ) -> tuple[bool, str]:
+        from redis.exceptions import WatchError
+
+        watched = [
+            reservation_key,
+            "li:kill",
+            "li:cooldown_until",
+        ]
+        if platform == "linkedin":
+            watched.extend([self._day_key(), "li:next_action_at"])
+
+        for _ in range(5):
+            with self.store.pipeline() as pipe:
+                try:
+                    pipe.watch(*watched)
+                    killed = pipe.get("li:kill")
+                    if killed in {b"1", "1"}:
+                        return False, "kill switch active"
+                    cooldown_until = int(pipe.get("li:cooldown_until") or 0)
+                    if self._epoch() < cooldown_until:
+                        return False, "in challenge cooldown"
+                    if pipe.get(reservation_key):
+                        return True, "already reserved"
+                    if platform == "linkedin":
+                        used = int(pipe.get(self._day_key()) or 0)
+                        if used >= self.s.linkedin_daily_cap:
+                            return False, "daily cap reached"
+                        next_action = int(pipe.get("li:next_action_at") or 0)
+                        if self._epoch() < next_action:
+                            return False, "min gap not elapsed"
+
+                    pipe.multi()
+                    pipe.set(reservation_key, 1, ex=24 * 3600)
+                    if platform == "linkedin":
+                        pipe.incr(self._day_key())
+                        pipe.set(
+                            "li:next_action_at",
+                            self._epoch() + self.next_gap_seconds(),
+                        )
+                    pipe.execute()
+                    return True, "reserved"
+                except WatchError:
+                    continue
+        return False, "governor contention"
+
     # ── circuit breaker (cooldown) ────────────────────
     def _epoch(self) -> int:
         n = self._now()
@@ -116,7 +239,7 @@ class RateGovernor:
         """Record a challenge and set/extend cooldown. Returns hours applied."""
         window_key = "li:trips"
         trips = int(self.store.get(window_key) or 0)
-        hours = min(48, 6 * (2 ** trips))
+        hours = min(48, 6 * (2**trips))
         self.store.set(window_key, trips + 1, ex=7 * 24 * 3600)  # 7-day window
         until = self._epoch() + hours * 3600
         self.store.set("li:cooldown_until", until)
@@ -157,14 +280,16 @@ class RateGovernor:
 _governor: RateGovernor | None = None
 
 
-def get_governor() -> RateGovernor:
+def get_governor(*, require_shared: bool = False) -> RateGovernor:
     global _governor
     if _governor is None:
         from core.config import get_settings
+
         settings = get_settings()
         client = None
         try:
             import redis  # noqa: PLC0415
+
             client = redis.from_url(settings.redis_url)
             client.ping()
         except Exception as exc:
@@ -173,4 +298,6 @@ def get_governor() -> RateGovernor:
             # cooldown/kill-switch state). Log loudly so this is visible.
             logger.warning("governor_redis_unavailable_using_memory_store", error=str(exc))
         _governor = RateGovernor(settings, redis_client=client)
+    if require_shared and not _governor.shared_backend:
+        raise GovernorUnavailableError("shared governor backend unavailable")
     return _governor

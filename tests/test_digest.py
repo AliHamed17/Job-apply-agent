@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from db.models import Application, Base, Job, JobStatus, Submission, SubmissionStatus
+from db.models import (
+    Application,
+    Base,
+    FormPlan,
+    Job,
+    JobStatus,
+    Submission,
+    SubmissionEvidence,
+    SubmissionStatus,
+)
 from worker.digest import DigestSummary, build_digest, format_digest
 
 
@@ -40,16 +49,62 @@ def test_build_digest_counts_by_event_date_not_job_created_at(tmp_path):
     old_app = Application(job_id=old_job.id, status=JobStatus.SUBMITTED)
     db.add(old_app)
     db.flush()
-    db.add(
-        Submission(
-            application_id=old_app.id,
-            submitter_name="greenhouse",
-            status=SubmissionStatus.SUCCESS,
-            submitted_at=today_dt,
-            reason_code="EMPLOYER_VERIFIED",
-            confirmation_id="receipt-1",
+    form_plan = FormPlan(
+        application_id=old_app.id,
+        application_revision=1,
+        adapter_name="greenhouse",
+        adapter_version="1.0.0",
+        selector_version="greenhouse-v1",
+        fingerprint="f" * 64,
+        selected_cv_id="cv-ai",
+        selected_cv_hash="c" * 64,
+        attached_cv_id="cv-ai",
+        attached_cv_hash="c" * 64,
+        attachment_verified=True,
+        profile_version=3,
+        session_verified_at=today_dt,
+        expires_at=today_dt + timedelta(minutes=30),
+    )
+    db.add(form_plan)
+    db.flush()
+    verified_attempt = Submission(
+        application_id=old_app.id,
+        submitter_name="greenhouse",
+        status=SubmissionStatus.SUCCESS,
+        stage="finished",
+        outcome="confirmed_submitted",
+        application_revision=1,
+        adapter_name="greenhouse",
+        adapter_version="1.0.0",
+        selector_version="greenhouse-v1",
+        form_plan_id=form_plan.id,
+        submitted_at=today_dt,
+        final_action_at=today_dt,
+        reason_code="EMPLOYER_VERIFIED",
+        confirmation_id="receipt-1",
+        selected_cv_id="cv-ai",
+        requested_cv_id="cv-ai",
+        requested_cv_hash="c" * 64,
+        attached_cv_id="cv-ai",
+        attachment_verified=True,
+        form_plan_fingerprint="f" * 64,
+        attached_cv_hash="c" * 64,
+        profile_version=3,
+        verification_kind="employer_application_id",
+        evidence_digest="e" * 64,
+        runner_release="test-release",
+    )
+    verified_attempt.evidence.append(
+        SubmissionEvidence(
+            evidence_type="employer_application_id",
+            evidence_digest="e" * 64,
+            employer_application_ref="receipt-1",
+            form_fingerprint="f" * 64,
+            cv_hash="c" * 64,
+            observed_at=today_dt,
         )
     )
+    db.add(verified_attempt)
 
     # Needs review: Job created today, Application.updated_at forced to today.
     nr_job = Job(title="t2", source_url="y", status=JobStatus.NEEDS_REVIEW, created_at=today_dt)

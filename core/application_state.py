@@ -14,8 +14,11 @@ from db.models import Application, JobStatus
 
 def application_semantic_status(application: Application) -> str:
     """Return the public review state without reviving worker-eligible approval."""
-    if application.status == JobStatus.APPROVED or (
-        application.status == JobStatus.DRAFT and application.approved_at is not None
+    if (
+        application.status in {JobStatus.APPROVED, JobStatus.DRAFT}
+        and application.approved_at is not None
+        and application.prepared_revision is not None
+        and application.prepared_revision == application.revision
     ):
         return "prepared"
     return application.status.value if application.status else ""
@@ -25,19 +28,22 @@ def reviewable_applications_query(db):
     """Return drafts that have not yet been prepared by an operator."""
     return db.query(Application).filter(
         Application.status == JobStatus.DRAFT,
-        Application.approved_at.is_(None),
+        or_(
+            Application.approved_at.is_(None),
+            Application.prepared_revision.is_(None),
+            Application.prepared_revision != Application.revision,
+        ),
     )
 
 
 def prepared_applications_query(db):
     """Return PR1 prepared drafts plus legacy approved compatibility rows."""
     return db.query(Application).filter(
-        or_(
-            Application.status == JobStatus.APPROVED,
-            and_(
-                Application.status == JobStatus.DRAFT,
-                Application.approved_at.isnot(None),
-            ),
+        and_(
+            Application.status.in_((JobStatus.APPROVED, JobStatus.DRAFT)),
+            Application.approved_at.isnot(None),
+            Application.prepared_revision.isnot(None),
+            Application.prepared_revision == Application.revision,
         )
     )
 
