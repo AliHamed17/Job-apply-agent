@@ -368,9 +368,16 @@ def _validate_routing_config(path: Path) -> None:
 def _dataset_record(path: Path, count: int) -> dict[str, Any]:
     return {
         "file": path.name,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "sha256": _normalized_text_sha256(path),
         "cases": count,
     }
+
+
+def _normalized_text_sha256(path: Path) -> str:
+    """Hash text canonically so Git CRLF conversion cannot stale the baseline."""
+
+    normalized = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 _SYNTHETIC_CONFIRMED = {

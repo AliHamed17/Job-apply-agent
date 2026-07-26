@@ -14,6 +14,7 @@ from scripts.evaluate_v4_quality import (
     DEFAULT_MARKDOWN_OUTPUT,
     HIGH_CONFIDENCE_THRESHOLD,
     MAX_FIXTURE_STRING_CHARS,
+    _normalized_text_sha256,
     evaluate_quality,
     render_markdown,
 )
@@ -126,6 +127,15 @@ async def test_committed_baseline_exactly_matches_fresh_evaluation() -> None:
     assert committed == report
     assert DEFAULT_MARKDOWN_OUTPUT.read_text(encoding="utf-8") == render_markdown(report)
     assert DEFAULT_MARKDOWN_OUTPUT.read_text(encoding="utf-8") == render_markdown(committed)
+
+
+def test_dataset_digest_is_stable_across_line_endings(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.json"
+    crlf = tmp_path / "crlf.json"
+    lf.write_bytes(b'{\n  "value": true\n}\n')
+    crlf.write_bytes(b'{\r\n  "value": true\r\n}\r\n')
+
+    assert _normalized_text_sha256(lf) == _normalized_text_sha256(crlf)
 
 
 def _copied_fixtures(tmp_path: Path) -> Path:

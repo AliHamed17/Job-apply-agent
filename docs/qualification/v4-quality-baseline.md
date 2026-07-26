@@ -54,7 +54,7 @@ Overall offline fixture gate: **PASS**.
 
 | Dataset | Cases | SHA-256 |
 |---|---:|---|
-| cover_letter_claims_40.json | 40 | `e325dd1af21181aa8b128563bca5cfc13233d1c1adf5fb53d48126d4aef03fef` |
-| cv_routing_120.json | 120 | `e9d4fd6bc011e77e8e162eb963d48199ec45ae31ec25eda64fa5b942c031e2e8` |
-| form_resolution_bilingual_240.json | 240 | `1f003a31408eba068ad40987d32e4e2004c1222f3c5e9b84f99aa8777c1b3034` |
-| malformed_prompt_injection_30.json | 30 | `70b644c6e47fd84f1d49095f04763f362f9c5f3a063559c2d51377445e71309a` |
+| cover_letter_claims_40.json | 40 | `35b7f4e7c787ef1c40d961c38767a321cf09d0335a9ed400b6b366f3f1899247` |
+| cv_routing_120.json | 120 | `cb6497a20c7e82db9bbce172fb3a755a093e9d7a39086f113c9ffbdf33e657f3` |
+| form_resolution_bilingual_240.json | 240 | `2741cbb63ac67995963fb64b39b223fea37b38dc85f92c3ef8cd53682270f91e` |
+| malformed_prompt_injection_30.json | 30 | `14d3a1094be7f4ae31cd282dba11a2cab3ab0e1651d2fd860cac138e14bdc09c` |
