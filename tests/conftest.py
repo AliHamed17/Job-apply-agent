@@ -100,13 +100,13 @@ def _reset_rate_limit_bucket(_rate_limit_redis):
 try:
     import pytest_asyncio  # noqa: F401
 except ImportError:
+
     def pytest_pyfunc_call(pyfuncitem):
         """Run coroutine tests when the optional asyncio plugin is absent."""
         if not inspect.iscoroutinefunction(pyfuncitem.obj):
             return None
         kwargs = {
-            name: pyfuncitem.funcargs[name]
-            for name in inspect.signature(pyfuncitem.obj).parameters
+            name: pyfuncitem.funcargs[name] for name in inspect.signature(pyfuncitem.obj).parameters
         }
         asyncio.run(pyfuncitem.obj(**kwargs))
         return True

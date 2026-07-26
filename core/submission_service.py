@@ -28,6 +28,13 @@ from db.models import (
     UserProfileVersion,
 )
 from ingestion.url_utils import normalize_url, url_hash
+from llm.contracts import (
+    FORM_RESOLUTION_PROMPT_VERSION,
+    QUALIFIED_LOCAL_LLM_MODEL,
+    QUALIFIED_LOCAL_LLM_PROVIDER,
+    is_qualified_material_identity,
+)
+from llm.qualification_registry import is_qualified_local_model_identity
 from submitters.platforms import AdapterDescriptor, adapter_for_url
 
 
@@ -133,6 +140,14 @@ def reconstruct_persisted_form_plan(plan: FormPlan) -> FormPlanV1:
                 "fields": _json_array(plan.fields_json),
                 "decisions": _json_array(plan.decisions_json),
                 "blockers": _json_array(plan.blockers_json),
+                "locale": getattr(plan, "locale", "en") or "en",
+                "answer_policy_version": (
+                    getattr(plan, "answer_policy_version", "answer-policy-v1") or "answer-policy-v1"
+                ),
+                "llm_prompt_version": getattr(plan, "llm_prompt_version", None),
+                "llm_model_provider": getattr(plan, "llm_model_provider", None),
+                "llm_model_name": getattr(plan, "llm_model_name", None),
+                "llm_model_digest": getattr(plan, "llm_model_digest", None),
             }
         )
     except (RecursionError, TypeError, ValueError) as exc:
@@ -277,7 +292,7 @@ def _validate_plan(
     plan: FormPlan | None,
     request: SubmissionCommandRequest,
     now: datetime,
-) -> FormPlan:
+) -> tuple[FormPlan, FormPlanV1]:
     if plan is None or plan.application_id != application.id:
         raise SubmissionAdmissionError("FORM_PLAN_NOT_FOUND")
     if plan.invalidated_at is not None:
@@ -288,8 +303,26 @@ def _validate_plan(
         raise SubmissionAdmissionError("SESSION_EXPIRED")
     if not plan.attached_cv_id or not plan.attached_cv_hash or not plan.attachment_verified:
         raise SubmissionAdmissionError("ATTACHMENT_UNVERIFIED")
-
     domain_plan = reconstruct_persisted_form_plan(plan)
+    from core.form_planning import ANSWER_POLICY_VERSION
+
+    if domain_plan.answer_policy_version != ANSWER_POLICY_VERSION:
+        raise SubmissionAdmissionError("ANSWER_POLICY_CHANGED")
+    if application.material_eligible is not True:
+        raise SubmissionAdmissionError("MATERIAL_NOT_ELIGIBLE")
+    if not is_qualified_material_identity(
+        provider=application.material_model_provider,
+        model=application.material_model_name,
+        local=True,
+        digest=application.material_model_digest,
+        prompt_version=application.material_prompt_version,
+    ):
+        raise SubmissionAdmissionError("MATERIAL_MODEL_NOT_QUALIFIED")
+    if (
+        not application.selected_cv_hash
+        or application.selected_cv_hash != domain_plan.selected_cv_hash
+    ):
+        raise SubmissionAdmissionError("ATTACHMENT_CHANGED")
     admission_time = _aware_utc(now)
     if admission_time is None:
         raise SubmissionAdmissionError("FORM_PLAN_BLOCKED")
@@ -331,7 +364,50 @@ def _validate_plan(
         or domain_plan.attached_cv_hash != domain_plan.selected_cv_hash
     ):
         raise SubmissionAdmissionError("ATTACHMENT_UNVERIFIED")
-    return plan
+    return plan, domain_plan
+
+
+def _require_model_binding(
+    application: Application,
+    domain_plan: FormPlanV1,
+    capabilities: Mapping[str, object],
+) -> None:
+    """Bind every LLM-derived review artifact to the currently ready local model."""
+
+    llm = capabilities.get("llm")
+    if not isinstance(llm, Mapping):
+        raise SubmissionAdmissionError("RUNTIME_NOT_READY")
+    runtime_digest = str(llm.get("digest") or "")
+    if llm.get("ready") is not True or not is_qualified_local_model_identity(
+        provider=llm.get("provider"),
+        model=llm.get("model"),
+        local=llm.get("local"),
+        digest=runtime_digest,
+    ):
+        raise SubmissionAdmissionError("RUNTIME_NOT_READY")
+
+    material_identity = (
+        application.material_model_provider,
+        application.material_model_name,
+        application.material_model_digest,
+    )
+    if material_identity != (
+        QUALIFIED_LOCAL_LLM_PROVIDER,
+        QUALIFIED_LOCAL_LLM_MODEL,
+        runtime_digest,
+    ):
+        raise SubmissionAdmissionError("LLM_MODEL_CHANGED")
+
+    uses_local_llm = any(
+        decision.provenance.value == "local_llm" for decision in domain_plan.decisions
+    )
+    if uses_local_llm and (
+        domain_plan.llm_prompt_version != FORM_RESOLUTION_PROMPT_VERSION
+        or domain_plan.llm_model_provider != QUALIFIED_LOCAL_LLM_PROVIDER
+        or domain_plan.llm_model_name != QUALIFIED_LOCAL_LLM_MODEL
+        or domain_plan.llm_model_digest != runtime_digest
+    ):
+        raise SubmissionAdmissionError("LLM_MODEL_CHANGED")
 
 
 def _validate_adapter(
@@ -459,7 +535,7 @@ def _create_one(
     if db.bind.dialect.name == "postgresql":
         plan_query = plan_query.with_for_update()
     plan = plan_query.first()
-    plan = _validate_plan(
+    plan, domain_plan = _validate_plan(
         application=application,
         plan=plan,
         request=request,
@@ -473,6 +549,7 @@ def _create_one(
     if not session_checker(job_url, descriptor, settings):
         raise SubmissionAdmissionError("SESSION_EXPIRED")
     runner_release = _require_runtime(capabilities)
+    _require_model_binding(application, domain_plan, capabilities)
 
     next_attempt_number = (
         db.query(func.coalesce(func.max(Submission.attempt_number), 0))

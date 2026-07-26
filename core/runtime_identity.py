@@ -41,6 +41,7 @@ _READINESS_COMPONENTS = (
     "beat",
     "shared_storage",
     "browser",
+    "llm",
 )
 _RUNTIME_SOURCE_ROOTS = (
     "api",
@@ -375,6 +376,28 @@ def build_runtime_capabilities(
     worker_detail = checks_source.get("worker")
     if not isinstance(worker_detail, Mapping):
         worker_detail = {}
+    llm_detail = checks_source.get("llm")
+    if not isinstance(llm_detail, Mapping):
+        llm_detail = {}
+    llm_digest = str(llm_detail.get("digest") or "")
+    if _SOURCE_DIGEST_RE.fullmatch(llm_digest) is None:
+        llm_digest = ""
+    ollama_server_version = str(llm_detail.get("ollama_server_version") or "")
+    if _SAFE_RELEASE_RE.fullmatch(ollama_server_version) is None:
+        ollama_server_version = ""
+    llm_capabilities = {
+        "provider": str(llm_detail.get("provider") or "unknown")[:32],
+        "model": str(llm_detail.get("model") or "unknown")[:128],
+        "local": bool(llm_detail.get("local")),
+        "digest": llm_digest or None,
+        "ollama_server_version": ollama_server_version or None,
+        "ready": bool(llm_detail.get("ok")),
+        "reason_code": (
+            str(llm_detail.get("reason_code"))[:64]
+            if isinstance(llm_detail.get("reason_code"), str)
+            else None
+        ),
+    }
     worker_build = _clean_release(worker_detail.get("build_sha"))
     worker_protocol = _clean_release(worker_detail.get("protocol_version"))
     worker_source_digest = str(worker_detail.get("source_digest") or "")
@@ -476,4 +499,5 @@ def build_runtime_capabilities(
             "protocol_version": worker_protocol,
             "compatible": worker_compatible,
         },
+        "llm": llm_capabilities,
     }

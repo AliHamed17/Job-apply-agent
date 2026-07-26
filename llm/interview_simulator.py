@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from profile.models import UserProfile
+
 import structlog
+from pydantic import BaseModel, ConfigDict, Field
 
 from jobs.models import JobData
+from llm.claim_evidence import non_sensitive_cv_excerpt
 from llm.client import LLMClient, get_llm_client
-from profile.models import UserProfile
+from llm.contracts import GenerationPurpose
+from llm.private_generation import (
+    bounded_private_generation_reason,
+    generate_private_application_typed,
+    require_private_candidate_context,
+)
 
 logger = structlog.get_logger(__name__)
 
 _SIMULATOR_PROMPT = """\
-Evaluate candidate {name}'s response to the interview question for the position of {job_title} at {company}.
+Evaluate candidate {name}'s response to the interview question for the
+position of {job_title} at {company}.
 
 ## Job Description
 {job_description}
@@ -39,10 +49,19 @@ Evaluate the candidate's answer and return ONLY a JSON object with:
 
 @dataclass
 class SimulationEvaluation:
-    score: int = 75
+    score: int = 0
     strengths: list[str] = field(default_factory=list)
     missing_points: list[str] = field(default_factory=list)
     improved_answer: str = ""
+
+
+class _SimulationDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score: int = Field(ge=0, le=100)
+    strengths: list[str] = Field(max_length=10)
+    missing_points: list[str] = Field(max_length=10)
+    improved_answer: str = Field(max_length=5000)
 
 
 async def evaluate_interview_answer(
@@ -54,7 +73,8 @@ async def evaluate_interview_answer(
     client: LLMClient | None = None,
 ) -> SimulationEvaluation:
     llm = client or get_llm_client()
-    resume_content = (cv_text if cv_text and cv_text.strip() else profile.resume.text)[:4000]
+    resume_source = cv_text if cv_text and cv_text.strip() else profile.resume.text
+    resume_content = non_sensitive_cv_excerpt(resume_source, max_chars=4000)
 
     prompt = _SIMULATOR_PROMPT.format(
         name=profile.personal.name,
@@ -67,21 +87,30 @@ async def evaluate_interview_answer(
     )
 
     try:
-        raw = await llm.generate_json(
+        require_private_candidate_context(resume_content)
+        generated = await generate_private_application_typed(
+            client=llm,
+            response_model=_SimulationDraft,
             prompt=prompt,
+            purpose=GenerationPurpose.INTERVIEW_SIMULATION,
+            prompt_version="interview-simulation-v1",
             system="You are an expert technical interviewer and executive communication coach.",
         )
+        raw = generated.value
         return SimulationEvaluation(
-            score=int(raw.get("score", 75)),
-            strengths=raw.get("strengths", []),
-            missing_points=raw.get("missing_points", []),
-            improved_answer=raw.get("improved_answer", ""),
+            score=raw.score,
+            strengths=raw.strengths,
+            missing_points=raw.missing_points,
+            improved_answer=raw.improved_answer,
         )
     except Exception as exc:
-        logger.error("interview_simulation_evaluation_failed", error=str(exc))
+        logger.error(
+            "interview_simulation_evaluation_failed",
+            reason_code=bounded_private_generation_reason(exc),
+        )
         return SimulationEvaluation(
-            score=70,
-            strengths=["Good general technical framing"],
-            missing_points=["Include specific impact metrics (e.g. 75% speedup)"],
+            score=0,
+            strengths=[],
+            missing_points=["Automated interview evaluation unavailable."],
             improved_answer=candidate_answer,
         )

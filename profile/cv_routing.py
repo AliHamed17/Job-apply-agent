@@ -70,11 +70,11 @@ class RoutingJob(BaseModel):
 class RoutingDecision(BaseModel):
     selected_cv_id: str | None
     selected_file: str | None
+    selected_cv_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     confidence: float
     matched_evidence: list[str]
     fallback_reason: str | None = None
     overridden: bool = False
-
 
 
 def load_routing_config(path: str | Path) -> CVRoutingConfig:

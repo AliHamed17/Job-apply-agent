@@ -29,6 +29,7 @@ env/
 # Logs
 logs/
 *.log
+.test-artifacts/
 
 # OS
 .DS_Store
@@ -73,9 +74,13 @@ employer_workflows.yaml
 # Personal role-specific CVs (never commit)
 user_profile.yaml
 cvs/
+*.pdf
 cv_routing.yaml
 routing-evaluation-report.json
 linkedin-smoke-qualification.json
+
+# Local assistant configuration can contain machine-specific paths or permissions.
+.claude/
 
 # Local Vercel project linkage and deployment metadata.
 .vercel/

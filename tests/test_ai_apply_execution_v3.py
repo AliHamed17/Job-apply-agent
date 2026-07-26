@@ -81,3 +81,6 @@ def test_batch_apply_endpoint(client, auth_headers):
     data = resp.json()
     assert "triggered_count" in data
     assert "job_ids" in data
+    assert data["triggered_count"] == 0
+    assert "batch-prepare" in data["message"]
+    assert "never sends an application" in data["message"]

@@ -1,0 +1,1650 @@
+[
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-001",
+    "job": {
+      "description": "Build PyTorch and Python model services for industrial telemetry products.",
+      "required_skills": [
+        "python",
+        "pytorch"
+      ],
+      "seniority": "junior",
+      "title": "Machine Learning Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-002",
+    "job": {
+      "description": "Develop TensorFlow and Python inference workflows for accessible public-service workflows.",
+      "required_skills": [
+        "python",
+        "tensorflow"
+      ],
+      "seniority": "mid",
+      "title": "Artificial Intelligence Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-003",
+    "job": {
+      "description": "Deliver NLP and vision model pipelines for multilingual collaboration tools.",
+      "required_skills": [
+        "nlp",
+        "vision"
+      ],
+      "seniority": "senior",
+      "title": "Machine Learning Research Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-004",
+    "job": {
+      "description": "Build PyTorch and Python model services for energy-efficiency reporting.",
+      "required_skills": [
+        "python",
+        "pytorch"
+      ],
+      "seniority": "",
+      "title": "Machine Learning Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-005",
+    "job": {
+      "description": "Develop TensorFlow and Python inference workflows for resilient logistics operations.",
+      "required_skills": [
+        "python",
+        "tensorflow"
+      ],
+      "seniority": "junior",
+      "title": "Artificial Intelligence Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-006",
+    "job": {
+      "description": "Deliver NLP and vision model pipelines for privacy-preserving internal systems.",
+      "required_skills": [
+        "nlp",
+        "vision"
+      ],
+      "seniority": "mid",
+      "title": "Machine Learning Research Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-007",
+    "job": {
+      "description": "Build PyTorch and Python model services for developer productivity platforms.",
+      "required_skills": [
+        "python",
+        "pytorch"
+      ],
+      "seniority": "senior",
+      "title": "Machine Learning Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-008",
+    "job": {
+      "description": "Develop TensorFlow and Python inference workflows for real-time observability products.",
+      "required_skills": [
+        "python",
+        "tensorflow"
+      ],
+      "seniority": "",
+      "title": "Artificial Intelligence Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-009",
+    "job": {
+      "description": "Deliver NLP and vision model pipelines for scientific computing teams.",
+      "required_skills": [
+        "nlp",
+        "vision"
+      ],
+      "seniority": "junior",
+      "title": "Machine Learning Research Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-010",
+    "job": {
+      "description": "Build PyTorch and Python model services for sustainable manufacturing systems.",
+      "required_skills": [
+        "python",
+        "pytorch"
+      ],
+      "seniority": "mid",
+      "title": "Machine Learning Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-011",
+    "job": {
+      "description": "Develop TensorFlow and Python inference workflows for education technology services.",
+      "required_skills": [
+        "python",
+        "tensorflow"
+      ],
+      "seniority": "senior",
+      "title": "Artificial Intelligence Engineer"
+    }
+  },
+  {
+    "category": "AI/ML",
+    "expected_cv_id": "ai-ml",
+    "id": "route-012",
+    "job": {
+      "description": "Deliver NLP and vision model pipelines for high-availability customer portals.",
+      "required_skills": [
+        "nlp",
+        "vision"
+      ],
+      "seniority": "",
+      "title": "Machine Learning Research Engineer"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-013",
+    "job": {
+      "description": "Build SQL and dbt analytics models for industrial telemetry products.",
+      "required_skills": [
+        "sql",
+        "dbt"
+      ],
+      "seniority": "junior",
+      "title": "Data Analytics Engineer"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-014",
+    "job": {
+      "description": "Deliver Spark and pandas data pipelines for accessible public-service workflows.",
+      "required_skills": [
+        "spark",
+        "pandas"
+      ],
+      "seniority": "mid",
+      "title": "Data BI Analyst"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-015",
+    "job": {
+      "description": "Create Tableau and SQL reporting layers for multilingual collaboration tools.",
+      "required_skills": [
+        "tableau",
+        "sql"
+      ],
+      "seniority": "senior",
+      "title": "Analytics Data Specialist"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-016",
+    "job": {
+      "description": "Build SQL and dbt analytics models for energy-efficiency reporting.",
+      "required_skills": [
+        "sql",
+        "dbt"
+      ],
+      "seniority": "",
+      "title": "Data Analytics Engineer"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-017",
+    "job": {
+      "description": "Deliver Spark and pandas data pipelines for resilient logistics operations.",
+      "required_skills": [
+        "spark",
+        "pandas"
+      ],
+      "seniority": "junior",
+      "title": "Data BI Analyst"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-018",
+    "job": {
+      "description": "Create Tableau and SQL reporting layers for privacy-preserving internal systems.",
+      "required_skills": [
+        "tableau",
+        "sql"
+      ],
+      "seniority": "mid",
+      "title": "Analytics Data Specialist"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-019",
+    "job": {
+      "description": "Build SQL and dbt analytics models for developer productivity platforms.",
+      "required_skills": [
+        "sql",
+        "dbt"
+      ],
+      "seniority": "senior",
+      "title": "Data Analytics Engineer"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-020",
+    "job": {
+      "description": "Deliver Spark and pandas data pipelines for real-time observability products.",
+      "required_skills": [
+        "spark",
+        "pandas"
+      ],
+      "seniority": "",
+      "title": "Data BI Analyst"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-021",
+    "job": {
+      "description": "Create Tableau and SQL reporting layers for scientific computing teams.",
+      "required_skills": [
+        "tableau",
+        "sql"
+      ],
+      "seniority": "junior",
+      "title": "Analytics Data Specialist"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-022",
+    "job": {
+      "description": "Build SQL and dbt analytics models for sustainable manufacturing systems.",
+      "required_skills": [
+        "sql",
+        "dbt"
+      ],
+      "seniority": "mid",
+      "title": "Data Analytics Engineer"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-023",
+    "job": {
+      "description": "Deliver Spark and pandas data pipelines for education technology services.",
+      "required_skills": [
+        "spark",
+        "pandas"
+      ],
+      "seniority": "senior",
+      "title": "Data BI Analyst"
+    }
+  },
+  {
+    "category": "data",
+    "expected_cv_id": "data",
+    "id": "route-024",
+    "job": {
+      "description": "Create Tableau and SQL reporting layers for high-availability customer portals.",
+      "required_skills": [
+        "tableau",
+        "sql"
+      ],
+      "seniority": "",
+      "title": "Analytics Data Specialist"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-025",
+    "job": {
+      "description": "Develop Java and API services for industrial telemetry products.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "junior",
+      "title": "Backend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-026",
+    "job": {
+      "description": "Build TypeScript and React interfaces for accessible public-service workflows.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "mid",
+      "title": "Frontend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-027",
+    "job": {
+      "description": "Maintain API and Pytest service contracts for multilingual collaboration tools.",
+      "required_skills": [
+        "api",
+        "pytest"
+      ],
+      "seniority": "senior",
+      "title": "Software Backend Specialist"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-028",
+    "job": {
+      "description": "Develop Java and API services for energy-efficiency reporting.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "",
+      "title": "Backend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-029",
+    "job": {
+      "description": "Build TypeScript and React interfaces for resilient logistics operations.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "junior",
+      "title": "Frontend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-030",
+    "job": {
+      "description": "Maintain API and Pytest service contracts for privacy-preserving internal systems.",
+      "required_skills": [
+        "api",
+        "pytest"
+      ],
+      "seniority": "mid",
+      "title": "Software Backend Specialist"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-031",
+    "job": {
+      "description": "Develop Java and API services for developer productivity platforms.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "senior",
+      "title": "Backend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-032",
+    "job": {
+      "description": "Build TypeScript and React interfaces for real-time observability products.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "",
+      "title": "Frontend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-033",
+    "job": {
+      "description": "Maintain API and Pytest service contracts for scientific computing teams.",
+      "required_skills": [
+        "api",
+        "pytest"
+      ],
+      "seniority": "junior",
+      "title": "Software Backend Specialist"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-034",
+    "job": {
+      "description": "Develop Java and API services for sustainable manufacturing systems.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "mid",
+      "title": "Backend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-035",
+    "job": {
+      "description": "Build TypeScript and React interfaces for education technology services.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "senior",
+      "title": "Frontend Software Developer"
+    }
+  },
+  {
+    "category": "software",
+    "expected_cv_id": "software",
+    "id": "route-036",
+    "job": {
+      "description": "Maintain API and Pytest service contracts for high-availability customer portals.",
+      "required_skills": [
+        "api",
+        "pytest"
+      ],
+      "seniority": "",
+      "title": "Software Backend Specialist"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-037",
+    "job": {
+      "description": "Create Selenium and Pytest browser suites for industrial telemetry products.",
+      "required_skills": [
+        "selenium",
+        "pytest"
+      ],
+      "seniority": "junior",
+      "title": "Software Test Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-038",
+    "job": {
+      "description": "Validate Java and API service behavior for accessible public-service workflows.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "mid",
+      "title": "Backend Quality Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-039",
+    "job": {
+      "description": "Develop TypeScript test automation for multilingual collaboration tools.",
+      "required_skills": [
+        "typescript",
+        "pytest"
+      ],
+      "seniority": "senior",
+      "title": "Software Automation Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-040",
+    "job": {
+      "description": "Create Selenium and Pytest browser suites for energy-efficiency reporting.",
+      "required_skills": [
+        "selenium",
+        "pytest"
+      ],
+      "seniority": "",
+      "title": "Software Test Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-041",
+    "job": {
+      "description": "Validate Java and API service behavior for resilient logistics operations.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "junior",
+      "title": "Backend Quality Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-042",
+    "job": {
+      "description": "Develop TypeScript test automation for privacy-preserving internal systems.",
+      "required_skills": [
+        "typescript",
+        "pytest"
+      ],
+      "seniority": "mid",
+      "title": "Software Automation Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-043",
+    "job": {
+      "description": "Create Selenium and Pytest browser suites for developer productivity platforms.",
+      "required_skills": [
+        "selenium",
+        "pytest"
+      ],
+      "seniority": "senior",
+      "title": "Software Test Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-044",
+    "job": {
+      "description": "Validate Java and API service behavior for real-time observability products.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "",
+      "title": "Backend Quality Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-045",
+    "job": {
+      "description": "Develop TypeScript test automation for scientific computing teams.",
+      "required_skills": [
+        "typescript",
+        "pytest"
+      ],
+      "seniority": "junior",
+      "title": "Software Automation Developer"
+    }
+  },
+  {
+    "category": "QA",
+    "expected_cv_id": "software",
+    "id": "route-046",
+    "job": {
+      "description": "Create Selenium and Pytest browser suites for sustainable manufacturing systems.",
+      "required_skills": [
+        "selenium",
+        "pytest"
+      ],
+      "seniority": "mid",
+      "title": "Software Test Developer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-047",
+    "job": {
+      "description": "Operate Kubernetes and Terraform environments for industrial telemetry products.",
+      "required_skills": [
+        "kubernetes",
+        "terraform"
+      ],
+      "seniority": "junior",
+      "title": "DevOps Infrastructure Engineer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-048",
+    "job": {
+      "description": "Automate AWS and Linux delivery systems for accessible public-service workflows.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "mid",
+      "title": "Infrastructure DevOps Specialist"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-049",
+    "job": {
+      "description": "Build Terraform and Kubernetes release controls for multilingual collaboration tools.",
+      "required_skills": [
+        "terraform",
+        "kubernetes"
+      ],
+      "seniority": "senior",
+      "title": "DevOps Firmware Platform Engineer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-050",
+    "job": {
+      "description": "Operate Kubernetes and Terraform environments for energy-efficiency reporting.",
+      "required_skills": [
+        "kubernetes",
+        "terraform"
+      ],
+      "seniority": "",
+      "title": "DevOps Infrastructure Engineer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-051",
+    "job": {
+      "description": "Automate AWS and Linux delivery systems for resilient logistics operations.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "junior",
+      "title": "Infrastructure DevOps Specialist"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-052",
+    "job": {
+      "description": "Build Terraform and Kubernetes release controls for privacy-preserving internal systems.",
+      "required_skills": [
+        "terraform",
+        "kubernetes"
+      ],
+      "seniority": "mid",
+      "title": "DevOps Firmware Platform Engineer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-053",
+    "job": {
+      "description": "Operate Kubernetes and Terraform environments for developer productivity platforms.",
+      "required_skills": [
+        "kubernetes",
+        "terraform"
+      ],
+      "seniority": "senior",
+      "title": "DevOps Infrastructure Engineer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-054",
+    "job": {
+      "description": "Automate AWS and Linux delivery systems for real-time observability products.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "",
+      "title": "Infrastructure DevOps Specialist"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-055",
+    "job": {
+      "description": "Build Terraform and Kubernetes release controls for scientific computing teams.",
+      "required_skills": [
+        "terraform",
+        "kubernetes"
+      ],
+      "seniority": "junior",
+      "title": "DevOps Firmware Platform Engineer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-056",
+    "job": {
+      "description": "Operate Kubernetes and Terraform environments for sustainable manufacturing systems.",
+      "required_skills": [
+        "kubernetes",
+        "terraform"
+      ],
+      "seniority": "mid",
+      "title": "DevOps Infrastructure Engineer"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-057",
+    "job": {
+      "description": "Automate AWS and Linux delivery systems for education technology services.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "senior",
+      "title": "Infrastructure DevOps Specialist"
+    }
+  },
+  {
+    "category": "DevOps",
+    "expected_cv_id": "platform",
+    "id": "route-058",
+    "job": {
+      "description": "Build Terraform and Kubernetes release controls for high-availability customer portals.",
+      "required_skills": [
+        "terraform",
+        "kubernetes"
+      ],
+      "seniority": "",
+      "title": "DevOps Firmware Platform Engineer"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-059",
+    "job": {
+      "description": "Maintain AWS and Linux infrastructure for industrial telemetry products.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "junior",
+      "title": "Cloud Infrastructure DevOps Engineer"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-060",
+    "job": {
+      "description": "Provision Kubernetes with Terraform for accessible public-service workflows.",
+      "required_skills": [
+        "kubernetes",
+        "terraform"
+      ],
+      "seniority": "mid",
+      "title": "Infrastructure Firmware Platform Engineer"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-061",
+    "job": {
+      "description": "Harden Linux and Kubernetes runtime services for multilingual collaboration tools.",
+      "required_skills": [
+        "linux",
+        "kubernetes"
+      ],
+      "seniority": "senior",
+      "title": "DevOps Infrastructure Specialist"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-062",
+    "job": {
+      "description": "Maintain AWS and Linux infrastructure for energy-efficiency reporting.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "",
+      "title": "Cloud Infrastructure DevOps Engineer"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-063",
+    "job": {
+      "description": "Provision Kubernetes with Terraform for resilient logistics operations.",
+      "required_skills": [
+        "kubernetes",
+        "terraform"
+      ],
+      "seniority": "junior",
+      "title": "Infrastructure Firmware Platform Engineer"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-064",
+    "job": {
+      "description": "Harden Linux and Kubernetes runtime services for privacy-preserving internal systems.",
+      "required_skills": [
+        "linux",
+        "kubernetes"
+      ],
+      "seniority": "mid",
+      "title": "DevOps Infrastructure Specialist"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-065",
+    "job": {
+      "description": "Maintain AWS and Linux infrastructure for developer productivity platforms.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "senior",
+      "title": "Cloud Infrastructure DevOps Engineer"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-066",
+    "job": {
+      "description": "Provision Kubernetes with Terraform for real-time observability products.",
+      "required_skills": [
+        "kubernetes",
+        "terraform"
+      ],
+      "seniority": "",
+      "title": "Infrastructure Firmware Platform Engineer"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-067",
+    "job": {
+      "description": "Harden Linux and Kubernetes runtime services for scientific computing teams.",
+      "required_skills": [
+        "linux",
+        "kubernetes"
+      ],
+      "seniority": "junior",
+      "title": "DevOps Infrastructure Specialist"
+    }
+  },
+  {
+    "category": "infrastructure",
+    "expected_cv_id": "platform",
+    "id": "route-068",
+    "job": {
+      "description": "Maintain AWS and Linux infrastructure for sustainable manufacturing systems.",
+      "required_skills": [
+        "aws",
+        "linux"
+      ],
+      "seniority": "mid",
+      "title": "Cloud Infrastructure DevOps Engineer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-069",
+    "job": {
+      "description": "Develop C++ and RTOS device software for industrial telemetry products.",
+      "required_skills": [
+        "c++",
+        "rtos"
+      ],
+      "seniority": "junior",
+      "title": "Embedded Firmware Engineer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-070",
+    "job": {
+      "description": "Build firmware and Linux interfaces for accessible public-service workflows.",
+      "required_skills": [
+        "firmware",
+        "linux"
+      ],
+      "seniority": "mid",
+      "title": "Firmware Embedded Developer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-071",
+    "job": {
+      "description": "Verify RTOS and firmware integrations for multilingual collaboration tools.",
+      "required_skills": [
+        "rtos",
+        "firmware"
+      ],
+      "seniority": "senior",
+      "title": "Embedded Infrastructure Engineer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-072",
+    "job": {
+      "description": "Develop C++ and RTOS device software for energy-efficiency reporting.",
+      "required_skills": [
+        "c++",
+        "rtos"
+      ],
+      "seniority": "",
+      "title": "Embedded Firmware Engineer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-073",
+    "job": {
+      "description": "Build firmware and Linux interfaces for resilient logistics operations.",
+      "required_skills": [
+        "firmware",
+        "linux"
+      ],
+      "seniority": "junior",
+      "title": "Firmware Embedded Developer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-074",
+    "job": {
+      "description": "Verify RTOS and firmware integrations for privacy-preserving internal systems.",
+      "required_skills": [
+        "rtos",
+        "firmware"
+      ],
+      "seniority": "mid",
+      "title": "Embedded Infrastructure Engineer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-075",
+    "job": {
+      "description": "Develop C++ and RTOS device software for developer productivity platforms.",
+      "required_skills": [
+        "c++",
+        "rtos"
+      ],
+      "seniority": "senior",
+      "title": "Embedded Firmware Engineer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-076",
+    "job": {
+      "description": "Build firmware and Linux interfaces for real-time observability products.",
+      "required_skills": [
+        "firmware",
+        "linux"
+      ],
+      "seniority": "",
+      "title": "Firmware Embedded Developer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-077",
+    "job": {
+      "description": "Verify RTOS and firmware integrations for scientific computing teams.",
+      "required_skills": [
+        "rtos",
+        "firmware"
+      ],
+      "seniority": "junior",
+      "title": "Embedded Infrastructure Engineer"
+    }
+  },
+  {
+    "category": "embedded",
+    "expected_cv_id": "platform",
+    "id": "route-078",
+    "job": {
+      "description": "Develop C++ and RTOS device software for sustainable manufacturing systems.",
+      "required_skills": [
+        "c++",
+        "rtos"
+      ],
+      "seniority": "mid",
+      "title": "Embedded Firmware Engineer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-079",
+    "job": {
+      "description": "Contribute Java and API changes with mentoring for industrial telemetry products.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "junior",
+      "title": "Junior Backend Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-080",
+    "job": {
+      "description": "Build TypeScript and React components for accessible public-service workflows.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "mid",
+      "title": "Junior Software Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-081",
+    "job": {
+      "description": "Write Pytest and API regression checks for multilingual collaboration tools.",
+      "required_skills": [
+        "pytest",
+        "api"
+      ],
+      "seniority": "senior",
+      "title": "Associate Software Backend Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-082",
+    "job": {
+      "description": "Contribute Java and API changes with mentoring for energy-efficiency reporting.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "",
+      "title": "Junior Backend Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-083",
+    "job": {
+      "description": "Build TypeScript and React components for resilient logistics operations.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "junior",
+      "title": "Junior Software Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-084",
+    "job": {
+      "description": "Write Pytest and API regression checks for privacy-preserving internal systems.",
+      "required_skills": [
+        "pytest",
+        "api"
+      ],
+      "seniority": "mid",
+      "title": "Associate Software Backend Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-085",
+    "job": {
+      "description": "Contribute Java and API changes with mentoring for developer productivity platforms.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "senior",
+      "title": "Junior Backend Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-086",
+    "job": {
+      "description": "Build TypeScript and React components for real-time observability products.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "",
+      "title": "Junior Software Developer"
+    }
+  },
+  {
+    "category": "junior",
+    "expected_cv_id": "software",
+    "id": "route-087",
+    "job": {
+      "description": "Write Pytest and API regression checks for scientific computing teams.",
+      "required_skills": [
+        "pytest",
+        "api"
+      ],
+      "seniority": "junior",
+      "title": "Associate Software Backend Developer"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-088",
+    "job": {
+      "description": "Learn Java and API service development for industrial telemetry products.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "junior",
+      "title": "Software Developer Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-089",
+    "job": {
+      "description": "Assist TypeScript and React feature work for accessible public-service workflows.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "mid",
+      "title": "Backend Developer Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-090",
+    "job": {
+      "description": "Support Selenium and Pytest automation for multilingual collaboration tools.",
+      "required_skills": [
+        "selenium",
+        "pytest"
+      ],
+      "seniority": "senior",
+      "title": "Frontend Software Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-091",
+    "job": {
+      "description": "Learn Java and API service development for energy-efficiency reporting.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "",
+      "title": "Software Developer Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-092",
+    "job": {
+      "description": "Assist TypeScript and React feature work for resilient logistics operations.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "junior",
+      "title": "Backend Developer Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-093",
+    "job": {
+      "description": "Support Selenium and Pytest automation for privacy-preserving internal systems.",
+      "required_skills": [
+        "selenium",
+        "pytest"
+      ],
+      "seniority": "mid",
+      "title": "Frontend Software Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-094",
+    "job": {
+      "description": "Learn Java and API service development for developer productivity platforms.",
+      "required_skills": [
+        "java",
+        "api"
+      ],
+      "seniority": "senior",
+      "title": "Software Developer Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-095",
+    "job": {
+      "description": "Assist TypeScript and React feature work for real-time observability products.",
+      "required_skills": [
+        "typescript",
+        "react"
+      ],
+      "seniority": "",
+      "title": "Backend Developer Internship"
+    }
+  },
+  {
+    "category": "internship",
+    "expected_cv_id": "software",
+    "id": "route-096",
+    "job": {
+      "description": "Support Selenium and Pytest automation for scientific computing teams.",
+      "required_skills": [
+        "selenium",
+        "pytest"
+      ],
+      "seniority": "junior",
+      "title": "Frontend Software Internship"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "ai-ml",
+    "id": "route-097",
+    "job": {
+      "description": "Train deep neural architectures for language and image understanding for industrial telemetry products.",
+      "required_skills": [
+        "deep neural networks",
+        "representation learning"
+      ],
+      "seniority": "",
+      "title": "Neural Systems Researcher"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "ai-ml",
+    "id": "route-098",
+    "job": {
+      "description": "Create neural predictors for speech and imagery for accessible public-service workflows.",
+      "required_skills": [
+        "neural computation",
+        "representation methods"
+      ],
+      "seniority": "",
+      "title": "Predictive Systems Researcher"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "ai-ml",
+    "id": "route-099",
+    "job": {
+      "description": "Develop neural perception and language-understanding systems for multilingual collaboration tools.",
+      "required_skills": [
+        "deep neural networks",
+        "language understanding",
+        "image perception"
+      ],
+      "seniority": "",
+      "title": "Deep Perception Researcher"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "ai-ml",
+    "id": "route-100",
+    "job": {
+      "description": "Create deep predictors for images and text for energy-efficiency reporting.",
+      "required_skills": [
+        "neural computation",
+        "representation methods",
+        "predictive research"
+      ],
+      "seniority": "",
+      "title": "Statistical Neural Researcher"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "platform",
+    "id": "route-101",
+    "job": {
+      "description": "Orchestrate elastic compute resources and container scheduling for resilient logistics operations.",
+      "required_skills": [
+        "container orchestration",
+        "declarative provisioning",
+        "cloud reliability"
+      ],
+      "seniority": "",
+      "title": "Cloud Reliability Engineer"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "platform",
+    "id": "route-102",
+    "job": {
+      "description": "Orchestrate resilient compute workloads and declarative cloud environments for privacy-preserving internal systems.",
+      "required_skills": [
+        "container orchestration",
+        "declarative provisioning",
+        "elastic compute"
+      ],
+      "seniority": "",
+      "title": "Cloud Operations Engineer"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "platform",
+    "id": "route-103",
+    "job": {
+      "description": "Orchestrate container workloads and declarative cloud resources for developer productivity platforms.",
+      "required_skills": [
+        "container orchestration",
+        "infrastructure as code"
+      ],
+      "seniority": "",
+      "title": "Cloud Delivery Engineer"
+    }
+  },
+  {
+    "category": "semantic_fallback",
+    "expected_cv_id": "platform",
+    "id": "route-104",
+    "job": {
+      "description": "Automate elastic compute environments and operating-system services for real-time observability products.",
+      "required_skills": [
+        "declarative provisioning",
+        "container orchestration"
+      ],
+      "seniority": "",
+      "title": "Site Reliability Engineer"
+    }
+  },
+  {
+    "category": "ambiguous",
+    "expected_cv_id": null,
+    "id": "route-105",
+    "job": {
+      "description": "Analytics and backend coordination for industrial telemetry products.",
+      "required_skills": [
+        "sql",
+        "api"
+      ],
+      "seniority": "mid",
+      "title": "Data Software Specialist"
+    }
+  },
+  {
+    "category": "ambiguous",
+    "expected_cv_id": null,
+    "id": "route-106",
+    "job": {
+      "description": "Tableau and RTOS product support for accessible public-service workflows.",
+      "required_skills": [
+        "tableau",
+        "rtos"
+      ],
+      "seniority": "mid",
+      "title": "Analytics Firmware Specialist"
+    }
+  },
+  {
+    "category": "ambiguous",
+    "expected_cv_id": null,
+    "id": "route-107",
+    "job": {
+      "description": "Real-time device control and executive visual reporting for multilingual collaboration tools.",
+      "required_skills": [
+        "device scheduling",
+        "visual reporting"
+      ],
+      "seniority": "",
+      "title": "Device Dashboard Specialist"
+    }
+  },
+  {
+    "category": "ambiguous",
+    "expected_cv_id": null,
+    "id": "route-108",
+    "job": {
+      "description": "Neural predictions and interactive web experiences for energy-efficiency reporting.",
+      "required_skills": [
+        "neural computation",
+        "component design"
+      ],
+      "seniority": "",
+      "title": "Predictive Product Interface Specialist"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-109",
+    "job": {
+      "description": "Coordinate schedules and stakeholder notes.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Product Operations Coordinator"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-110",
+    "job": {
+      "description": "Create visual identity systems and illustrations.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Visual Brand Designer"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-111",
+    "job": {
+      "description": "Review procurement terms and agreements.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Commercial Contract Specialist"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-112",
+    "job": {
+      "description": "Coordinate building maintenance programs.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Facilities Program Manager"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-113",
+    "job": {
+      "description": "Organize workshops and learning materials.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Customer Training Coordinator"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-114",
+    "job": {
+      "description": "Produce user guides and editorial documentation.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Technical Writer"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-115",
+    "job": {
+      "description": "Prepare budgets and forecasting summaries.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Financial Planning Associate"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-116",
+    "job": {
+      "description": "Support employee programs and onboarding.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "People Operations Partner"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-117",
+    "job": {
+      "description": "Coordinate inventory planning activities.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Supply Planning Coordinator"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-118",
+    "job": {
+      "description": "Manage grants and research schedules.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Research Program Administrator"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-119",
+    "job": {
+      "description": "Coordinate public events and partnerships.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Community Engagement Lead"
+    }
+  },
+  {
+    "category": "out_of_scope",
+    "expected_cv_id": null,
+    "id": "route-120",
+    "job": {
+      "description": "Manage translation delivery schedules.",
+      "required_skills": [],
+      "seniority": "",
+      "title": "Localization Project Coordinator"
+    }
+  }
+]

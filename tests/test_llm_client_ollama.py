@@ -41,7 +41,9 @@ async def test_generate_posts_correct_payload_and_parses_content():
 
     with patch("llm.client.httpx.AsyncClient") as mock_ac:
         mock_ac.return_value.__aenter__.return_value.post = mock_post
-        result = await client.generate(prompt="Say hi", system="You are helpful.", max_tokens=50, temperature=0.7)
+        result = await client.generate(
+            prompt="Say hi", system="You are helpful.", max_tokens=50, temperature=0.7
+        )
 
     assert result == "Hello from Qwen"
     url, kwargs = mock_post.call_args[0][0], mock_post.call_args.kwargs
@@ -52,7 +54,11 @@ async def test_generate_posts_correct_payload_and_parses_content():
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Say hi"},
     ]
-    assert payload["options"] == {"temperature": 0.7, "num_predict": 50}
+    assert payload["options"] == {
+        "temperature": 0.7,
+        "num_predict": 50,
+        "num_ctx": 16_384,
+    }
     assert payload["stream"] is False
     assert "format" not in payload  # plain generate() must not force JSON mode
 

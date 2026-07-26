@@ -626,9 +626,16 @@ async def test_realign_rechecks_revision_after_llm_without_holding_a_lock(tmp_pa
 
     db = factory()
     with (
-        patch.object(realign_route, "get_settings", return_value=Settings(_env_file=None)),
+        patch.object(
+            realign_route,
+            "get_settings",
+            return_value=Settings(
+                _env_file=None,
+                cv_routing_path=str(tmp_path / "missing-routing.yaml"),
+                cv_directory=str(tmp_path),
+            ),
+        ),
         patch("profile.loader.get_profile", return_value=UserProfile()),
-        patch.object(realign_route, "get_cv_text_by_id", return_value=None),
         patch.object(
             realign_route,
             "generate_full_application",
@@ -638,7 +645,7 @@ async def test_realign_rechecks_revision_after_llm_without_holding_a_lock(tmp_pa
         with pytest.raises(HTTPException) as exc:
             await realign_route.realign_application(
                 application_id,
-                realign_route.RealignRequest(forced_cv_id="cv-safe"),
+                realign_route.RealignRequest(),
                 db,
             )
 
@@ -668,8 +675,15 @@ async def test_realign_binds_generated_content_to_latest_profile_version(
 
     db = factory()
     with (
-        patch.object(realign_route, "get_settings", return_value=Settings(_env_file=None)),
-        patch.object(realign_route, "get_cv_text_by_id", return_value=None),
+        patch.object(
+            realign_route,
+            "get_settings",
+            return_value=Settings(
+                _env_file=None,
+                cv_routing_path=str(tmp_path / "missing-routing.yaml"),
+                cv_directory=str(tmp_path),
+            ),
+        ),
         patch.object(
             realign_route,
             "generate_full_application",
@@ -678,7 +692,7 @@ async def test_realign_binds_generated_content_to_latest_profile_version(
     ):
         await realign_route.realign_application(
             application_id,
-            realign_route.RealignRequest(forced_cv_id="cv-safe"),
+            realign_route.RealignRequest(),
             db,
         )
 
@@ -724,8 +738,15 @@ async def test_realign_rejects_profile_change_during_generation(tmp_path):
 
     db = factory()
     with (
-        patch.object(realign_route, "get_settings", return_value=Settings(_env_file=None)),
-        patch.object(realign_route, "get_cv_text_by_id", return_value=None),
+        patch.object(
+            realign_route,
+            "get_settings",
+            return_value=Settings(
+                _env_file=None,
+                cv_routing_path=str(tmp_path / "missing-routing.yaml"),
+                cv_directory=str(tmp_path),
+            ),
+        ),
         patch.object(
             realign_route,
             "generate_full_application",
@@ -735,7 +756,7 @@ async def test_realign_rejects_profile_change_during_generation(tmp_path):
         with pytest.raises(HTTPException) as exc:
             await realign_route.realign_application(
                 application_id,
-                realign_route.RealignRequest(forced_cv_id="cv-safe"),
+                realign_route.RealignRequest(),
                 db,
             )
 

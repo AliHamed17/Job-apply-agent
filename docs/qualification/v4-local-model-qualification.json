@@ -1,0 +1,531 @@
+{
+  "datasets": {
+    "forms": {
+      "cases": 240,
+      "file": "form_resolution_bilingual_240.json",
+      "sha256": "2741cbb63ac67995963fb64b39b223fea37b38dc85f92c3ef8cd53682270f91e"
+    },
+    "malformed": {
+      "cases": 30,
+      "file": "malformed_prompt_injection_30.json",
+      "sha256": "14d3a1094be7f4ae31cd282dba11a2cab3ab0e1651d2fd860cac138e14bdc09c"
+    },
+    "materials": {
+      "cases": 40,
+      "file": "local_model_full_material_40.json",
+      "sha256": "8493bdf1f6b535c148410ce174b3315c323c71c660f718d8b6434d8f90423686"
+    },
+    "routing": {
+      "cases": 120,
+      "file": "cv_routing_120.json",
+      "sha256": "cb6497a20c7e82db9bbce172fb3a755a093e9d7a39086f113c9ffbdf33e657f3"
+    },
+    "routing_config": {
+      "cases": 1,
+      "file": "cv_routing_eval_config.yaml",
+      "sha256": "862bf65397bed0b64a0bd219d82a0646db8ac1163cc11950ded5611df68e095d"
+    }
+  },
+  "evaluation_mode": {
+    "cloud_fallback": false,
+    "model": "qwen2.5:7b",
+    "outputs_persisted": false,
+    "private_data_used": false,
+    "provider": "ollama",
+    "real_local_model": true,
+    "serialized_inference": true
+  },
+  "execution_environment": {
+    "inference_config": {
+      "configuration_reason_code": null,
+      "lease_mode": "redis",
+      "llm_generation_max_horizon_seconds": 120.0,
+      "llm_max_prompt_chars": 24000,
+      "ollama_circuit_failure_threshold": 3,
+      "ollama_circuit_reset_seconds": 30.0,
+      "ollama_connect_timeout_seconds": 3.0,
+      "ollama_lease_ttl_seconds": 130,
+      "ollama_lease_wait_seconds": 10.0,
+      "ollama_no_cloud": true,
+      "ollama_num_ctx": 16384,
+      "ollama_request_timeout_seconds": 120.0
+    },
+    "model_digest": "sha256:845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "ollama": {
+      "server_version": "0.31.1",
+      "version_reason_code": null
+    },
+    "packages": {
+      "annotated_types": "0.7.0",
+      "anyio": "4.13.0",
+      "certifi": "2026.4.22",
+      "h11": "0.16.0",
+      "httpcore": "1.0.9",
+      "httpx": "0.28.1",
+      "idna": "3.15",
+      "pydantic": "2.13.4",
+      "pydantic_core": "2.46.4",
+      "pydantic_settings": "2.14.2",
+      "pyjwt": "2.13.0",
+      "python_dotenv": "1.2.2",
+      "pyyaml": "6.0.3",
+      "redis": "5.3.1",
+      "sniffio": "1.3.1",
+      "typing_extensions": "4.15.0",
+      "typing_inspection": "0.4.2"
+    },
+    "python": {
+      "implementation": "CPython",
+      "major": 3,
+      "minor": 13
+    },
+    "schema_version": "qualification-execution-environment-v3"
+  },
+  "inference": {
+    "distinct_model_identities": 1,
+    "distinct_server_versions": 1,
+    "failure_reason_counts": {},
+    "identity_observations": 142,
+    "maximum_concurrent_calls": 1,
+    "provider_attempts": 142,
+    "provider_payloads": 142,
+    "purpose_counts": {
+      "cv_routing": 22,
+      "form_resolution": 80,
+      "full_material": 40
+    },
+    "qualified_server_version_observations": 142,
+    "registry_identity_observations": 142,
+    "server_version_observations": 142,
+    "successful_generations": 142,
+    "typed_invocations": 142
+  },
+  "interpretation": "This is a real local-model run over generated synthetic, contract-co-designed labels. The labels are not independent human annotations, so percentages are regression measurements, not estimates of production accuracy or live ATS performance. Coverage and abstention must be read separately from precision.",
+  "model_identity": {
+    "digest": "sha256:845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "local": true,
+    "model": "qwen2.5:7b",
+    "provider": "ollama"
+  },
+  "overall_pass": true,
+  "prompt_versions": {
+    "cv_routing": "cv-routing-v1",
+    "form_resolution": "form-resolution-v1",
+    "full_material": "application-materials-v1"
+  },
+  "qualification_status": "passed",
+  "qualified_model_registry": {
+    "digest": "sha256:845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "model": "qwen2.5:7b",
+    "provider": "ollama",
+    "qualification_report": "docs/qualification/v4-local-model-qualification.json",
+    "qualification_report_schema_version": "v4-local-model-qualification-v4",
+    "registry_file": "config/qualified_local_model.json",
+    "registry_sha256": "4269b09a4862b5b9e90e4ce99c07522ba060db75e4972c461bb1b0deb7e8ce15",
+    "schema_version": "qualified-local-model-v1"
+  },
+  "runtime": {
+    "total_seconds": 1526.123
+  },
+  "schema_version": "v4-local-model-qualification-v4",
+  "source_integrity": {
+    "combined_sha256": "5308a0b12787a66c3ce19a9499f7495b7fea394b72ead747531967718f2d91be",
+    "files": {
+      "config/qualified_local_model.json": {
+        "file": "config/qualified_local_model.json",
+        "sha256": "4269b09a4862b5b9e90e4ce99c07522ba060db75e4972c461bb1b0deb7e8ce15"
+      },
+      "config/qualified_runtime_packages.json": {
+        "file": "config/qualified_runtime_packages.json",
+        "sha256": "5a09db73a41ae7b7762e54551fb71b343f3b71c3c9499934adee9df7d5a8a73c"
+      },
+      "core/config.py": {
+        "file": "core/config.py",
+        "sha256": "1f26d7ae869efe8f9bc9449e172f0f9b42806637baa815b1be7925de296cb531"
+      },
+      "core/form_plan_evidence.py": {
+        "file": "core/form_plan_evidence.py",
+        "sha256": "30b1211c4341d7166b2e0a59ef112a7fa84aeb2cdc8187b0f372073d1c10a3ce"
+      },
+      "core/form_planning.py": {
+        "file": "core/form_planning.py",
+        "sha256": "1a60084089f01e84fad2bd503da020f069b734d4e6952ca8b3376f493b381983"
+      },
+      "core/material_audit.py": {
+        "file": "core/material_audit.py",
+        "sha256": "5e08782725403e3fbfcd5b8333166ff77cf74b57538e28154b2394a5bfc58244"
+      },
+      "core/sensitive_policy.py": {
+        "file": "core/sensitive_policy.py",
+        "sha256": "d2ac0f70df0caee650133fb7707a69f4b5cf0c7d3b47d727fc9523960429f8a9"
+      },
+      "core/submission_domain.py": {
+        "file": "core/submission_domain.py",
+        "sha256": "6c1bccb2e974956b58ad9f7acc24eb321c8d247f67f5b0a8e89a7ab12fb38faa"
+      },
+      "jobs/models.py": {
+        "file": "jobs/models.py",
+        "sha256": "d9e291f318d21abb4783729f8ece6e8a4fd2bd8ed7631da4ba66518af577898f"
+      },
+      "llm/claim_evidence.py": {
+        "file": "llm/claim_evidence.py",
+        "sha256": "954998a30c6003d5afa0e619a2a64d48967cf02f166814244026449f192802ad"
+      },
+      "llm/client.py": {
+        "file": "llm/client.py",
+        "sha256": "47d6e3c907af8d77136725f5c6673c707fd12c41fdb83b97ec17096e5a303e6a"
+      },
+      "llm/contracts.py": {
+        "file": "llm/contracts.py",
+        "sha256": "9aa818361952ecfcffd07078752c6e5a1a4658c6b6a358382925960283350d7f"
+      },
+      "llm/execution_guard.py": {
+        "file": "llm/execution_guard.py",
+        "sha256": "f7bcbcd727e2035fc3ca87dfae1f12440db0bf84fa908210a1dba27d1480a5f6"
+      },
+      "llm/generation.py": {
+        "file": "llm/generation.py",
+        "sha256": "90f682809dfbce91f9fd7d9a68aa74d1738ae2588b806179ebe974555c77dbbc"
+      },
+      "llm/ollama_runtime.py": {
+        "file": "llm/ollama_runtime.py",
+        "sha256": "a1e9aa54ef074380020b5c22327790223dfc59523abe890e3c3acd374fa9e4b1"
+      },
+      "llm/prompts.py": {
+        "file": "llm/prompts.py",
+        "sha256": "2e346cd4b1d78a3e74a2bc44624e215ce31bbf1280fcc6f965a2010e96c40e0f"
+      },
+      "llm/qualification_registry.py": {
+        "file": "llm/qualification_registry.py",
+        "sha256": "74fa1e7cddde30a272a010a164a21057be464cbf23271b85341c7ad2132b4efc"
+      },
+      "profile/cv_content_cache.py": {
+        "file": "profile/cv_content_cache.py",
+        "sha256": "db6ac27b2a2645efbef3b78ac59c6d80b2947ef7d20a8bba5faf4f14c60f6488"
+      },
+      "profile/cv_facts.py": {
+        "file": "profile/cv_facts.py",
+        "sha256": "732f3f9e536e005c889c6db356e4917617b803cb413a5efa2c6f9519c7b07720"
+      },
+      "profile/cv_routing.py": {
+        "file": "profile/cv_routing.py",
+        "sha256": "484f4964be81382c6f5fadca32ee07adc9ba6e9b884f961ef07ce5a0cc76a40c"
+      },
+      "profile/cv_routing_llm.py": {
+        "file": "profile/cv_routing_llm.py",
+        "sha256": "e176b96762969495934f85bd13ac14c1a04539c1563059541a036c8517258fa3"
+      },
+      "profile/models.py": {
+        "file": "profile/models.py",
+        "sha256": "c6282f698ae19bcfabc12500af55bde4c1aa3d5a41866be0a662009ec906c5ab"
+      },
+      "profile/pdf_loader.py": {
+        "file": "profile/pdf_loader.py",
+        "sha256": "4b869f9723cadad58353f38a4cc762eab3d70e69a5626a690ec234f36131622d"
+      },
+      "scripts/build_v4_local_model_material_fixtures.py": {
+        "file": "scripts/build_v4_local_model_material_fixtures.py",
+        "sha256": "79d958cca3aafe67c20e80d840084b2cb0eea4cd0e87f76cb90ae0c9d1c84400"
+      },
+      "scripts/build_v4_offline_datasets.py": {
+        "file": "scripts/build_v4_offline_datasets.py",
+        "sha256": "3950de1be3f004abdc56433bc26c899f6dc14cdfcb442faf67c2ea90108606c7"
+      },
+      "scripts/evaluate_v4_local_model_qualification.py": {
+        "file": "scripts/evaluate_v4_local_model_qualification.py",
+        "sha256": "42accebc068ea18eb3b03a3fb7468959cabac51aa811aada9e3789a26809e440"
+      },
+      "scripts/evaluate_v4_quality.py": {
+        "file": "scripts/evaluate_v4_quality.py",
+        "sha256": "321e01eee35c7b94bf801d5991b14ef22e1781e3bf35c612612479ecffa43a44"
+      }
+    }
+  },
+  "tasks": {
+    "cv_routing": {
+      "abstained": 14,
+      "abstention_rate": 0.116667,
+      "cases": 120,
+      "category_counts": {
+        "AI/ML": 12,
+        "DevOps": 12,
+        "QA": 10,
+        "ambiguous": 4,
+        "data": 12,
+        "embedded": 10,
+        "infrastructure": 10,
+        "internship": 9,
+        "junior": 9,
+        "out_of_scope": 12,
+        "semantic_fallback": 8,
+        "software": 12
+      },
+      "correct": 104,
+      "coverage": 0.883333,
+      "fallback_cases": 22,
+      "high_confidence_correct": 80,
+      "high_confidence_coverage": 0.666667,
+      "high_confidence_incorrect": 0,
+      "high_confidence_precision": 1.0,
+      "high_confidence_threshold": 0.75,
+      "incorrect": 2,
+      "precision": 0.981132,
+      "provider_attempts": 22,
+      "provider_cases": 22,
+      "provider_payloads": 22,
+      "qwen_only": {
+        "abstained": 14,
+        "abstention_rate": 0.636364,
+        "correct": 8,
+        "coverage": 0.363636,
+        "incorrect": 0,
+        "precision": 1.0
+      },
+      "reason_counts": {
+        "llm_abstained": 14
+      },
+      "runtime_seconds": 121.543,
+      "successful_generation_cases": 22,
+      "successful_generations": 22,
+      "threshold": {
+        "actual": {
+          "fallback_cases": 22,
+          "precision": 1.0,
+          "predictions": 80,
+          "provider_attempts": 22,
+          "provider_cases": 22,
+          "qwen_only_precision": 1.0,
+          "qwen_only_predictions": 8,
+          "routing_errors": 0,
+          "successful_generation_cases": 22
+        },
+        "passed": true,
+        "requirement": "high-confidence precision >= 0.95 with at least 24 predictions, and every fallback-scope case completes a successful real provider generation; qwen-only precision >= 0.95 over at least 8 resolved fallback cases"
+      },
+      "typed_invocations": 22
+    },
+    "form_resolution": {
+      "abstained": 103,
+      "abstention_rate": 0.429167,
+      "cases": 240,
+      "correct_resolved": 137,
+      "correct_synthesis": 57,
+      "coverage": 0.570833,
+      "expected_synthesis_cases": 80,
+      "incorrect_resolved": 0,
+      "precision": 1.0,
+      "provenance_counts": {
+        "abstained": 103,
+        "deterministic_identity": 38,
+        "local_llm": 57,
+        "user_confirmed": 40,
+        "verified_attachment": 2
+      },
+      "provider_attempts": 80,
+      "provider_cases": 80,
+      "provider_payloads": 80,
+      "reason_counts": {
+        "REQUIRED_FIELD_UNKNOWN": 40,
+        "UNSUPPORTED_CLAIM": 63
+      },
+      "resolved_synthesis": 57,
+      "runtime_seconds": 572.512,
+      "sensitive_automatic_eligible": 0,
+      "sensitive_provider_attempts": 0,
+      "successful_generation_cases": 80,
+      "successful_generations": 80,
+      "synthesis_precision": 1.0,
+      "threshold": {
+        "actual": {
+          "precision": 1.0,
+          "provider_attempts": 80,
+          "provider_cases": 80,
+          "safety_violations": 0,
+          "successful_generation_cases": 80,
+          "synthesis_precision": 1.0
+        },
+        "passed": true,
+        "requirement": "overall and synthesis precision >= 0.95, all 80 intended cases attempt the exact local provider, at least 95% complete a successful generation, and zero unsupported or sensitive eligibility"
+      },
+      "typed_invocations": 80,
+      "unsupported_eligible": 0
+    },
+    "full_material": {
+      "abstention_rate": 0.0,
+      "blocked": 0,
+      "cases": 40,
+      "coverage": 1.0,
+      "eligible": 40,
+      "family_counts": {
+        "ai_ml": 4,
+        "analytics": 4,
+        "data": 4,
+        "devops": 4,
+        "embedded": 4,
+        "frontend": 4,
+        "infrastructure": 4,
+        "junior": 4,
+        "qa": 4,
+        "software": 4
+      },
+      "generation_failed": 0,
+      "precision": 1.0,
+      "precision_denominator": 192,
+      "provider_attempts": 40,
+      "provider_cases": 40,
+      "provider_payloads": 40,
+      "reason_counts": {},
+      "runtime_seconds": 829.366,
+      "sensitive_eligible": 0,
+      "successful_generation_cases": 40,
+      "successful_generations": 40,
+      "supported_claims": 192,
+      "threshold": {
+        "actual": {
+          "coverage": 1.0,
+          "eligible": 40,
+          "generation_failed": 0,
+          "minimum_eligible": 38,
+          "provider_attempts": 40,
+          "provider_cases": 40,
+          "sensitive_eligible": 0,
+          "successful_generation_cases": 40,
+          "supported_claim_precision": 1.0,
+          "supported_claims": 192,
+          "unsupported_claims": 0,
+          "unsupported_eligible": 0
+        },
+        "passed": true,
+        "requirement": "all 40 full-material tasks complete a successful real provider generation, at least 95% of complete synthetic inputs are evidence-eligible, supported-claim precision is at least 95%, and zero unsupported or sensitive packages are eligible"
+      },
+      "typed_invocations": 40,
+      "unsupported_claims": 0,
+      "unsupported_eligible": 0
+    },
+    "malformed_boundaries": {
+      "abstention_rate": 1.0,
+      "boundary_counts": {
+        "form": 10,
+        "material": 10,
+        "routing": 10
+      },
+      "cases": 30,
+      "correctly_blocked": 30,
+      "coverage": 0.0,
+      "eligible_for_preparation": 0,
+      "precision": 1.0,
+      "provider_attempts": 0,
+      "provider_payloads": 0,
+      "reason_counts": {
+        "LLM_OUTPUT_INVALID": 12,
+        "REQUIRED_FIELD_UNKNOWN": 6,
+        "UNTRUSTED_INPUT_BLOCKED": 6,
+        "llm_input_rejected": 6
+      },
+      "runtime_seconds": 0.049,
+      "semantic_prompt_injection_cases": 18,
+      "semantic_prompt_injections_blocked": 18,
+      "successful_generations": 0,
+      "threshold": {
+        "actual": {
+          "blocked": 30,
+          "eligible": 0,
+          "provider_attempts": 0,
+          "provider_payloads": 0,
+          "successful_generations": 0,
+          "typed_invocations": 0
+        },
+        "passed": true,
+        "requirement": "all 30 malformed or hostile inputs fail closed and qwen is never invoked for a pre-rejected boundary case"
+      },
+      "typed_invocations": 0
+    }
+  },
+  "thresholds": {
+    "exact_model_ready_and_stable": {
+      "actual": {
+        "distinct_model_identities": 1,
+        "identity_observations": 142,
+        "registry_identity_observations": 142,
+        "stable": true
+      },
+      "passed": true,
+      "requirement": "the exact local model digest is ready before, during, and after qualification"
+    },
+    "execution_environment_ready_and_stable": {
+      "actual": {
+        "distinct_server_versions": 1,
+        "pre_post_observations": 2,
+        "qualified_server_version_observations": 142,
+        "server_version_observations": 142,
+        "stable": true
+      },
+      "passed": true,
+      "requirement": "the qualified CPython, package, inference-config, model-digest, and Ollama server environment is observed before and after inference"
+    },
+    "form_non_sensitive_precision": {
+      "actual": {
+        "precision": 1.0,
+        "provider_attempts": 80,
+        "provider_cases": 80,
+        "safety_violations": 0,
+        "successful_generation_cases": 80,
+        "synthesis_precision": 1.0
+      },
+      "passed": true,
+      "requirement": "overall and synthesis precision >= 0.95, all 80 intended cases attempt the exact local provider, at least 95% complete a successful generation, and zero unsupported or sensitive eligibility"
+    },
+    "malformed_fail_closed": {
+      "actual": {
+        "blocked": 30,
+        "eligible": 0,
+        "provider_attempts": 0,
+        "provider_payloads": 0,
+        "successful_generations": 0,
+        "typed_invocations": 0
+      },
+      "passed": true,
+      "requirement": "all 30 malformed or hostile inputs fail closed and qwen is never invoked for a pre-rejected boundary case"
+    },
+    "material_safety": {
+      "actual": {
+        "coverage": 1.0,
+        "eligible": 40,
+        "generation_failed": 0,
+        "minimum_eligible": 38,
+        "provider_attempts": 40,
+        "provider_cases": 40,
+        "sensitive_eligible": 0,
+        "successful_generation_cases": 40,
+        "supported_claim_precision": 1.0,
+        "supported_claims": 192,
+        "unsupported_claims": 0,
+        "unsupported_eligible": 0
+      },
+      "passed": true,
+      "requirement": "all 40 full-material tasks complete a successful real provider generation, at least 95% of complete synthetic inputs are evidence-eligible, supported-claim precision is at least 95%, and zero unsupported or sensitive packages are eligible"
+    },
+    "routing_high_confidence_precision": {
+      "actual": {
+        "fallback_cases": 22,
+        "precision": 1.0,
+        "predictions": 80,
+        "provider_attempts": 22,
+        "provider_cases": 22,
+        "qwen_only_precision": 1.0,
+        "qwen_only_predictions": 8,
+        "routing_errors": 0,
+        "successful_generation_cases": 22
+      },
+      "passed": true,
+      "requirement": "high-confidence precision >= 0.95 with at least 24 predictions, and every fallback-scope case completes a successful real provider generation; qwen-only precision >= 0.95 over at least 8 resolved fallback cases"
+    },
+    "serialized_inference": {
+      "actual": {
+        "maximum_concurrent_calls": 1
+      },
+      "passed": true,
+      "requirement": "successful qualification observes exactly one active local inference and never concurrent inference"
+    }
+  }
+}

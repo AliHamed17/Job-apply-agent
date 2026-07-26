@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from profile.cv_content_cache import get_cv_text_by_id
+from profile.cv_content_cache import (
+    CVArtifactBindingError,
+    load_configured_cv_artifacts,
+    require_current_selected_cv_artifact,
+)
 from profile.cv_routing import (
     RoutingJob,
     load_routing_config,
     parse_required_skills,
     route_cv,
 )
-from profile.cv_routing_llm import load_cv_excerpts, select_cv_via_llm
+from profile.cv_routing_llm import routing_evidence_from_artifacts, select_cv_via_llm
 from profile.versioned_snapshot import load_versioned_profile_snapshot
 
 import structlog
@@ -48,11 +52,14 @@ class RealignResponse(BaseModel):
     job_id: int
     job_title: str
     selected_cv_id: str | None
+    selected_cv_hash: str | None
     cover_letter: str
     recruiter_message: str
     qa_answers: dict
     cv_routing_confidence: float | None
     cv_routing_evidence: list[str]
+    material_eligible: bool
+    material_blockers: list[str]
     status: str
 
 
@@ -105,20 +112,33 @@ async def realign_application(
     confidence = 1.0 if payload.forced_cv_id else 0.0
     evidence = ["user_forced_alignment"] if payload.forced_cv_id else []
     fallback_reason = None
+    configured_cv_artifacts = {}
+    routing_config = None
 
-    if not selected_cv_id and routing_path.exists():
+    if routing_path.exists():
         routing_config = load_routing_config(routing_path)
+        configured_cv_artifacts = dict(
+            load_configured_cv_artifacts(routing_config, settings.cv_directory)
+        )
+
+    if not selected_cv_id and routing_config is not None:
         decision = route_cv(routing_job, routing_config)
+        deterministic_cv = (
+            configured_cv_artifacts.get(decision.selected_cv_id)
+            if decision.selected_cv_id
+            else None
+        )
+        if deterministic_cv is not None:
+            decision.selected_cv_hash = deterministic_cv.pdf_sha256
         if settings.llm_cv_alignment and decision.fallback_reason:
-            excerpts = load_cv_excerpts(
-                routing_config, settings.cv_directory, settings.cv_routing_path
-            )
             llm_decision = await select_cv_via_llm(
                 routing_job,
                 routing_config,
-                excerpts,
+                routing_evidence_from_artifacts(configured_cv_artifacts),
             )
             if llm_decision.selected_cv_id is not None:
+                if llm_decision.selected_cv_hash is None and llm_decision.fallback_reason is None:
+                    llm_decision.fallback_reason = "llm_artifact_unbound"
                 decision = llm_decision
 
         selected_cv_id = decision.selected_cv_id
@@ -126,9 +146,45 @@ async def realign_application(
         evidence = decision.matched_evidence
         fallback_reason = decision.fallback_reason
 
-    cv_text = get_cv_text_by_id(selected_cv_id) if selected_cv_id else None
-
-    generated = await generate_full_application(job_ref, profile, cv_text=cv_text)
+    selected_cv = configured_cv_artifacts.get(selected_cv_id) if selected_cv_id else None
+    if selected_cv_id and selected_cv is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CV_ARTIFACT_UNAVAILABLE"},
+        )
+    expected_cv_hash = (
+        decision.selected_cv_hash
+        if not payload.forced_cv_id and selected_cv_id and routing_config is not None
+        else (selected_cv.pdf_sha256 if selected_cv is not None else None)
+    )
+    if selected_cv is not None:
+        try:
+            require_current_selected_cv_artifact(
+                selected_cv,
+                expected_sha256=expected_cv_hash,
+            )
+        except CVArtifactBindingError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": str(exc)},
+            ) from exc
+    generated = await generate_full_application(
+        job_ref,
+        profile,
+        cv_artifact=selected_cv.artifact if selected_cv is not None else None,
+        profile_version=expected_profile_version,
+    )
+    if selected_cv is not None:
+        try:
+            require_current_selected_cv_artifact(
+                selected_cv,
+                expected_sha256=expected_cv_hash,
+            )
+        except CVArtifactBindingError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": str(exc)},
+            ) from exc
 
     from core.application_revision import bump_application_revision
 
@@ -173,6 +229,15 @@ async def realign_application(
     app.cv_routing_confidence = confidence
     app.cv_routing_evidence = json.dumps(evidence)
     app.cv_routing_fallback_reason = fallback_reason
+    from core.material_audit import material_review_reason, persist_material_audit
+
+    material_blockers = persist_material_audit(app, generated, selected_cv)
+    app.needs_review_reason = material_review_reason(
+        selected_cv_id=selected_cv_id,
+        routing_fallback_reason=fallback_reason,
+        blockers=material_blockers,
+        placeholder_fields=generated.placeholder_fields,
+    )
     record_application_event(
         db,
         app.id,
@@ -180,7 +245,10 @@ async def realign_application(
         actor="operator",
         details={
             "selected_cv_id": selected_cv_id,
+            "selected_cv_hash": app.selected_cv_hash,
             "profile_version": app.profile_version,
+            "material_eligible": app.material_eligible,
+            "material_blockers": material_blockers,
             "state": "draft",
         },
     )
@@ -199,10 +267,13 @@ async def realign_application(
         job_id=app.job_id,
         job_title=db_job.title or "",
         selected_cv_id=app.selected_cv_id,
+        selected_cv_hash=app.selected_cv_hash,
         cover_letter=app.cover_letter or "",
         recruiter_message=app.recruiter_message or "",
         qa_answers=json.loads(app.qa_answers) if app.qa_answers else {},
         cv_routing_confidence=app.cv_routing_confidence,
         cv_routing_evidence=json.loads(app.cv_routing_evidence or "[]"),
+        material_eligible=bool(app.material_eligible),
+        material_blockers=json.loads(app.material_blockers_json or "[]"),
         status=app.status.value if hasattr(app.status, "value") else str(app.status),
     )

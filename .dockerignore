@@ -28,10 +28,36 @@ htmlcov/
 # Secrets — never bake into image
 .env
 *.env
+.claude/
+.vercel/
 
 # SQLite database files
 *.db
 *.sqlite3
+
+# Private candidate materials and authenticated browser state
+*.pdf
+cvs/
+user_profile.yaml
+user_profile.yaml.*
+cv_routing.yaml
+cv_routing.yaml.*
+employer_workflows.yaml
+routing-evaluation-report.json
+linkedin-smoke-qualification.json
+.portal_profiles/
+.linkedin_profile/
+runtime-data/
+uploads/
+.test-artifacts/
+bridge/.wwebjs_auth/
+bridge/.wwebjs_cache/
+bridge/session/
+
+# Sanitized templates are required at image/runtime bootstrap. Re-include only
+# these exact public examples after the private wildcard exclusions above.
+!user_profile.yaml.example
+!cv_routing.yaml.example
 
 # Logs
 *.log

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -48,6 +48,8 @@ from db.models import (
     SubmissionStatus,
     UserProfileVersion,
 )
+from llm.contracts import MATERIAL_PROMPT_VERSION
+from llm.qualification_registry import load_qualified_local_model
 from submitters.platforms import (
     TWO_PHASE_EXECUTION_CONTRACT_VERSION,
     QualificationTier,
@@ -63,6 +65,16 @@ from worker.submission_commands import (
     execute_claimed_submission_command,
     reconcile_stale_submission_commands,
 )
+
+_QUALIFIED_MODEL_DIGEST = load_qualified_local_model().digest
+
+
+@pytest.fixture(autouse=True)
+def _current_qualification_report(monkeypatch):
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda: True,
+    )
 
 
 class _AllowGovernor:
@@ -152,6 +164,14 @@ def _capabilities() -> dict[str, object]:
             "boot_id": identity.boot_id,
         },
         "submission": {"allowed": True, "reasons": []},
+        "llm": {
+            "provider": "ollama",
+            "model": "qwen2.5:7b",
+            "local": True,
+            "digest": _QUALIFIED_MODEL_DIGEST,
+            "ready": True,
+            "reason_code": None,
+        },
     }
 
 
@@ -270,7 +290,14 @@ def _reviewed_application(factory, *, now: datetime | None = None):
         job=job,
         status=JobStatus.DRAFT,
         selected_cv_id="cv-ai",
+        selected_cv_hash=cv_hash,
         profile_version=1,
+        material_eligible=True,
+        material_blockers_json="[]",
+        material_model_provider="ollama",
+        material_model_name="qwen2.5:7b",
+        material_model_digest=_QUALIFIED_MODEL_DIGEST,
+        material_prompt_version="application-materials-v1",
         revision=1,
         prepared_revision=1,
         approved_at=timestamp,
@@ -328,6 +355,7 @@ def _admit(
     key: str = "operator-click-1",
     client_release: ClientReleaseIdentity | None = None,
     settings: Settings | None = None,
+    capabilities: dict[str, object] | None = None,
 ):
     db = factory()
     try:
@@ -343,7 +371,7 @@ def _admit(
                 )
             ],
             settings=settings or _live_settings(),
-            capabilities=_capabilities(),
+            capabilities=capabilities or _capabilities(),
             descriptor_resolver=lambda _url: _live_descriptor(reviewed.fingerprint),
             session_checker=lambda *_args: True,
             now=reviewed.now,
@@ -374,6 +402,84 @@ def test_admission_atomically_creates_attempt_permit_and_outbox(tmp_path):
     assert command.attempt_id == attempt.id
     assert db.query(Submission).count() == 1
     assert db.query(SubmissionCommand).count() == 1
+    db.close()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason_code"),
+    [
+        (
+            lambda application: setattr(application, "material_eligible", False),
+            "MATERIAL_NOT_ELIGIBLE",
+        ),
+        (
+            lambda application: setattr(application, "selected_cv_hash", "d" * 64),
+            "ATTACHMENT_CHANGED",
+        ),
+    ],
+)
+def test_admission_requires_current_evidence_bound_materials(
+    tmp_path,
+    mutation,
+    reason_code,
+):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    db = factory()
+    mutation(db.get(Application, reviewed.application_id))
+    db.commit()
+    db.close()
+
+    with pytest.raises(SubmissionAdmissionError) as exc_info:
+        _admit(factory, reviewed)
+
+    assert exc_info.value.reason_code == reason_code
+    verify = factory()
+    assert verify.query(Submission).count() == 0
+    assert verify.query(SubmissionCommand).count() == 0
+    verify.close()
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("material_prompt_version", "application-materials-stale"),
+        ("material_model_provider", "local-test"),
+        ("material_model_name", "qwen2.5:3b"),
+    ],
+)
+def test_admission_rejects_unqualified_material_identity(tmp_path, attribute, value):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    db = factory()
+    application = db.get(Application, reviewed.application_id)
+    assert application.material_prompt_version == MATERIAL_PROMPT_VERSION
+    setattr(application, attribute, value)
+    db.commit()
+    db.close()
+
+    with pytest.raises(SubmissionAdmissionError) as exc_info:
+        _admit(factory, reviewed)
+
+    assert exc_info.value.reason_code == "MATERIAL_MODEL_NOT_QUALIFIED"
+
+
+def test_admission_rejects_unqualified_runtime_model_digest(tmp_path):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    capabilities = _capabilities()
+    capabilities["llm"] = {
+        **capabilities["llm"],
+        "digest": f"sha256:{'b' * 64}",
+    }
+
+    with pytest.raises(SubmissionAdmissionError) as exc_info:
+        _admit(factory, reviewed, capabilities=capabilities)
+
+    assert exc_info.value.reason_code == "RUNTIME_NOT_READY"
+    db = factory()
+    assert db.query(Submission).count() == 0
+    assert db.query(SubmissionCommand).count() == 0
     db.close()
 
 
@@ -1025,6 +1131,24 @@ class _ConfirmedExecutor:
         )
 
 
+class _LLMCallingExecutor:
+    """A broken adapter must be unable to invoke an LLM in final execution."""
+
+    committed = False
+
+    async def preflight(self, *, plan, permit):
+        del plan, permit
+        from llm.client import OllamaClient
+
+        await OllamaClient().generate("this request must be rejected before transport")
+        raise AssertionError("the final-stage LLM guard did not reject generation")
+
+    async def commit(self, *, action, permit):
+        del action, permit
+        self.committed = True
+        raise AssertionError("commit must not run after prohibited preflight inference")
+
+
 class _CrashingExecutor:
     async def preflight(self, *, plan, permit):
         return _ready_action(plan, permit)
@@ -1274,6 +1398,69 @@ def test_only_typed_bound_evidence_can_finish_confirmed_submitted(tmp_path):
     assert attempt.submitted_at is not None
     assert len(attempt.evidence) == 1
     assert is_employer_verified(attempt)
+    db.close()
+
+
+def test_final_execution_prohibits_all_llm_calls_before_transport(tmp_path):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    created = _admit(factory, reviewed)
+    db = factory()
+    assert claim_submission_command(db, command_id=created.command_id) == created.command_id
+    executor = _LLMCallingExecutor()
+
+    with patch(
+        "llm.ollama_runtime.httpx.AsyncClient",
+        side_effect=AssertionError("Ollama transport must not be constructed"),
+    ) as transport:
+        result = execute_claimed_submission_command(
+            db,
+            created.command_id,
+            registry=_registry(executor),
+            settings=_live_settings(),
+            governor=_AllowGovernor(),
+        )
+
+    assert result == "failed_before_commit"
+    assert executor.committed is False
+    transport.assert_not_called()
+    db.expire_all()
+    attempt = db.get(Submission, created.attempt_id)
+    assert attempt.reason_code == "INTERNAL_ERROR"
+    assert attempt.final_action_at is None
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_eager_async_execution_preserves_final_stage_llm_prohibition(tmp_path):
+    """The ContextVar guard must survive run_async's worker-thread boundary."""
+
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    created = _admit(factory, reviewed)
+    db = factory()
+    assert claim_submission_command(db, command_id=created.command_id) == created.command_id
+    executor = _LLMCallingExecutor()
+
+    with patch(
+        "llm.ollama_runtime.httpx.AsyncClient",
+        side_effect=AssertionError("Ollama transport must not be constructed"),
+    ) as transport:
+        result = execute_claimed_submission_command(
+            db,
+            created.command_id,
+            registry=_registry(executor),
+            settings=_live_settings(),
+            governor=_AllowGovernor(),
+        )
+
+    assert result == "failed_before_commit"
+    assert executor.committed is False
+    transport.assert_not_called()
+    db.expire_all()
+    attempt = db.get(Submission, created.attempt_id)
+    assert attempt.reason_code == "INTERNAL_ERROR"
+    assert attempt.final_action_at is None
     db.close()
 
 

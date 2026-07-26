@@ -1,7 +1,12 @@
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from api.main import app
+from db.models import Base
+from db.session import get_db
 from discovery.israel_boards import parse_drushim_job, parse_jobs_il_job
 from jobs.models import JobData
 from submitters.israel_boards import DrushimSubmitter
@@ -9,7 +14,27 @@ from submitters.israel_boards import DrushimSubmitter
 
 @pytest.fixture
 def client(auth_headers):
-    return TestClient(app, headers=auth_headers)
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    test_session = sessionmaker(bind=engine)
+
+    def _override_get_db():
+        db = test_session()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        yield TestClient(app, headers=auth_headers)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        engine.dispose()
 
 
 def test_drushim_parser():
@@ -84,10 +109,14 @@ def test_drushim_submitter_does_not_crash_on_unrelated_urls():
 
 
 def test_whatsapp_link_ingest_endpoint(client, monkeypatch):
-    from worker.tasks import process_url_task
+    from api.routes import whatsapp_ingest
 
     queued: list[int] = []
-    monkeypatch.setattr(process_url_task, "apply", lambda args: queued.append(args[0]))
+    monkeypatch.setattr(
+        whatsapp_ingest,
+        "dispatch_url_processing",
+        lambda url_id, *, tasks_always_eager: queued.append(url_id),
+    )
     resp = client.post(
         "/api/webhook/whatsapp-link",
         json={

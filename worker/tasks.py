@@ -444,9 +444,22 @@ def generate_application_task(self, job_id: int):
         db.rollback()
 
         routing_path = Path(settings.cv_routing_path)
+        configured_cv_artifacts = {}
         if routing_path.exists():
             routing_config = load_routing_config(routing_path)
+            from profile.cv_content_cache import load_configured_cv_artifacts
+
+            configured_cv_artifacts = dict(
+                load_configured_cv_artifacts(routing_config, settings.cv_directory)
+            )
             routing = route_cv(routing_job, routing_config)
+            deterministic_cv = (
+                configured_cv_artifacts.get(routing.selected_cv_id)
+                if routing.selected_cv_id
+                else None
+            )
+            if deterministic_cv is not None:
+                routing.selected_cv_hash = deterministic_cv.pdf_sha256
             if (
                 settings.llm_cv_routing
                 and not routing.overridden
@@ -456,23 +469,32 @@ def generate_application_task(self, job_id: int):
                     "abstained_low_confidence",
                 }
             ):
-                from profile.cv_routing_llm import load_cv_excerpts, select_cv_via_llm
+                from profile.cv_routing_llm import (
+                    routing_evidence_from_artifacts,
+                    select_cv_via_llm,
+                )
 
                 try:
-                    excerpts = load_cv_excerpts(
-                        routing_config, settings.cv_directory, settings.cv_routing_path
-                    )
+                    excerpts = routing_evidence_from_artifacts(configured_cv_artifacts)
                     llm_routing = run_async(
                         select_cv_via_llm(routing_job, routing_config, excerpts)
                     )
                     if llm_routing.selected_cv_id is not None:
+                        if (
+                            llm_routing.selected_cv_hash is None
+                            and llm_routing.fallback_reason is None
+                        ):
+                            llm_routing.fallback_reason = "llm_artifact_unbound"
                         llm_routing.matched_evidence = [
                             *routing.matched_evidence,
                             *llm_routing.matched_evidence,
                         ]
                         routing = llm_routing
                 except Exception as exc:
-                    logger.warning("llm_cv_routing_unavailable", error=str(exc))
+                    logger.warning(
+                        "llm_cv_routing_unavailable",
+                        reason_code=type(exc).__name__,
+                    )
         else:
             routing = RoutingDecision(
                 selected_cv_id=None,
@@ -482,19 +504,45 @@ def generate_application_task(self, job_id: int):
                 fallback_reason="routing_not_configured",
             )
 
-        # Get selected CV text for application generation
-        cv_text = None
-        if routing.selected_cv_id:
-            from profile.cv_content_cache import get_cv_text_by_id
+        # Reuse the exact binding observed during routing. A content-based LLM
+        # decision without its source digest, or any subsequent file mutation,
+        # fails closed rather than silently switching CV identities.
+        selected_cv = (
+            configured_cv_artifacts.get(routing.selected_cv_id) if routing.selected_cv_id else None
+        )
+        if (
+            selected_cv is not None
+            and routing.selected_cv_hash is not None
+            and selected_cv.pdf_sha256 != routing.selected_cv_hash
+        ):
+            from profile.cv_content_cache import CVArtifactBindingError
 
-            cv_text = get_cv_text_by_id(
-                routing.selected_cv_id,
-                cv_routing_path=settings.cv_routing_path,
-                cv_directory=settings.cv_directory,
+            raise CVArtifactBindingError("CV_ARTIFACT_BINDING_MISMATCH")
+        if selected_cv is not None:
+            from profile.cv_content_cache import require_current_selected_cv_artifact
+
+            require_current_selected_cv_artifact(
+                selected_cv,
+                expected_sha256=routing.selected_cv_hash,
             )
+        elif routing.selected_cv_id is not None and routing.fallback_reason is None:
+            routing.fallback_reason = "cv_artifact_unavailable"
 
-        # Run async generation in sync context using the selected CV text
-        generated = run_async(generate_full_application(job_data, profile, cv_text=cv_text))
+        # Generation fails closed before any model call when no immutable CV
+        # artifact or profile revision is available.
+        generated = run_async(
+            generate_full_application(
+                job_data,
+                profile,
+                cv_artifact=selected_cv.artifact if selected_cv is not None else None,
+                profile_version=expected_profile_version,
+            )
+        )
+        if selected_cv is not None:
+            require_current_selected_cv_artifact(
+                selected_cv,
+                expected_sha256=routing.selected_cv_hash,
+            )
 
         from match.scoring import Action, decide_action
 
@@ -511,7 +559,7 @@ def generate_application_task(self, job_id: int):
             action == Action.AUTO_APPLY
             and routing.selected_cv_id is not None
             and routing.fallback_reason is None
-            and not generated.has_placeholders
+            and generated.eligible
         )
 
         # Application.job_id is UNIQUE — this task can run more than once for
@@ -592,14 +640,16 @@ def generate_application_task(self, job_id: int):
         app.cv_routing_confidence = routing.confidence
         app.cv_routing_evidence = json.dumps(routing.matched_evidence)
         app.cv_routing_fallback_reason = routing.fallback_reason
-        if routing.selected_cv_id is None or routing.fallback_reason:
-            app.needs_review_reason = "CV_ROUTING_REVIEW_REQUIRED"
-        elif generated.has_placeholders:
-            fields = ", ".join(generated.placeholder_fields[:3]) or "unspecified"
-            app.needs_review_reason = f"UNFILLED_PLACEHOLDERS:{fields}"
-        else:
-            app.needs_review_reason = None
         app.profile_version = expected_profile_version
+        from core.material_audit import material_review_reason, persist_material_audit
+
+        material_blockers = persist_material_audit(app, generated, selected_cv)
+        app.needs_review_reason = material_review_reason(
+            selected_cv_id=routing.selected_cv_id,
+            routing_fallback_reason=routing.fallback_reason,
+            blockers=material_blockers,
+            placeholder_fields=generated.placeholder_fields,
+        )
         db.flush()
 
         db_job.status = JobStatus.DRAFT
@@ -613,7 +663,10 @@ def generate_application_task(self, job_id: int):
             actor="worker",
             details={
                 "selected_cv_id": app.selected_cv_id,
+                "selected_cv_hash": app.selected_cv_hash,
                 "profile_version": app.profile_version,
+                "material_eligible": app.material_eligible,
+                "material_blockers": material_blockers,
                 "state": "draft",
             },
         )
@@ -622,10 +675,12 @@ def generate_application_task(self, job_id: int):
 
         logger.info(
             "application_generated",
-            job=db_job.title,
+            application_id=app.id,
             score=db_job.score,
             threshold=settings.auto_apply_threshold,
             has_placeholders=generated.has_placeholders,
+            material_eligible=app.material_eligible,
+            blocker_count=len(material_blockers),
             auto_eligible=auto_eligible,
             reason=(
                 "Eligible for explicit batch approval"
@@ -661,22 +716,23 @@ def generate_application_task(self, job_id: int):
                         )
                         logger.info(
                             "whatsapp_approval_sent",
-                            job=db_job.title,
-                            sender=sender,
+                            application_id=app.id,
                         )
             except Exception as notify_err:
-                logger.warning("whatsapp_notify_failed", error=str(notify_err))
+                logger.warning(
+                    "whatsapp_notify_failed",
+                    reason_code=type(notify_err).__name__,
+                )
 
         if auto_eligible:
             logger.info(
                 "application_ready_for_batch_review",
-                job=db_job.title,
                 app_id=app.id,
             )
 
     except Exception as exc:
         db.rollback()
-        logger.error("generation_failed", error=str(exc))
+        logger.error("generation_failed", reason_code=type(exc).__name__)
         raise self.retry(exc=exc, countdown=60)
     finally:
         db.close()
