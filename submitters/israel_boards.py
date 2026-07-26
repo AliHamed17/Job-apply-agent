@@ -17,8 +17,13 @@ class DrushimSubmitter(BaseSubmitter):
     platform_name = "drushim"
 
     def can_submit(self, job: JobData) -> bool:
+        # JobData has no `platform` attribute — reading it here raised
+        # AttributeError for any job whose URL didn't already match
+        # drushim/jobs.co.il, crashing the whole submitter cascade in
+        # worker/tasks.py for that job (every submitter's can_submit runs).
         url = (job.apply_url or job.source_url or "").lower()
-        return "drushim" in url or "jobs.co.il" in url or job.platform in ("drushim", "job_il")
+        domains = ("drushim", "jobs.co.il", "alljobs.co.il", "jobmaster.co.il")
+        return any(domain in url for domain in domains)
 
     async def submit(
         self,
