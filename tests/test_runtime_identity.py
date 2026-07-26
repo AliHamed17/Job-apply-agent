@@ -192,6 +192,7 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         auto_apply=True,
         portal_final_submit_enabled=False,
         live_automation_acknowledged=False,
+        database_url="sqlite:///./test-runtime-identity.db",
     )
     readiness = _ready_report(worker_build="c" * 40, worker_protocol="old")
     readiness["checks"]["browser"]["ok"] = False
