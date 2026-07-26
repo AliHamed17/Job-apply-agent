@@ -8,13 +8,17 @@ from typing import Any
 from db.models import ApplicationEvent
 
 _ALLOWED_DETAIL_KEYS = {
+    "application_revision",
     "approval_source",
     "attempt_number",
     "external_action_queued",
     "external_action_started",
+    "field_id_hash",
+    "form_plan_id",
     "platform",
     "profile_version",
     "reason_code",
+    "reusable",
     "selected_cv_id",
     "state",
 }

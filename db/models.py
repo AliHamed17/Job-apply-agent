@@ -212,6 +212,7 @@ class Application(Base):
     submission_channel = Column(String(30), nullable=True)
     needs_review_reason = Column(Text, nullable=True)
     selected_cv_id = Column(String(255), nullable=True)
+    selected_cv_hash = Column(String(64), nullable=True)
     profile_version = Column(Integer, nullable=True)
     cv_routing_confidence = Column(Float, nullable=True)
     cv_routing_evidence = Column(Text, nullable=True)
@@ -222,6 +223,13 @@ class Application(Base):
     approval_source = Column(String(32), nullable=True)
     revision = Column(Integer, nullable=False, default=1, server_default=text("1"))
     prepared_revision = Column(Integer, nullable=True)
+    material_eligible = Column(Boolean, nullable=True)
+    material_blockers_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    material_claims_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    material_model_provider = Column(String(32), nullable=True)
+    material_model_name = Column(String(128), nullable=True)
+    material_model_digest = Column(String(71), nullable=True)
+    material_prompt_version = Column(String(32), nullable=True)
 
     job = relationship("Job", back_populates="application")
     form_plans = relationship(
@@ -241,6 +249,36 @@ class Application(Base):
         back_populates="application",
         order_by="ApplicationEvent.created_at",
         cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"selected_cv_hash IS NULL OR {_sha256_check_sql('selected_cv_hash')}",
+            name="ck_applications_selected_cv_hash",
+        ),
+        CheckConstraint(
+            "(material_prompt_version IS NULL AND material_model_provider IS NULL "
+            "AND material_model_name IS NULL AND material_model_digest IS NULL) OR "
+            "(material_prompt_version IS NOT NULL AND material_model_provider IS NOT NULL "
+            "AND material_model_name IS NOT NULL AND material_model_digest IS NOT NULL)",
+            name="ck_applications_material_identity_complete",
+        ),
+        CheckConstraint(
+            "material_eligible IS NULL OR material_eligible = false OR "
+            "(selected_cv_hash IS NOT NULL "
+            "AND material_prompt_version IS NOT NULL "
+            "AND material_model_provider IS NOT NULL "
+            "AND material_model_name IS NOT NULL "
+            "AND material_model_digest IS NOT NULL)",
+            name="ck_applications_material_eligible_audited",
+        ),
+        CheckConstraint(
+            "material_model_digest IS NULL OR "
+            "(length(material_model_digest) = 71 "
+            "AND substr(material_model_digest, 1, 7) = 'sha256:' "
+            f"AND {_sha256_check_sql('substr(material_model_digest, 8)')})",
+            name="ck_applications_material_model_digest",
+        ),
     )
 
     @property
@@ -512,6 +550,17 @@ class FormPlan(Base):
     fields_json = Column(Text, nullable=False, default="[]", server_default="[]")
     decisions_json = Column(Text, nullable=False, default="[]", server_default="[]")
     blockers_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    locale = Column(String(32), nullable=False, default="en", server_default="en")
+    answer_policy_version = Column(
+        String(64),
+        nullable=False,
+        default="answer-policy-v1",
+        server_default="answer-policy-v1",
+    )
+    llm_prompt_version = Column(String(32), nullable=True)
+    llm_model_provider = Column(String(32), nullable=True)
+    llm_model_name = Column(String(128), nullable=True)
+    llm_model_digest = Column(String(71), nullable=True)
     session_verified_at = Column(DateTime, nullable=True)
     created_at = Column(
         DateTime,
@@ -556,6 +605,24 @@ class FormPlan(Base):
         ),
         Index("ix_form_plans_expires_at", "expires_at"),
         Index("ix_form_plans_fingerprint", "fingerprint"),
+        CheckConstraint(
+            "(llm_prompt_version IS NULL AND llm_model_provider IS NULL "
+            "AND llm_model_name IS NULL AND llm_model_digest IS NULL) OR "
+            "(llm_prompt_version IS NOT NULL AND llm_model_provider IS NOT NULL "
+            "AND llm_model_name IS NOT NULL AND llm_model_digest IS NOT NULL)",
+            name="ck_form_plans_llm_identity_complete",
+        ),
+        CheckConstraint(
+            "length(trim(locale)) > 0 AND length(trim(answer_policy_version)) > 0",
+            name="ck_form_plans_policy_metadata",
+        ),
+        CheckConstraint(
+            "llm_model_digest IS NULL OR "
+            "(length(llm_model_digest) = 71 "
+            "AND substr(llm_model_digest, 1, 7) = 'sha256:' "
+            f"AND {_sha256_check_sql('substr(llm_model_digest, 8)')})",
+            name="ck_form_plans_llm_model_digest",
+        ),
     )
 
 
@@ -848,6 +915,82 @@ class AnswerCache(Base):
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     __table_args__ = (Index("ix_answer_cache_hash", "question_hash"),)
+
+
+class OperatorApprovedAnswer(Base):
+    """Explicit reusable answer scoped to one exact form and policy context."""
+
+    __tablename__ = "operator_approved_answers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    canonical_field = Column(String(255), nullable=False)
+    field_type = Column(String(32), nullable=False)
+    option_set_hash = Column(String(64), nullable=False)
+    locale = Column(String(32), nullable=False)
+    profile_version = Column(Integer, nullable=False)
+    selected_cv_id = Column(String(255), nullable=False)
+    selected_cv_hash = Column(String(64), nullable=False)
+    adapter_name = Column(String(64), nullable=False)
+    adapter_version = Column(String(32), nullable=False)
+    selector_version = Column(String(64), nullable=False)
+    form_fingerprint = Column(String(64), nullable=False)
+    policy_version = Column(String(64), nullable=False)
+    answer_json = Column(Text, nullable=False)
+    evidence_source = Column(
+        String(32),
+        nullable=False,
+        default="operator_confirmation",
+        server_default="operator_confirmation",
+    )
+    evidence_reference = Column(
+        String(255),
+        nullable=False,
+        default="operator_confirmation",
+        server_default="operator_confirmation",
+    )
+    approved_by = Column(String(64), nullable=False, default="operator")
+    approved_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(String(64), nullable=True)
+    revocation_reason = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "(revoked_at IS NULL AND revoked_by IS NULL AND revocation_reason IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_by IS NOT NULL "
+            "AND revocation_reason IS NOT NULL)",
+            name="ck_operator_approved_answers_revocation",
+        ),
+        CheckConstraint(
+            "profile_version > 0 "
+            f"AND {_sha256_check_sql('option_set_hash')} "
+            f"AND {_sha256_check_sql('selected_cv_hash')} "
+            f"AND {_sha256_check_sql('form_fingerprint')} "
+            "AND length(trim(canonical_field)) > 0 "
+            "AND length(trim(locale)) > 0 "
+            "AND length(trim(policy_version)) > 0 "
+            "AND length(trim(evidence_source)) > 0 "
+            "AND length(trim(evidence_reference)) > 0 "
+            "AND length(answer_json) BETWEEN 1 AND 4000",
+            name="ck_operator_approved_answers_bounded_context",
+        ),
+        Index(
+            "ix_operator_approved_answers_lookup",
+            "canonical_field",
+            "field_type",
+            "option_set_hash",
+            "locale",
+            "profile_version",
+            "selected_cv_hash",
+            "adapter_name",
+            "adapter_version",
+            "selector_version",
+            "form_fingerprint",
+            "policy_version",
+        ),
+        Index("ix_operator_approved_answers_revoked_at", "revoked_at"),
+    )
 
 
 class OutboundContact(Base):

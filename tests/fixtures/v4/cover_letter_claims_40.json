@@ -1,0 +1,1822 @@
+[
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-python_backend",
+    "segments": [
+      {
+        "claim_text": "I developed Python APIs for scheduled billing workflows.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:python_backend",
+            "quote": "Developed Python APIs for scheduled billing workflows"
+          }
+        ],
+        "factual": true,
+        "text": "I developed Python APIs for scheduled billing workflows."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-fastapi_apis",
+    "segments": [
+      {
+        "claim_text": "I implemented FastAPI endpoints for an internal operations portal.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:fastapi_apis",
+            "quote": "Implemented FastAPI endpoints for an internal operations portal"
+          }
+        ],
+        "factual": true,
+        "text": "I implemented FastAPI endpoints for an internal operations portal."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-postgres_data",
+    "segments": [
+      {
+        "claim_text": "I designed PostgreSQL schemas for auditable event records.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:postgres_data",
+            "quote": "Designed PostgreSQL schemas for auditable event records"
+          }
+        ],
+        "factual": true,
+        "text": "I designed PostgreSQL schemas for auditable event records."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-kubernetes_ops",
+    "segments": [
+      {
+        "claim_text": "I operated Kubernetes workloads across test environments.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:kubernetes_ops",
+            "quote": "Operated Kubernetes workloads across test environments"
+          }
+        ],
+        "factual": true,
+        "text": "I operated Kubernetes workloads across test environments."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-terraform_iac",
+    "segments": [
+      {
+        "claim_text": "I authored Terraform modules for repeatable service deployment.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:terraform_iac",
+            "quote": "Authored Terraform modules for repeatable service deployment"
+          }
+        ],
+        "factual": true,
+        "text": "I authored Terraform modules for repeatable service deployment."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-pytorch_models",
+    "segments": [
+      {
+        "claim_text": "I trained PyTorch models for synthetic image classification.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:pytorch_models",
+            "quote": "Trained PyTorch models for synthetic image classification"
+          }
+        ],
+        "factual": true,
+        "text": "I trained PyTorch models for synthetic image classification."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-spark_pipelines",
+    "segments": [
+      {
+        "claim_text": "I built Spark pipelines for batch telemetry processing.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:spark_pipelines",
+            "quote": "Built Spark pipelines for batch telemetry processing"
+          }
+        ],
+        "factual": true,
+        "text": "I built Spark pipelines for batch telemetry processing."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-typescript_ui",
+    "segments": [
+      {
+        "claim_text": "I developed TypeScript interfaces for workflow review.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:typescript_ui",
+            "quote": "Developed TypeScript interfaces for workflow review"
+          }
+        ],
+        "factual": true,
+        "text": "I developed TypeScript interfaces for workflow review."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-react_components",
+    "segments": [
+      {
+        "claim_text": "I created React components for accessible form controls.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:react_components",
+            "quote": "Created React components for accessible form controls"
+          }
+        ],
+        "factual": true,
+        "text": "I created React components for accessible form controls."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-selenium_tests",
+    "segments": [
+      {
+        "claim_text": "I built Selenium tests for browser-based regression coverage.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:selenium_tests",
+            "quote": "Built Selenium tests for browser-based regression coverage"
+          }
+        ],
+        "factual": true,
+        "text": "I built Selenium tests for browser-based regression coverage."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-pytest_suites",
+    "segments": [
+      {
+        "claim_text": "I created Pytest suites for API contract validation.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:pytest_suites",
+            "quote": "Created Pytest suites for API contract validation"
+          }
+        ],
+        "factual": true,
+        "text": "I created Pytest suites for API contract validation."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-linux_systems",
+    "segments": [
+      {
+        "claim_text": "I administered Linux hosts for development workloads.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:linux_systems",
+            "quote": "Administered Linux hosts for development workloads"
+          }
+        ],
+        "factual": true,
+        "text": "I administered Linux hosts for development workloads."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-cpp_embedded",
+    "segments": [
+      {
+        "claim_text": "I developed C++ software for a simulated sensor device.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:cpp_embedded",
+            "quote": "Developed C++ software for a simulated sensor device"
+          }
+        ],
+        "factual": true,
+        "text": "I developed C++ software for a simulated sensor device."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-rtos_devices",
+    "segments": [
+      {
+        "claim_text": "I built FreeRTOS tasks for deterministic device scheduling.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:rtos_devices",
+            "quote": "Built FreeRTOS tasks for deterministic device scheduling"
+          }
+        ],
+        "factual": true,
+        "text": "I built FreeRTOS tasks for deterministic device scheduling."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-tableau_reports",
+    "segments": [
+      {
+        "claim_text": "I created Tableau dashboards for synthetic operations data.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:tableau_reports",
+            "quote": "Created Tableau dashboards for synthetic operations data"
+          }
+        ],
+        "factual": true,
+        "text": "I created Tableau dashboards for synthetic operations data."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-dbt_models",
+    "segments": [
+      {
+        "claim_text": "I built dbt models for governed reporting tables.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:dbt_models",
+            "quote": "Built dbt models for governed reporting tables"
+          }
+        ],
+        "factual": true,
+        "text": "I built dbt models for governed reporting tables."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-rest_contracts",
+    "segments": [
+      {
+        "claim_text": "I defined REST contracts for versioned service resources.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:rest_contracts",
+            "quote": "Defined REST contracts for versioned service resources"
+          }
+        ],
+        "factual": true,
+        "text": "I defined REST contracts for versioned service resources."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-git_workflows",
+    "segments": [
+      {
+        "claim_text": "I maintained Git workflows for reviewed feature changes.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:git_workflows",
+            "quote": "Maintained Git workflows for reviewed feature changes"
+          }
+        ],
+        "factual": true,
+        "text": "I maintained Git workflows for reviewed feature changes."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-he_distributed",
+    "segments": [
+      {
+        "claim_text": "פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:he_distributed",
+            "quote": "פיתחתי מערכות מבוזרות לעיבוד אירועים"
+          }
+        ],
+        "factual": true,
+        "text": "פיתחתי מערכות מבוזרות לעיבוד אירועים."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [],
+    "expected_eligible": true,
+    "id": "claim-supported-he_team",
+    "segments": [
+      {
+        "claim_text": "הובלתי צוות מהנדסים בפרויקט בדיקות.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:he_team",
+            "quote": "הובלתי צוות מהנדסים בפרויקט בדיקות"
+          }
+        ],
+        "factual": true,
+        "text": "הובלתי צוות מהנדסים בפרויקט בדיקות."
+      },
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": false,
+        "text": "I would welcome the opportunity to contribute."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_UNKNOWN",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-unknown-evidence-python_backend",
+    "segments": [
+      {
+        "claim_text": "I developed Python APIs for scheduled billing workflows.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:unknown_python_backend",
+            "quote": "Developed Python APIs for scheduled billing workflows"
+          }
+        ],
+        "factual": true,
+        "text": "I developed Python APIs for scheduled billing workflows."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_UNKNOWN",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-unknown-evidence-fastapi_apis",
+    "segments": [
+      {
+        "claim_text": "I implemented FastAPI endpoints for an internal operations portal.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:unknown_fastapi_apis",
+            "quote": "Implemented FastAPI endpoints for an internal operations portal"
+          }
+        ],
+        "factual": true,
+        "text": "I implemented FastAPI endpoints for an internal operations portal."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_UNKNOWN",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-unknown-evidence-postgres_data",
+    "segments": [
+      {
+        "claim_text": "I designed PostgreSQL schemas for auditable event records.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:unknown_postgres_data",
+            "quote": "Designed PostgreSQL schemas for auditable event records"
+          }
+        ],
+        "factual": true,
+        "text": "I designed PostgreSQL schemas for auditable event records."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_UNKNOWN",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-unknown-evidence-kubernetes_ops",
+    "segments": [
+      {
+        "claim_text": "I operated Kubernetes workloads across test environments.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:unknown_kubernetes_ops",
+            "quote": "Operated Kubernetes workloads across test environments"
+          }
+        ],
+        "factual": true,
+        "text": "I operated Kubernetes workloads across test environments."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_MISMATCH",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-mismatched-evidence-terraform_iac",
+    "segments": [
+      {
+        "claim_text": "I authored Terraform modules for repeatable service deployment.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:linux_systems",
+            "quote": "Administered Linux hosts for development workloads"
+          }
+        ],
+        "factual": true,
+        "text": "I authored Terraform modules for repeatable service deployment."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_MISMATCH",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-mismatched-evidence-pytorch_models",
+    "segments": [
+      {
+        "claim_text": "I trained PyTorch models for synthetic image classification.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:cpp_embedded",
+            "quote": "Developed C++ software for a simulated sensor device"
+          }
+        ],
+        "factual": true,
+        "text": "I trained PyTorch models for synthetic image classification."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_MISMATCH",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-mismatched-evidence-spark_pipelines",
+    "segments": [
+      {
+        "claim_text": "I built Spark pipelines for batch telemetry processing.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:rtos_devices",
+            "quote": "Built FreeRTOS tasks for deterministic device scheduling"
+          }
+        ],
+        "factual": true,
+        "text": "I built Spark pipelines for batch telemetry processing."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_EVIDENCE_MISMATCH",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-mismatched-evidence-typescript_ui",
+    "segments": [
+      {
+        "claim_text": "I developed TypeScript interfaces for workflow review.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:tableau_reports",
+            "quote": "Created Tableau dashboards for synthetic operations data"
+          }
+        ],
+        "factual": true,
+        "text": "I developed TypeScript interfaces for workflow review."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_NOT_IN_MATERIAL",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-not-in-material-react_components",
+    "segments": [
+      {
+        "claim_text": "I developed C++ software for a simulated sensor device.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:cpp_embedded",
+            "quote": "Developed C++ software for a simulated sensor device"
+          }
+        ],
+        "factual": true,
+        "text": "I created React components for accessible form controls."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_NOT_IN_MATERIAL",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-not-in-material-selenium_tests",
+    "segments": [
+      {
+        "claim_text": "I built FreeRTOS tasks for deterministic device scheduling.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:rtos_devices",
+            "quote": "Built FreeRTOS tasks for deterministic device scheduling"
+          }
+        ],
+        "factual": true,
+        "text": "I built Selenium tests for browser-based regression coverage."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_NOT_IN_MATERIAL",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-not-in-material-pytest_suites",
+    "segments": [
+      {
+        "claim_text": "I created Tableau dashboards for synthetic operations data.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:tableau_reports",
+            "quote": "Created Tableau dashboards for synthetic operations data"
+          }
+        ],
+        "factual": true,
+        "text": "I created Pytest suites for API contract validation."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "CLAIM_NOT_IN_MATERIAL",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-not-in-material-linux_systems",
+    "segments": [
+      {
+        "claim_text": "I built dbt models for governed reporting tables.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "cv:dbt_models",
+            "quote": "Built dbt models for governed reporting tables"
+          }
+        ],
+        "factual": true,
+        "text": "I administered Linux hosts for development workloads."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review.",
+      "profile:citizenship": "Synthetic citizenship"
+    },
+    "expected_blockers": [
+      "SENSITIVE_CLAIM_PROHIBITED",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-sensitive-citizenship",
+    "segments": [
+      {
+        "claim_text": "My citizenship is Syntheticland.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "profile:citizenship",
+            "quote": "Synthetic citizenship"
+          }
+        ],
+        "factual": true,
+        "text": "My citizenship is Syntheticland."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review.",
+      "profile:visa": "Synthetic visa status"
+    },
+    "expected_blockers": [
+      "SENSITIVE_CLAIM_PROHIBITED",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-sensitive-visa",
+    "segments": [
+      {
+        "claim_text": "My visa status is confirmed.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "profile:visa",
+            "quote": "Synthetic visa status"
+          }
+        ],
+        "factual": true,
+        "text": "My visa status is confirmed."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review.",
+      "profile:clearance": "Synthetic clearance status"
+    },
+    "expected_blockers": [
+      "SENSITIVE_CLAIM_PROHIBITED",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-sensitive-clearance",
+    "segments": [
+      {
+        "claim_text": "I hold a security clearance.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "profile:clearance",
+            "quote": "Synthetic clearance status"
+          }
+        ],
+        "factual": true,
+        "text": "I hold a security clearance."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review.",
+      "profile:certification": "Synthetic certification"
+    },
+    "expected_blockers": [
+      "SENSITIVE_CLAIM_PROHIBITED",
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-sensitive-certification",
+    "segments": [
+      {
+        "claim_text": "I am professionally certified.",
+        "declare_claim": true,
+        "evidence_quotes": [
+          {
+            "evidence_ref": "profile:certification",
+            "quote": "Synthetic certification"
+          }
+        ],
+        "factual": true,
+        "text": "I am professionally certified."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-undeclared-1",
+    "segments": [
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": true,
+        "text": "I improved synthetic throughput by 41 percent."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-undeclared-2",
+    "segments": [
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": true,
+        "text": "I led an undocumented synthetic migration."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-undeclared-3",
+    "segments": [
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": true,
+        "text": "I managed an unrecorded synthetic team."
+      }
+    ]
+  },
+  {
+    "evidence_catalog": {
+      "cv:cpp_embedded": "• Developed C++ software for a simulated sensor device.",
+      "cv:dbt_models": "• Built dbt models for governed reporting tables.",
+      "cv:fastapi_apis": "• Implemented FastAPI endpoints for an internal operations portal.",
+      "cv:git_workflows": "• Maintained Git workflows for reviewed feature changes.",
+      "cv:he_distributed": "• פיתחתי מערכות מבוזרות לעיבוד אירועים.",
+      "cv:he_team": "• הובלתי צוות מהנדסים בפרויקט בדיקות.",
+      "cv:kubernetes_ops": "• Operated Kubernetes workloads across test environments.",
+      "cv:linux_systems": "• Administered Linux hosts for development workloads.",
+      "cv:postgres_data": "• Designed PostgreSQL schemas for auditable event records.",
+      "cv:pytest_suites": "• Created Pytest suites for API contract validation.",
+      "cv:python_backend": "• Developed Python APIs for scheduled billing workflows.",
+      "cv:pytorch_models": "• Trained PyTorch models for synthetic image classification.",
+      "cv:react_components": "• Created React components for accessible form controls.",
+      "cv:rest_contracts": "• Defined REST contracts for versioned service resources.",
+      "cv:rtos_devices": "• Built FreeRTOS tasks for deterministic device scheduling.",
+      "cv:selenium_tests": "• Built Selenium tests for browser-based regression coverage.",
+      "cv:spark_pipelines": "• Built Spark pipelines for batch telemetry processing.",
+      "cv:tableau_reports": "• Created Tableau dashboards for synthetic operations data.",
+      "cv:terraform_iac": "• Authored Terraform modules for repeatable service deployment.",
+      "cv:typescript_ui": "• Developed TypeScript interfaces for workflow review."
+    },
+    "expected_blockers": [
+      "UNDECLARED_FACTUAL_CLAIM"
+    ],
+    "expected_eligible": false,
+    "id": "claim-undeclared-4",
+    "segments": [
+      {
+        "claim_text": null,
+        "declare_claim": false,
+        "evidence_quotes": [],
+        "factual": true,
+        "text": "I delivered an unsupported synthetic platform."
+      }
+    ]
+  }
+]

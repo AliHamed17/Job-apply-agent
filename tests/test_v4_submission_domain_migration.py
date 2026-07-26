@@ -472,7 +472,7 @@ def test_profile_version_duplicates_are_normalized_quarantined_and_restored(tmp_
 
 def test_v4_migration_matches_orm_metadata_for_new_schema(tmp_path):
     database = tmp_path / "schema-parity.db"
-    _alembic(database, "upgrade", "009_submission_domain_kernel")
+    _alembic(database, "upgrade", "head")
     engine = create_engine(_database_url(database))
     with engine.connect() as connection:
         differences = compare_metadata(
@@ -508,6 +508,21 @@ def test_v4_migration_matches_orm_metadata_for_new_schema(tmp_path):
         "legacy_reported_at",
         "reconciliation_source",
         "reconciliation_evidence_ref",
+        "operator_approved_answers",
+        "selected_cv_hash",
+        "material_eligible",
+        "material_blockers_json",
+        "material_claims_json",
+        "material_model_provider",
+        "material_model_name",
+        "material_model_digest",
+        "material_prompt_version",
+        "locale",
+        "answer_policy_version",
+        "llm_prompt_version",
+        "llm_model_provider",
+        "llm_model_name",
+        "llm_model_digest",
     }
     unexpected = [
         difference

@@ -2,11 +2,71 @@
 
 from __future__ import annotations
 
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def is_allowed_local_ollama_endpoint(base_url: str) -> bool:
+    """Allow only loopback or the explicit container-to-host gateway."""
+
+    try:
+        parsed = urlsplit(base_url)
+        host = parsed.hostname
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+        ):
+            return False
+        normalized_host = host.rstrip(".").lower()
+        if normalized_host in {"localhost", "host.docker.internal"}:
+            return True
+        return ipaddress.ip_address(normalized_host).is_loopback
+    except (ValueError, UnicodeError):
+        return False
+
+
+def is_safe_production_cors_origin(origin: str) -> bool:
+    """Accept exact HTTPS origins and explicit loopback HTTP development origins."""
+
+    candidate = origin.strip()
+    if not candidate or candidate.casefold() == "null" or "*" in candidate:
+        return False
+    try:
+        parsed = urlsplit(candidate)
+        host = parsed.hostname
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            return False
+        # Accessing port validates malformed and out-of-range port syntax.
+        _ = parsed.port
+        normalized_host = host.rstrip(".").lower()
+        is_loopback = normalized_host == "localhost"
+        if not is_loopback:
+            try:
+                is_loopback = ipaddress.ip_address(normalized_host).is_loopback
+            except ValueError:
+                is_loopback = False
+        return parsed.scheme == "https" or is_loopback
+    except (ValueError, UnicodeError):
+        return False
 
 
 class Settings(BaseSettings):
@@ -35,11 +95,30 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # ── LLM ─────────────────────────────────────────────
-    llm_provider: Literal["openai", "anthropic", "ollama", "mock"] = "openai"
+    llm_provider: Literal["openai", "anthropic", "ollama", "mock"] = "ollama"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    llm_model: str = "gpt-4o"
+    llm_model: str = "qwen2.5:7b"
     ollama_base_url: str = "http://localhost:11434"
+    ollama_no_cloud: bool = True
+    cloud_vision_enabled: bool = False
+    ollama_expected_model_digest: str = Field(
+        default="",
+        pattern=r"^(?:|sha256:[0-9a-f]{64})$",
+    )
+    ollama_request_timeout_seconds: float = Field(default=120.0, ge=1.0, le=120.0)
+    ollama_connect_timeout_seconds: float = Field(default=3.0, ge=0.1, le=15.0)
+    ollama_lease_wait_seconds: float = Field(default=10.0, ge=0.1, le=60.0)
+    ollama_lease_ttl_seconds: int = Field(default=130, ge=5, le=300)
+    ollama_num_ctx: int = Field(default=16_384, ge=8_192, le=32_768)
+    ollama_circuit_failure_threshold: int = Field(default=3, ge=1, le=10)
+    ollama_circuit_reset_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    llm_max_prompt_chars: int = Field(default=24_000, ge=1_000, le=100_000)
+    llm_generation_max_horizon_seconds: float = Field(
+        default=120.0,
+        ge=1.0,
+        le=120.0,
+    )
     llm_cv_routing: bool = True
     llm_cv_alignment: bool = True
 
@@ -131,6 +210,16 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from_addr: str = ""
 
+    @model_validator(mode="after")
+    def validate_local_inference_timing(self) -> Settings:
+        """Keep the distributed lease valid for the complete caller horizon."""
+
+        if self.ollama_request_timeout_seconds > self.llm_generation_max_horizon_seconds:
+            raise ValueError("Ollama request timeout exceeds the generation horizon")
+        if self.ollama_lease_ttl_seconds < self.llm_generation_max_horizon_seconds + 5:
+            raise ValueError("Ollama inference lease TTL does not cover the generation horizon")
+        return self
+
     # ── Derived helpers ─────────────────────────────────
     @property
     def allowed_sender_list(self) -> list[str]:
@@ -162,6 +251,16 @@ class Settings(BaseSettings):
 
         return not self.operator_auth_is_placeholder and len(self.secret_key) >= 32
 
+    @property
+    def whatsapp_app_secret_is_placeholder(self) -> bool:
+        """Reject shipped examples and weak webhook-signature secrets."""
+
+        return self.whatsapp_app_secret.strip() in {
+            "",
+            "change-me",
+            "your-app-secret-for-signature-verification",
+        }
+
     def validate_runtime(self) -> None:
         """Reject unsafe production settings before the process accepts traffic."""
         if self.app_env != "production":
@@ -171,10 +270,52 @@ class Settings(BaseSettings):
             errors.append("SECRET_KEY must be a non-default value")
         if len(self.secret_key) < 32:
             errors.append("SECRET_KEY must be at least 32 characters")
-        if not self.whatsapp_app_secret:
-            errors.append("WHATSAPP_APP_SECRET is required for webhook signatures")
-        if "*" in self.cors_origin_list:
-            errors.append("CORS_ORIGINS cannot contain '*'")
+        if self.whatsapp_app_secret_is_placeholder:
+            errors.append("WHATSAPP_APP_SECRET must be a non-default value")
+        if len(self.whatsapp_app_secret) < 32:
+            errors.append("WHATSAPP_APP_SECRET must be at least 32 characters")
+        if self.tasks_always_eager:
+            errors.append("TASKS_ALWAYS_EAGER must be false in production")
+        if self.llm_provider != "ollama":
+            errors.append("LLM_PROVIDER must be ollama in production")
+        if self.llm_model.strip() != "qwen2.5:7b":
+            errors.append("LLM_MODEL must be the qualified qwen2.5:7b model")
+        if not is_allowed_local_ollama_endpoint(self.ollama_base_url):
+            errors.append("OLLAMA_BASE_URL must be a local inference endpoint")
+        if not self.ollama_no_cloud:
+            errors.append("OLLAMA_NO_CLOUD must remain enabled")
+        if self.cloud_vision_enabled:
+            errors.append("CLOUD_VISION_ENABLED must remain disabled in production")
+        try:
+            from llm.qualification_registry import (
+                expected_qualified_model_digest,
+                qualified_model_report_is_current,
+            )
+
+            expected_qualified_model_digest(self.ollama_expected_model_digest)
+            if not qualified_model_report_is_current(
+                ollama_request_timeout_seconds=self.ollama_request_timeout_seconds,
+                llm_generation_max_horizon_seconds=(self.llm_generation_max_horizon_seconds),
+                ollama_connect_timeout_seconds=self.ollama_connect_timeout_seconds,
+                ollama_lease_wait_seconds=self.ollama_lease_wait_seconds,
+                ollama_lease_ttl_seconds=self.ollama_lease_ttl_seconds,
+                ollama_circuit_failure_threshold=self.ollama_circuit_failure_threshold,
+                ollama_circuit_reset_seconds=self.ollama_circuit_reset_seconds,
+                ollama_num_ctx=self.ollama_num_ctx,
+                llm_max_prompt_chars=self.llm_max_prompt_chars,
+                lease_mode="process_local" if self.tasks_always_eager else "redis",
+                ollama_no_cloud=self.ollama_no_cloud,
+            ):
+                errors.append("qualified local-model report must be present, current, and passing")
+        except (OSError, ValueError):
+            errors.append(
+                "OLLAMA_EXPECTED_MODEL_DIGEST must match the committed qualification registry"
+            )
+        unsafe_cors_origins = [
+            origin for origin in self.cors_origin_list if not is_safe_production_cors_origin(origin)
+        ]
+        if unsafe_cors_origins:
+            errors.append("CORS_ORIGINS must contain exact HTTPS or loopback HTTP origins")
         live_requested = (
             self.auto_apply
             or not self.draft_only

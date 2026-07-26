@@ -536,6 +536,20 @@
                     </div>
 
                     <div class="info-card">
+                        <h4>Evidence-bound material</h4>
+                        <div class="qa-list" id="modal-material-quality">
+                            <div class="text-dim text-sm">No v4 material audit is available.</div>
+                        </div>
+                    </div>
+
+                    <div class="info-card">
+                        <h4>Observed form plan</h4>
+                        <div class="qa-list" id="modal-form-plan">
+                            <div class="text-dim text-sm">No current form inspection is available.</div>
+                        </div>
+                    </div>
+
+                    <div class="info-card">
                         <h4>Q&amp;A Answers</h4>
                         <div class="qa-list" id="modal-qa-list"></div>
                     </div>
@@ -553,9 +567,11 @@
                                 <i data-lucide="copy"></i> Copy
                             </button>
                         </div>
-                        <textarea id="modal-cover-letter" class="cover-letter-editor" spellcheck="false"></textarea>
+                        <textarea id="modal-cover-letter" class="cover-letter-editor"
+                                  spellcheck="false" readonly></textarea>
                         <p class="text-sm text-dim mt-1">
-                            Review <code>[PLACEHOLDER: ...]</code> markers before preparing.
+                            This evidence-checked draft is read-only. Copy it for review;
+                            any correction requires a new audited material revision before preparation.
                         </p>
                     </div>
                 </div>

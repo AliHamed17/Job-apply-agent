@@ -8,6 +8,8 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from profile.builder import build_profile_from_pdf
+from profile.loader import load_profile
+from profile.models import UserProfile
 from profile.writer import save_profile
 
 import structlog
@@ -22,6 +24,55 @@ class CVIngestError(Exception):
     def __init__(self, code: str, message: str):
         self.code, self.message = code, message
         super().__init__(f"{code}: {message}")
+
+
+def _merge_operator_profile_state(
+    rebuilt: UserProfile,
+    existing: UserProfile,
+) -> UserProfile:
+    """Preserve manual state while binding new facts to the uploaded CV."""
+
+    merged = rebuilt.model_copy(deep=True)
+    for field_name in ("name", "email", "phone", "location"):
+        existing_value = str(getattr(existing.personal, field_name) or "").strip()
+        if existing_value:
+            setattr(merged.personal, field_name, existing_value)
+    for field_name in ("linkedin", "github", "portfolio"):
+        existing_value = str(getattr(existing.links, field_name) or "").strip()
+        if existing_value:
+            setattr(merged.links, field_name, existing_value)
+
+    merged.evidence.user_confirmed = dict(existing.evidence.user_confirmed)
+    artifact_facts = {
+        digest: dict(facts) for digest, facts in existing.evidence.cv_extracted_by_artifact.items()
+    }
+    artifact_facts.update(
+        {digest: dict(facts) for digest, facts in rebuilt.evidence.cv_extracted_by_artifact.items()}
+    )
+    merged.evidence.cv_extracted_by_artifact = artifact_facts
+
+    merged.cover_letter = existing.cover_letter.model_copy(deep=True)
+    merged.attachments = [item.model_copy(deep=True) for item in existing.attachments]
+    for field_name in (
+        "remote_ok",
+        "hybrid_ok",
+        "onsite_ok",
+        "salary",
+        "blacklist_companies",
+    ):
+        existing_value = getattr(existing.preferences, field_name)
+        setattr(
+            merged.preferences,
+            field_name,
+            (
+                existing_value.model_copy(deep=True)
+                if hasattr(existing_value, "model_copy")
+                else list(existing_value)
+                if isinstance(existing_value, list)
+                else existing_value
+            ),
+        )
+    return merged
 
 
 def _validate_pdf(path: Path, max_bytes: int) -> None:
@@ -80,7 +131,12 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
     async with _ingest_lock:
         try:
             _validate_pdf(tmp_pdf, max_bytes)
+            existing = (
+                load_profile(settings.profile_path) if settings.profile_path.exists() else None
+            )
             profile = await build_profile_from_pdf(str(tmp_pdf))
+            if existing is not None:
+                profile = _merge_operator_profile_state(profile, existing)
         except CVIngestError:
             tmp_pdf.unlink(missing_ok=True)
             raise
@@ -92,11 +148,7 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
         final_pdf = settings.resume_path
         final_pdf.parent.mkdir(parents=True, exist_ok=True)
         old_pdf = final_pdf.read_bytes() if final_pdf.exists() else None
-        old_yaml = (
-            settings.profile_path.read_bytes()
-            if settings.profile_path.exists()
-            else None
-        )
+        old_yaml = settings.profile_path.read_bytes() if settings.profile_path.exists() else None
         profile.resume.pdf_path = str(final_pdf)
         os.replace(tmp_pdf, final_pdf)
         try:

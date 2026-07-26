@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 try:
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -327,7 +328,7 @@ async def health_live():
 
 @app.get("/health/ready")
 async def health_ready():
-    report = readiness_report(settings)
+    report = await run_in_threadpool(readiness_report, settings)
     return JSONResponse(report, status_code=200 if report["status"] == "ready" else 503)
 
 

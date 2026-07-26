@@ -60,8 +60,15 @@ def _ready_report(
             "beat",
             "shared_storage",
             "browser",
+            "llm",
         )
     }
+    checks["llm"].update(
+        provider="mock",
+        model="deterministic-test",
+        local=True,
+        digest=None,
+    )
     worker_identity = _identity(worker_build, protocol_version=worker_protocol)
     checks["worker"].update(
         build_sha=worker_build,
@@ -180,7 +187,26 @@ def test_capabilities_allow_ready_command_protocol_runtime() -> None:
         "beat",
         "shared_storage",
         "browser",
+        "llm",
     }
+
+
+def test_local_model_outage_denies_submission() -> None:
+    readiness = _ready_report()
+    readiness["checks"]["llm"].update(
+        ok=False,
+        reason_code="LLM_PROVIDER_UNAVAILABLE",
+    )
+
+    result = build_runtime_capabilities(
+        _live_settings(),
+        readiness,
+        _identity(),
+    )
+
+    assert result["submission"]["allowed"] is False
+    assert result["submission"]["reasons"] == ["RUNTIME_NOT_READY"]
+    assert result["readiness"]["checks"]["llm"] is False
 
 
 def test_capabilities_fail_closed_with_bounded_reasons() -> None:
@@ -192,6 +218,7 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         auto_apply=True,
         portal_final_submit_enabled=False,
         live_automation_acknowledged=False,
+        secret_key="change-me",
         database_url="sqlite:///./test-runtime-identity.db",
     )
     readiness = _ready_report(worker_build="c" * 40, worker_protocol="old")
@@ -298,6 +325,25 @@ def test_unknown_build_identity_never_enables_submission() -> None:
     assert result["worker"]["compatible"] is False
 
 
+def test_runtime_capabilities_preserve_only_bounded_ollama_server_version() -> None:
+    report = _ready_report()
+    report["checks"]["llm"]["ollama_server_version"] = "0.31.1"
+    result = build_runtime_capabilities(
+        _live_settings(),
+        report,
+        _identity(),
+    )
+    assert result["llm"]["ollama_server_version"] == "0.31.1"
+
+    report["checks"]["llm"]["ollama_server_version"] = "https://private.invalid"
+    result = build_runtime_capabilities(
+        _live_settings(),
+        report,
+        _identity(),
+    )
+    assert result["llm"]["ollama_server_version"] is None
+
+
 def test_legacy_worker_heartbeat_remains_readable() -> None:
     settings = Settings(_env_file=None, dependency_heartbeat_ttl_seconds=120)
     client = MagicMock()
@@ -364,13 +410,24 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
     )
 
     assert response.status_code == 200
-    assert response.json() == expected
+    expected_response = {
+        **expected,
+        "llm": {key: value for key, value in expected["llm"].items() if value is not None},
+    }
+    assert response.json() == expected_response
     assert set(response.json()) == {
         "release",
         "mode",
         "readiness",
         "submission",
         "worker",
+        "llm",
+    }
+    assert response.json()["llm"] == {
+        "provider": "mock",
+        "model": "deterministic-test",
+        "local": True,
+        "ready": True,
     }
 
 

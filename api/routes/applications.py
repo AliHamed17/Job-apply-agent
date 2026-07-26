@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
-from pathlib import Path
+from profile.cv_content_cache import get_selected_cv_artifact_by_id
 from profile.cv_routing import load_routing_config
 from typing import Literal
+from uuid import uuid4
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 from sqlalchemy.orm import Session
 
+from core.application_audit import record_application_event
 from core.application_mutations import (
     ApplicationMutationBlockedError,
     ApplicationMutationIntent,
@@ -22,13 +25,21 @@ from core.application_mutations import (
     mark_locked_application_prepared,
     transition_locked_application_to_skipped,
 )
-from core.application_revision import preparation_is_current
+from core.application_revision import bump_application_revision, preparation_is_current
 from core.application_state import (
     application_semantic_status,
     prepared_applications_query,
     reviewable_applications_query,
 )
 from core.config import get_settings
+from core.form_planning import ANSWER_POLICY_VERSION, option_set_hash
+from core.submission_domain import (
+    AnswerDecisionV1,
+    AnswerDisposition,
+    AnswerProvenance,
+    FormPlanV1,
+    ReasonCode,
+)
 from core.submission_service import (
     ClientReleaseIdentity,
     SubmissionAdmissionError,
@@ -41,10 +52,12 @@ from db.models import (
     Application,
     FormPlan,
     JobStatus,
+    OperatorApprovedAnswer,
     Submission,
     SubmissionStatus,
 )
 from db.session import get_db
+from llm.contracts import is_qualified_material_identity
 from submitters.platforms import detect_platform
 
 logger = structlog.get_logger(__name__)
@@ -116,6 +129,7 @@ class ApplicationResponse(BaseModel):
     submission_verified: bool = False
     attempts: list[SubmissionAttemptResponse] = Field(default_factory=list)
     selected_cv_id: str | None = None
+    selected_cv_hash: str | None = None
     profile_version: int | None = None
     cv_routing_confidence: float | None = None
     cv_routing_evidence: list[str] = Field(default_factory=list)
@@ -130,6 +144,20 @@ class ApplicationResponse(BaseModel):
     form_plan_id: str | None = None
     form_plan_fingerprint: str | None = None
     form_plan_valid: bool = False
+    form_plan_expires_at: str | None = None
+    form_plan_invalidated_at: str | None = None
+    form_plan_uses_local_llm: bool = False
+    form_plan_llm_prompt_version: str | None = None
+    form_plan_llm_model_provider: str | None = None
+    form_plan_llm_model_name: str | None = None
+    form_plan_llm_model_digest: str | None = None
+    material_eligible: bool | None = None
+    material_blockers: list[str] = Field(default_factory=list)
+    material_claim_evidence: list[dict] = Field(default_factory=list)
+    material_model_provider: str | None = None
+    material_model_name: str | None = None
+    material_model_digest: str | None = None
+    material_prompt_version: str | None = None
 
 
 class ApproveResponse(BaseModel):
@@ -211,12 +239,79 @@ class FormPlanResponse(BaseModel):
     fields: list = Field(default_factory=list)
     decisions: list = Field(default_factory=list)
     blockers: list = Field(default_factory=list)
+    locale: str = "en"
+    answer_policy_version: str = ANSWER_POLICY_VERSION
+    llm_prompt_version: str | None = None
+    llm_model_provider: str | None = None
+    llm_model_name: str | None = None
+    llm_model_digest: str | None = None
     session_verified_at: str | None
     created_at: str
     expires_at: str
     invalidated_at: str | None
     invalidation_reason: str | None
     valid: bool
+
+
+class ConfirmAnswerRequest(BaseModel):
+    plan_id: str = Field(min_length=36, max_length=36)
+    application_revision: PositiveInt
+    value: str | bool | int | float | list[str]
+    reusable: bool = False
+    evidence_source: Literal["operator_confirmation"] = "operator_confirmation"
+    evidence_reference: str = Field(
+        default="operator_confirmation",
+        min_length=1,
+        max_length=255,
+    )
+
+    @field_validator("evidence_reference")
+    @classmethod
+    def validate_evidence_reference(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("evidence_reference must not be blank")
+        return normalized
+
+
+_FIELD_LEVEL_ANSWER_BLOCKERS = frozenset(
+    {
+        ReasonCode.REQUIRED_FIELD_UNKNOWN,
+        ReasonCode.UNSUPPORTED_CONTROL,
+        ReasonCode.LLM_UNAVAILABLE,
+        ReasonCode.LLM_MODEL_MISSING,
+        ReasonCode.LLM_TIMEOUT,
+        ReasonCode.LLM_CIRCUIT_OPEN,
+        ReasonCode.LLM_SCHEMA_INVALID,
+        ReasonCode.UNSUPPORTED_CLAIM,
+        ReasonCode.ATTACHMENT_UNVERIFIED,
+    }
+)
+
+
+def _recompute_answer_blockers(
+    plan: FormPlanV1,
+    decisions_by_id: dict[str, AnswerDecisionV1],
+) -> tuple[ReasonCode, ...]:
+    """Replace stale field-level blockers while preserving plan-global gates."""
+
+    blockers = [blocker for blocker in plan.blockers if blocker not in _FIELD_LEVEL_ANSWER_BLOCKERS]
+    for field in plan.fields:
+        decision = decisions_by_id.get(field.field_id)
+        if not field.required or (
+            decision is not None and decision.disposition == AnswerDisposition.RESOLVED
+        ):
+            continue
+        if ReasonCode.REQUIRED_FIELD_UNKNOWN not in blockers:
+            blockers.append(ReasonCode.REQUIRED_FIELD_UNKNOWN)
+        if (
+            decision is not None
+            and decision.reason_code in _FIELD_LEVEL_ANSWER_BLOCKERS
+            and decision.reason_code != ReasonCode.REQUIRED_FIELD_UNKNOWN
+            and decision.reason_code not in blockers
+        ):
+            blockers.append(decision.reason_code)
+    return tuple(blockers)
 
 
 class BatchApproveRequest(BaseModel):
@@ -323,13 +418,26 @@ def _form_plan_valid(plan: FormPlan | None, app: Application) -> bool:
         and plan.application_revision == app.revision
         and app.prepared_revision == app.revision
         and plan.selected_cv_id == app.selected_cv_id
+        and app.material_eligible is True
+        and plan.selected_cv_hash == app.selected_cv_hash
         and plan.profile_version == app.profile_version
+        and domain_plan.answer_policy_version == ANSWER_POLICY_VERSION
         and domain_ready
     )
 
 
 def _latest_form_plan(app: Application) -> FormPlan | None:
     return app.form_plans[-1] if app.form_plans else None
+
+
+def _form_plan_uses_local_llm(plan: FormPlan | None) -> bool:
+    if plan is None:
+        return False
+    return any(
+        decision.get("provenance") == "local_llm"
+        for decision in _json_list(plan.decisions_json)
+        if isinstance(decision, dict)
+    )
 
 
 def _form_plan_response(plan: FormPlan, app: Application) -> FormPlanResponse:
@@ -350,6 +458,12 @@ def _form_plan_response(plan: FormPlan, app: Application) -> FormPlanResponse:
         fields=_json_list(plan.fields_json),
         decisions=_json_list(plan.decisions_json),
         blockers=_json_list(plan.blockers_json),
+        locale=plan.locale,
+        answer_policy_version=plan.answer_policy_version,
+        llm_prompt_version=plan.llm_prompt_version,
+        llm_model_provider=plan.llm_model_provider,
+        llm_model_name=plan.llm_model_name,
+        llm_model_digest=plan.llm_model_digest,
         session_verified_at=(
             plan.session_verified_at.isoformat() if plan.session_verified_at else None
         ),
@@ -391,10 +505,82 @@ def _validate_selected_cv(app: Application) -> None:
             detail="CV routing configuration is unavailable.",
         ) from exc
     selected = next((cv for cv in config.cvs if cv.id == app.selected_cv_id), None)
-    root = Path(settings.cv_directory).resolve()
-    candidate = (root / selected.file).resolve() if selected else None
-    if not candidate or candidate.parent != root or not candidate.is_file():
+    artifact = (
+        get_selected_cv_artifact_by_id(
+            app.selected_cv_id,
+            cv_routing_path=settings.cv_routing_path,
+            cv_directory=settings.cv_directory,
+        )
+        if selected is not None
+        else None
+    )
+    if artifact is None:
         raise HTTPException(status_code=409, detail="Selected CV file is unavailable.")
+    if (
+        app.material_eligible is True
+        and app.selected_cv_hash is not None
+        and artifact.pdf_sha256 != app.selected_cv_hash
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ATTACHMENT_CHANGED",
+                "message": "The selected CV changed; regenerate and review the application.",
+            },
+        )
+
+
+def _validate_material_quality(app: Application) -> None:
+    """Block preparation when a v4 material audit is explicitly ineligible.
+
+    Historical rows have no material audit and remain viewable/preparable for
+    migration compatibility, but cannot obtain a final-submit permit without a
+    current qualified form plan. Newly generated rows always persist True or
+    False and therefore fail closed at this boundary.
+    """
+
+    if app.material_eligible is None:
+        return
+    blockers = _json_list(app.material_blockers_json)
+    if not app.material_eligible:
+        reason_code = str(blockers[0]) if blockers else "MATERIAL_NOT_ELIGIBLE"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": reason_code,
+                "message": "Application materials require review before preparation.",
+            },
+        )
+    if not app.selected_cv_hash or len(app.selected_cv_hash) != 64:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MATERIAL_CV_ARTIFACT_REQUIRED",
+                "message": "The selected CV attachment is not cryptographically bound.",
+            },
+        )
+    if not is_qualified_material_identity(
+        provider=app.material_model_provider,
+        model=app.material_model_name,
+        local=True,
+        digest=app.material_model_digest,
+        prompt_version=app.material_prompt_version,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MATERIAL_MODEL_NOT_QUALIFIED",
+                "message": "Application materials were not produced by the qualified local model.",
+            },
+        )
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": str(blockers[0]),
+                "message": "Application materials contain an unresolved blocker.",
+            },
+        )
 
 
 def _prepare_response(application_id: int) -> ApproveResponse:
@@ -527,6 +713,7 @@ async def list_applications(
                 submission_verified=is_employer_verified(submission),
                 attempts=_attempt_history(app),
                 selected_cv_id=app.selected_cv_id,
+                selected_cv_hash=app.selected_cv_hash,
                 profile_version=app.profile_version,
                 cv_routing_confidence=app.cv_routing_confidence,
                 cv_routing_evidence=_json_list(app.cv_routing_evidence),
@@ -541,6 +728,24 @@ async def list_applications(
                 form_plan_id=form_plan.plan_id if form_plan else None,
                 form_plan_fingerprint=form_plan.fingerprint if form_plan else None,
                 form_plan_valid=_form_plan_valid(form_plan, app),
+                form_plan_expires_at=(form_plan.expires_at.isoformat() if form_plan else None),
+                form_plan_invalidated_at=(
+                    form_plan.invalidated_at.isoformat()
+                    if form_plan and form_plan.invalidated_at
+                    else None
+                ),
+                form_plan_uses_local_llm=_form_plan_uses_local_llm(form_plan),
+                form_plan_llm_prompt_version=(form_plan.llm_prompt_version if form_plan else None),
+                form_plan_llm_model_provider=(form_plan.llm_model_provider if form_plan else None),
+                form_plan_llm_model_name=(form_plan.llm_model_name if form_plan else None),
+                form_plan_llm_model_digest=(form_plan.llm_model_digest if form_plan else None),
+                material_eligible=app.material_eligible,
+                material_blockers=_json_list(app.material_blockers_json),
+                material_claim_evidence=_json_list(app.material_claims_json),
+                material_model_provider=app.material_model_provider,
+                material_model_name=app.material_model_name,
+                material_model_digest=app.material_model_digest,
+                material_prompt_version=app.material_prompt_version,
             )
         )
 
@@ -583,6 +788,7 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         submission_verified=is_employer_verified(submission),
         attempts=_attempt_history(app),
         selected_cv_id=app.selected_cv_id,
+        selected_cv_hash=app.selected_cv_hash,
         profile_version=app.profile_version,
         cv_routing_confidence=app.cv_routing_confidence,
         cv_routing_evidence=_json_list(app.cv_routing_evidence),
@@ -597,6 +803,22 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         form_plan_id=form_plan.plan_id if form_plan else None,
         form_plan_fingerprint=form_plan.fingerprint if form_plan else None,
         form_plan_valid=_form_plan_valid(form_plan, app),
+        form_plan_expires_at=(form_plan.expires_at.isoformat() if form_plan else None),
+        form_plan_invalidated_at=(
+            form_plan.invalidated_at.isoformat() if form_plan and form_plan.invalidated_at else None
+        ),
+        form_plan_uses_local_llm=_form_plan_uses_local_llm(form_plan),
+        form_plan_llm_prompt_version=(form_plan.llm_prompt_version if form_plan else None),
+        form_plan_llm_model_provider=(form_plan.llm_model_provider if form_plan else None),
+        form_plan_llm_model_name=(form_plan.llm_model_name if form_plan else None),
+        form_plan_llm_model_digest=(form_plan.llm_model_digest if form_plan else None),
+        material_eligible=app.material_eligible,
+        material_blockers=_json_list(app.material_blockers_json),
+        material_claim_evidence=_json_list(app.material_claims_json),
+        material_model_provider=app.material_model_provider,
+        material_model_name=app.material_model_name,
+        material_model_digest=app.material_model_digest,
+        material_prompt_version=app.material_prompt_version,
     )
 
 
@@ -635,6 +857,7 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
         return _prepare_response(app.id)
     try:
         _validate_selected_cv(app)
+        _validate_material_quality(app)
     except HTTPException:
         db.rollback()
         raise
@@ -685,6 +908,7 @@ async def batch_approve_applications(
                     detail=f"Application {application_id} is not a reviewable draft.",
                 )
             _validate_selected_cv(app)
+            _validate_material_quality(app)
     except HTTPException:
         db.rollback()
         raise
@@ -722,6 +946,287 @@ async def get_application_form_plan(
     if plan is None:
         raise HTTPException(status_code=404, detail="Form plan not found")
     return _form_plan_response(plan, app)
+
+
+@router.post(
+    "/applications/{app_id}/answers/{field_id}/confirm",
+    response_model=FormPlanResponse,
+)
+async def confirm_application_answer(
+    app_id: int,
+    field_id: str,
+    body: ConfirmAnswerRequest,
+    db: Session = Depends(get_db),
+):
+    """Confirm one exact observed answer and clone the immutable review plan."""
+    locked = _lock_mutation_or_http(
+        db,
+        application_id=app_id,
+        intent=ApplicationMutationIntent.CONTENT,
+        expected_revision=body.application_revision,
+    )
+    app = locked.application
+    plan = (
+        db.query(FormPlan)
+        .filter(
+            FormPlan.application_id == app.id,
+            FormPlan.plan_id == body.plan_id,
+        )
+        .first()
+    )
+    latest_plan = _latest_form_plan(app)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    if plan is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Form plan not found")
+    if (
+        latest_plan is None
+        or latest_plan.id != plan.id
+        or plan.invalidated_at is not None
+        or plan.application_revision != app.revision
+        or plan.expires_at <= now
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "FORM_CHANGED", "message": "The reviewed form plan is stale."},
+        )
+    try:
+        domain_plan = reconstruct_persisted_form_plan(plan)
+    except SubmissionAdmissionError as exc:
+        db.rollback()
+        raise _admission_http_error(exc) from exc
+    if domain_plan.answer_policy_version != ANSWER_POLICY_VERSION:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": ReasonCode.ANSWER_POLICY_CHANGED.value,
+                "message": "The answer policy changed; inspect the form again.",
+            },
+        )
+    field = next((item for item in domain_plan.fields if item.field_id == field_id), None)
+    if field is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Form field not found")
+    if body.reusable and not field.canonical_name:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Reusable answers require a canonical field identity.",
+        )
+
+    # Validate the value against the exact observed control before writing a
+    # reusable row or mutating any review state.
+    preliminary_provenance = (
+        AnswerProvenance.OPERATOR_APPROVED_REUSABLE
+        if body.reusable
+        else AnswerProvenance.USER_CONFIRMED
+    )
+    try:
+        preliminary = AnswerDecisionV1(
+            field_id=field.field_id,
+            disposition=AnswerDisposition.RESOLVED,
+            provenance=preliminary_provenance,
+            value=body.value,
+            confidence=1.0,
+            evidence_refs=(f"{body.evidence_source}:{body.evidence_reference}",),
+        )
+        preliminary_decisions = {decision.field_id: decision for decision in domain_plan.decisions}
+        preliminary_decisions[field.field_id] = preliminary
+        preliminary_blockers = _recompute_answer_blockers(
+            domain_plan,
+            preliminary_decisions,
+        )
+        FormPlanV1.model_validate(
+            {
+                **domain_plan.model_dump(mode="json"),
+                "decisions": [
+                    preliminary_decisions[item.field_id].model_dump(mode="json")
+                    for item in domain_plan.fields
+                    if item.field_id in preliminary_decisions
+                ],
+                "blockers": [item.value for item in preliminary_blockers],
+            }
+        )
+    except (TypeError, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "ANSWER_INVALID",
+                "message": "The answer does not satisfy the observed field contract.",
+            },
+        ) from exc
+
+    reusable_row = None
+    if body.reusable:
+        from profile.models import canonical_fact_key
+
+        context_filters = (
+            OperatorApprovedAnswer.canonical_field
+            == canonical_fact_key(field.canonical_name or ""),
+            OperatorApprovedAnswer.field_type == field.field_type.value,
+            OperatorApprovedAnswer.option_set_hash == option_set_hash(field),
+            OperatorApprovedAnswer.locale == domain_plan.locale,
+            OperatorApprovedAnswer.profile_version == domain_plan.profile_version,
+            OperatorApprovedAnswer.selected_cv_id == domain_plan.selected_cv_id,
+            OperatorApprovedAnswer.selected_cv_hash == domain_plan.selected_cv_hash,
+            OperatorApprovedAnswer.adapter_name == domain_plan.adapter_name,
+            OperatorApprovedAnswer.adapter_version == domain_plan.adapter_version,
+            OperatorApprovedAnswer.selector_version == domain_plan.selector_version,
+            OperatorApprovedAnswer.form_fingerprint == domain_plan.form_fingerprint,
+            OperatorApprovedAnswer.policy_version == domain_plan.answer_policy_version,
+            OperatorApprovedAnswer.revoked_at.is_(None),
+        )
+        for previous in db.query(OperatorApprovedAnswer).filter(*context_filters).all():
+            previous.revoked_at = now
+            previous.revoked_by = "operator_api"
+            previous.revocation_reason = "superseded_by_explicit_confirmation"
+        reusable_row = OperatorApprovedAnswer(
+            canonical_field=canonical_fact_key(field.canonical_name or ""),
+            field_type=field.field_type.value,
+            option_set_hash=option_set_hash(field),
+            locale=domain_plan.locale,
+            profile_version=domain_plan.profile_version,
+            selected_cv_id=domain_plan.selected_cv_id,
+            selected_cv_hash=domain_plan.selected_cv_hash,
+            adapter_name=domain_plan.adapter_name,
+            adapter_version=domain_plan.adapter_version,
+            selector_version=domain_plan.selector_version,
+            form_fingerprint=domain_plan.form_fingerprint,
+            policy_version=domain_plan.answer_policy_version,
+            answer_json=json.dumps(body.value, separators=(",", ":"), ensure_ascii=True),
+            evidence_source=body.evidence_source,
+            evidence_reference=body.evidence_reference,
+            approved_by="operator_api",
+            approved_at=now,
+            created_at=now,
+        )
+        db.add(reusable_row)
+        db.flush()
+
+    new_plan_id = uuid4()
+    provenance = (
+        AnswerProvenance.OPERATOR_APPROVED_REUSABLE
+        if reusable_row is not None
+        else AnswerProvenance.USER_CONFIRMED
+    )
+    evidence_ref = (
+        f"operator-approved-answer:{reusable_row.id}"
+        if reusable_row is not None
+        else f"{body.evidence_source}:{body.evidence_reference}"
+    )
+    try:
+        replacement = AnswerDecisionV1(
+            field_id=field.field_id,
+            disposition=AnswerDisposition.RESOLVED,
+            provenance=provenance,
+            value=body.value,
+            confidence=1.0,
+            evidence_refs=(evidence_ref,),
+        )
+    except (TypeError, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "ANSWER_INVALID",
+                "message": "The answer does not satisfy the observed field contract.",
+            },
+        ) from exc
+    decisions_by_id = {decision.field_id: decision for decision in domain_plan.decisions}
+    decisions_by_id[field.field_id] = replacement
+    decisions = tuple(
+        decisions_by_id[item.field_id]
+        for item in domain_plan.fields
+        if item.field_id in decisions_by_id
+    )
+    blockers = _recompute_answer_blockers(domain_plan, decisions_by_id)
+
+    new_revision = bump_application_revision(
+        db,
+        app,
+        reason_code="ANSWER_CONFIRMED",
+        now=now,
+    )
+    try:
+        cloned_domain = FormPlanV1.model_validate(
+            {
+                **domain_plan.model_dump(mode="json"),
+                "plan_id": str(new_plan_id),
+                "application_revision": new_revision,
+                "decisions": [decision.model_dump(mode="json") for decision in decisions],
+                "blockers": [blocker.value for blocker in blockers],
+            }
+        )
+    except (TypeError, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "ANSWER_INVALID",
+                "message": "The answer does not satisfy the observed field contract.",
+            },
+        ) from exc
+
+    cloned = FormPlan(
+        plan_id=str(cloned_domain.plan_id),
+        application_id=app.id,
+        application_revision=new_revision,
+        adapter_name=cloned_domain.adapter_name,
+        adapter_version=cloned_domain.adapter_version,
+        selector_version=cloned_domain.selector_version,
+        fingerprint=cloned_domain.form_fingerprint,
+        selected_cv_id=cloned_domain.selected_cv_id,
+        selected_cv_hash=cloned_domain.selected_cv_hash,
+        attached_cv_id=cloned_domain.attached_cv_id,
+        attached_cv_hash=cloned_domain.attached_cv_hash,
+        attachment_verified=cloned_domain.attachment_verified,
+        profile_version=cloned_domain.profile_version,
+        fields_json=json.dumps(
+            [item.model_dump(mode="json") for item in cloned_domain.fields],
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ),
+        decisions_json=json.dumps(
+            [item.model_dump(mode="json") for item in cloned_domain.decisions],
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ),
+        blockers_json=json.dumps(
+            [item.value for item in cloned_domain.blockers],
+            separators=(",", ":"),
+        ),
+        locale=cloned_domain.locale,
+        answer_policy_version=cloned_domain.answer_policy_version,
+        llm_prompt_version=cloned_domain.llm_prompt_version,
+        llm_model_provider=cloned_domain.llm_model_provider,
+        llm_model_name=cloned_domain.llm_model_name,
+        llm_model_digest=cloned_domain.llm_model_digest,
+        session_verified_at=plan.session_verified_at,
+        created_at=plan.created_at,
+        expires_at=plan.expires_at,
+    )
+    db.add(cloned)
+    app.status = JobStatus.DRAFT
+    if locked.job is not None:
+        locked.job.status = JobStatus.DRAFT
+    record_application_event(
+        db,
+        app.id,
+        "form_answer_confirmed",
+        actor="operator",
+        details={
+            "field_id_hash": hashlib.sha256(field.field_id.encode("utf-8")).hexdigest(),
+            "reusable": body.reusable,
+            "application_revision": new_revision,
+            "form_plan_id": str(new_plan_id),
+        },
+    )
+    db.commit()
+    db.refresh(cloned)
+    return _form_plan_response(cloned, app)
 
 
 def _admission_http_error(exc: SubmissionAdmissionError) -> HTTPException:
@@ -892,6 +1397,7 @@ async def retry_application(app_id: int, db: Session = Depends(get_db)):
         )
     try:
         _validate_selected_cv(app)
+        _validate_material_quality(app)
     except HTTPException:
         db.rollback()
         raise

@@ -4,7 +4,6 @@ personal:
   email: you@example.com
   phone: "+10000000000"
   location: City, Country
-  work_authorization: ""
 
 links:
   linkedin: https://www.linkedin.com/in/your-profile
@@ -39,12 +38,16 @@ preferences:
 attachments: []
 
 evidence:
-  # CV-extracted facts may inform matching but never legal/demographic answers.
+  # Populated by CV extraction. These facts may support matching/materials but
+  # never count as operator confirmation for legal or demographic answers.
   cv_extracted: {}
-  # Add sensitive answers only after checking them yourself. Do not guess.
+  # Add sensitive facts only after checking them yourself. They are consumed
+  # by deterministic form policy and are NEVER sent to an LLM.
   user_confirmed:
-    work authorization: ""
-    visa sponsorship: ""
+    work_authorization: ""
+    visa_sponsorship: ""
     citizenship: ""
-    security clearance: ""
+    security_clearance: ""
+    nationality: ""
+    gender: ""
   inferred_preferences: {}

@@ -1,7 +1,9 @@
 """Vision-based page analysis for obfuscated or canvas-rendered job pages.
 
-Uses GPT-4o-vision (OpenAI) or Claude claude-sonnet-4-20250514 (Anthropic) to "look" at a
-screenshot of a job page and extract structured job data via a JSON prompt.
+Optional cloud vision can inspect a public job-page screenshot only when a
+non-production operator explicitly enables it and disables the global
+no-cloud policy. Local Ollama does not currently expose a supported vision
+transport here, so it fails closed.
 
 This is the last-resort parser — triggered only when all HTML parsers fail.
 It requires the ``playwright`` optional dependency to take the screenshot.
@@ -18,12 +20,11 @@ from __future__ import annotations
 import base64
 import json
 import re
-import tempfile
-from pathlib import Path
 
 import structlog
 
-from core.config import get_settings
+from core.config import Settings, get_settings
+from llm.execution_guard import assert_llm_generation_allowed
 
 logger = structlog.get_logger(__name__)
 
@@ -67,34 +68,46 @@ async def screenshot_url(url: str) -> bytes | None:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             context = await browser.new_context(
-                # Mimic a real browser to reduce bot detection
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
                 viewport={"width": 1280, "height": 900},
             )
             page = await context.new_page()
 
             import asyncio  # noqa: PLC0415
+
             await asyncio.sleep(settings.polite_crawl_delay_seconds)
 
             await page.goto(url, timeout=15_000, wait_until="networkidle")
             screenshot = await page.screenshot(full_page=False, type="png")
             await browser.close()
 
-            logger.info("screenshot_captured", url=url, size=len(screenshot))
+            logger.info("screenshot_captured", size=len(screenshot))
             return screenshot
 
-    except Exception as exc:
-        logger.warning("screenshot_failed", url=url, error=str(exc))
+    except Exception:
+        logger.warning("screenshot_failed")
         return None
+
+
+def _cloud_vision_allowed(provider: str, settings: Settings | None = None) -> bool:
+    """Require an exact, explicit non-production cloud-vision opt-in."""
+
+    runtime = settings or get_settings()
+    return bool(
+        runtime.app_env != "production"
+        and runtime.cloud_vision_enabled
+        and not runtime.ollama_no_cloud
+        and runtime.llm_provider == provider
+        and provider in {"openai", "anthropic"}
+    )
 
 
 async def analyze_screenshot_openai(screenshot: bytes, url: str) -> dict:
     """Send screenshot to GPT-4o-vision and parse the job JSON response."""
     settings = get_settings()
+    if not _cloud_vision_allowed("openai", settings):
+        logger.info("cloud_vision_disabled", provider="openai")
+        return {}
+    assert_llm_generation_allowed()
     try:
         import openai  # noqa: PLC0415
     except ImportError:
@@ -127,14 +140,18 @@ async def analyze_screenshot_openai(screenshot: bytes, url: str) -> dict:
         )
         raw = response.choices[0].message.content or "{}"
         return _parse_vision_json(raw)
-    except Exception as exc:
-        logger.error("vision_openai_failed", url=url, error=str(exc))
+    except Exception:
+        logger.error("vision_openai_failed")
         return {}
 
 
 async def analyze_screenshot_anthropic(screenshot: bytes, url: str) -> dict:
     """Send screenshot to Claude claude-sonnet-4-20250514 (vision) and parse the response."""
     settings = get_settings()
+    if not _cloud_vision_allowed("anthropic", settings):
+        logger.info("cloud_vision_disabled", provider="anthropic")
+        return {}
+    assert_llm_generation_allowed()
     try:
         import anthropic  # noqa: PLC0415
     except ImportError:
@@ -167,8 +184,8 @@ async def analyze_screenshot_anthropic(screenshot: bytes, url: str) -> dict:
         )
         raw = message.content[0].text if message.content else "{}"
         return _parse_vision_json(raw)
-    except Exception as exc:
-        logger.error("vision_anthropic_failed", url=url, error=str(exc))
+    except Exception:
+        logger.error("vision_anthropic_failed")
         return {}
 
 
@@ -177,21 +194,27 @@ async def extract_job_via_vision(url: str) -> dict:
 
     Returns a dict with job fields or an empty dict if vision extraction fails.
     """
+    settings = get_settings()
+    if not _cloud_vision_allowed(settings.llm_provider, settings):
+        logger.info("vision_extraction_disabled")
+        return {}
+
     screenshot = await screenshot_url(url)
     if not screenshot:
         return {}
 
-    settings = get_settings()
     if settings.llm_provider == "anthropic":
         result = await analyze_screenshot_anthropic(screenshot, url)
-    else:
+    elif settings.llm_provider == "openai":
         result = await analyze_screenshot_openai(screenshot, url)
-
-    if not result.get("is_job_posting"):
-        logger.info("vision_not_job_posting", url=url)
+    else:
         return {}
 
-    logger.info("vision_extracted_job", url=url, title=result.get("title", ""))
+    if not result.get("is_job_posting"):
+        logger.info("vision_not_job_posting")
+        return {}
+
+    logger.info("vision_extracted_job")
     return result
 
 
@@ -204,5 +227,5 @@ def _parse_vision_json(raw: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("vision_json_parse_failed", raw=raw[:200])
+        logger.warning("vision_json_parse_failed")
         return {}

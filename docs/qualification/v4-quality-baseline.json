@@ -1,0 +1,258 @@
+{
+  "datasets": {
+    "claim_evidence": {
+      "cases": 40,
+      "file": "cover_letter_claims_40.json",
+      "sha256": "e325dd1af21181aa8b128563bca5cfc13233d1c1adf5fb53d48126d4aef03fef"
+    },
+    "cv_routing": {
+      "cases": 120,
+      "file": "cv_routing_120.json",
+      "sha256": "e9d4fd6bc011e77e8e162eb963d48199ec45ae31ec25eda64fa5b942c031e2e8"
+    },
+    "form_resolution": {
+      "cases": 240,
+      "file": "form_resolution_bilingual_240.json",
+      "sha256": "1f003a31408eba068ad40987d32e4e2004c1222f3c5e9b84f99aa8777c1b3034"
+    },
+    "malformed_output": {
+      "cases": 30,
+      "file": "malformed_prompt_injection_30.json",
+      "sha256": "70b644c6e47fd84f1d49095f04763f362f9c5f3a063559c2d51377445e71309a"
+    }
+  },
+  "evaluation_mode": {
+    "deterministic": true,
+    "network_calls": 0,
+    "offline": true,
+    "ollama_calls": 0,
+    "private_data_used": false,
+    "typed_fixture_provider": true
+  },
+  "interpretation": "Sanitized generated-fixture contract baseline only. This report makes no improvement, independent-label, Ollama-accuracy, live-submission, or real-world generalization claim.",
+  "overall_pass": true,
+  "schema_version": "v4-offline-quality-baseline-v2",
+  "tasks": {
+    "claim_evidence": {
+      "abstention_rate": 0.5,
+      "blocker_counts": {
+        "CLAIM_EVIDENCE_MISMATCH": 4,
+        "CLAIM_EVIDENCE_UNKNOWN": 4,
+        "CLAIM_NOT_IN_MATERIAL": 4,
+        "SENSITIVE_CLAIM_PROHIBITED": 4,
+        "UNDECLARED_FACTUAL_CLAIM": 20
+      },
+      "blocker_mismatches": 0,
+      "cases": 40,
+      "confusion_counts": {
+        "false_blocked": 0,
+        "false_eligible": 0,
+        "true_blocked": 20,
+        "true_eligible": 20
+      },
+      "coverage": 0.5,
+      "positive_class": "eligible claim package with literal evidence spans, conservative rendering, and exact blocker semantics",
+      "precision": 1.0,
+      "recall": 1.0,
+      "threshold": {
+        "actual": {
+          "blocker_mismatches": 0,
+          "unsafe_eligible": 0
+        },
+        "passed": true,
+        "requirement": "zero unsafe eligibility and exact expected blocker sets"
+      },
+      "unsupported_or_sensitive_eligible": 0
+    },
+    "cv_routing": {
+      "abstention_rate": 0.183333,
+      "cases": 120,
+      "category_counts": {
+        "AI/ML": 12,
+        "DevOps": 12,
+        "QA": 10,
+        "ambiguous": 4,
+        "data": 12,
+        "embedded": 10,
+        "infrastructure": 10,
+        "internship": 9,
+        "junior": 9,
+        "out_of_scope": 12,
+        "semantic_fallback": 8,
+        "software": 12
+      },
+      "confusion_counts": {
+        "expected_abstained": {
+          "abstained": 14,
+          "selected": 2
+        },
+        "expected_selected": {
+          "abstained": 8,
+          "correct_selected": 96,
+          "incorrect_selected": 0
+        },
+        "high_confidence": {
+          "correct": 77,
+          "incorrect": 0
+        }
+      },
+      "coverage": 0.816667,
+      "expected_outcome_counts": {
+        "abstained": 16,
+        "selected": 104
+      },
+      "high_confidence_coverage": 0.641667,
+      "high_confidence_precision": 1.0,
+      "high_confidence_threshold": 0.75,
+      "overall_exact_accuracy": 0.916667,
+      "positive_class": "correct selected CV among actual high-confidence predictions",
+      "precision": 0.979592,
+      "threshold": {
+        "actual": {
+          "coverage": 0.641667,
+          "precision": 1.0,
+          "predictions": 77
+        },
+        "passed": true,
+        "requirement": "precision >= 0.95 for confidence >= 0.75 with at least 24 predictions"
+      }
+    },
+    "form_resolution": {
+      "abstention_rate": 0.333333,
+      "cases": 240,
+      "confusion_counts": {
+        "abstained": {},
+        "operator_required": {
+          "operator_required": 80
+        },
+        "resolved": {
+          "resolved": 160
+        }
+      },
+      "contract_mismatches": 0,
+      "coverage": 0.666667,
+      "non_sensitive_precision": 1.0,
+      "overall_exact_accuracy": 1.0,
+      "positive_class": "exactly correct resolved answer with expected provenance and evidence",
+      "precision": 1.0,
+      "provenance_counts": {
+        "abstained": 80,
+        "deterministic_identity": 38,
+        "local_llm": 80,
+        "user_confirmed": 40,
+        "verified_attachment": 2
+      },
+      "sensitive_automatic_eligible": 0,
+      "sensitive_llm_calls": 0,
+      "threshold": {
+        "actual": {
+          "contract_mismatches": 0,
+          "non_sensitive_precision": 1.0,
+          "safety_violations": 0,
+          "typed_local_cases": 80
+        },
+        "passed": true,
+        "requirement": "non-sensitive precision >= 0.95, all expected decisions and typed-local cases exercised, and zero unsupported or sensitive eligibility"
+      },
+      "typed_local_cases": 80,
+      "typed_local_cases_exercised": 80,
+      "typed_local_provider_calls": 80,
+      "unsupported_eligible": 0
+    },
+    "malformed_output": {
+      "abstention_rate": 1.0,
+      "boundary_counts": {
+        "form": 10,
+        "material": 10,
+        "routing": 10
+      },
+      "cases": 30,
+      "confusion_counts": {
+        "correctly_blocked": 30,
+        "incorrectly_accepted_or_misclassified": 0,
+        "semantic_blocked": 18,
+        "typed_rejected": 12
+      },
+      "coverage": 0.0,
+      "eligible_for_preparation": 0,
+      "positive_class": "invalid output or semantically unsafe output blocked",
+      "precision": 1.0,
+      "reason_counts": {
+        "LLM_OUTPUT_INVALID": 12,
+        "REQUIRED_FIELD_UNKNOWN": 6,
+        "UNTRUSTED_INPUT_BLOCKED": 6,
+        "llm_input_rejected": 6
+      },
+      "semantic_prompt_injection_cases": 18,
+      "semantic_prompt_injections_blocked": 18,
+      "threshold": {
+        "actual": {
+          "blocked": 30,
+          "eligible_or_misclassified": 0,
+          "semantic_injection_cases": 18,
+          "semantic_injections_blocked": 18
+        },
+        "passed": true,
+        "requirement": "all 30 actual production-schema cases fail closed with exact reasons, and every prompt-injection case reaches and fails semantic eligibility"
+      }
+    }
+  },
+  "thresholds": {
+    "claim_unsafe_eligibility": {
+      "actual": {
+        "blocker_mismatches": 0,
+        "unsafe_eligible": 0
+      },
+      "passed": true,
+      "requirement": "zero unsafe eligibility and exact expected blocker sets"
+    },
+    "dataset_case_counts": {
+      "actual": {
+        "claim_evidence": 40,
+        "cv_routing": 120,
+        "form_resolution": 240,
+        "malformed_output": 30
+      },
+      "passed": true,
+      "requirement": "exact case counts are 120, 240, 40, and 30"
+    },
+    "form_non_sensitive_precision": {
+      "actual": {
+        "contract_mismatches": 0,
+        "non_sensitive_precision": 1.0,
+        "safety_violations": 0,
+        "typed_local_cases": 80
+      },
+      "passed": true,
+      "requirement": "non-sensitive precision >= 0.95, all expected decisions and typed-local cases exercised, and zero unsupported or sensitive eligibility"
+    },
+    "form_unsafe_eligibility": {
+      "actual": {
+        "sensitive": 0,
+        "sensitive_llm_calls": 0,
+        "unsupported": 0
+      },
+      "passed": true,
+      "requirement": "zero unsupported answers, automatic sensitive answers, or sensitive LLM calls"
+    },
+    "malformed_fail_closed": {
+      "actual": {
+        "blocked": 30,
+        "eligible_or_misclassified": 0,
+        "semantic_injection_cases": 18,
+        "semantic_injections_blocked": 18
+      },
+      "passed": true,
+      "requirement": "all 30 actual production-schema cases fail closed with exact reasons, and every prompt-injection case reaches and fails semantic eligibility"
+    },
+    "routing_high_confidence_precision": {
+      "actual": {
+        "coverage": 0.641667,
+        "precision": 1.0,
+        "predictions": 77
+      },
+      "passed": true,
+      "requirement": "precision >= 0.95 for confidence >= 0.75 with at least 24 predictions"
+    }
+  }
+}

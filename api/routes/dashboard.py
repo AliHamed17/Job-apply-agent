@@ -10,6 +10,7 @@ import structlog
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from core.application_state import (
     prepared_application_count,
@@ -201,7 +202,7 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         .all()
     )
     score_distribution = {bucket: count for bucket, count in dist_rows}
-    operations = readiness_report(get_settings())
+    operations = await run_in_threadpool(readiness_report, get_settings())
     degraded_dependencies = [
         name for name, result in operations["checks"].items() if not result["ok"]
     ]

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,34 +20,149 @@ def test_production_configuration_rejects_placeholders() -> None:
         whatsapp_app_secret="",
         cors_origins="*",
         dry_run=False,
+        llm_provider="ollama",
+        tasks_always_eager=False,
     )
     with pytest.raises(ValueError, match="Unsafe production configuration"):
         settings.validate_runtime()
 
 
-def test_production_configuration_accepts_safe_dry_run(tmp_path: Path) -> None:
+def test_production_configuration_accepts_safe_dry_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda **_kwargs: True,
+    )
     settings = Settings(
         app_env="production",
         secret_key="s" * 32,
-        whatsapp_app_secret="verified-secret",
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
         cors_origins="https://jobs.example.test",
         draft_only=True,
         auto_apply=False,
         dry_run=True,
         application_data_dir=str(tmp_path),
+        llm_provider="ollama",
+        tasks_always_eager=False,
     )
     settings.validate_runtime()
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "null",
+        "*",
+        "https://*.example.test",
+        "ftp://control.example.test",
+        "http://control.example.test",
+        "https://user:password@control.example.test",
+        "https://control.example.test/path",
+        "https://control.example.test?mode=live",
+        "https://control.example.test#fragment",
+        "https://control.example.test:99999",
+    ],
+)
+def test_production_rejects_unsafe_cors_origins(tmp_path: Path, origin: str) -> None:
+    settings = Settings(
+        app_env="production",
+        secret_key="s" * 32,
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
+        cors_origins=origin,
+        draft_only=True,
+        auto_apply=False,
+        dry_run=True,
+        application_data_dir=str(tmp_path),
+        llm_provider="ollama",
+        tasks_always_eager=False,
+    )
+
+    with pytest.raises(ValueError, match="exact HTTPS or loopback HTTP origins"):
+        settings.validate_runtime()
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://control.example.test",
+        "http://localhost:3000",
+        "http://127.0.0.1:8000",
+        "http://[::1]:8000",
+    ],
+)
+def test_production_accepts_exact_safe_cors_origins(
+    tmp_path: Path,
+    origin: str,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda **_kwargs: True,
+    )
+    settings = Settings(
+        app_env="production",
+        secret_key="s" * 32,
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
+        cors_origins=origin,
+        draft_only=True,
+        auto_apply=False,
+        dry_run=True,
+        application_data_dir=str(tmp_path),
+        llm_provider="ollama",
+        tasks_always_eager=False,
+    )
+
+    settings.validate_runtime()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"llm_provider": "mock"}, "LLM_PROVIDER must be ollama"),
+        ({"llm_model": "qwen2.5:14b"}, "qualified qwen2.5:7b"),
+        (
+            {"ollama_base_url": "https://remote.example.test"},
+            "local inference endpoint",
+        ),
+        ({"ollama_no_cloud": False}, "OLLAMA_NO_CLOUD"),
+    ],
+)
+def test_production_rejects_unqualified_or_nonlocal_llm(
+    tmp_path: Path,
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    runtime_options = {"llm_provider": "ollama", **overrides}
+    settings = Settings(
+        app_env="production",
+        secret_key="s" * 32,
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
+        cors_origins="https://jobs.example.test",
+        draft_only=True,
+        auto_apply=False,
+        dry_run=True,
+        application_data_dir=str(tmp_path),
+        tasks_always_eager=False,
+        **runtime_options,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        settings.validate_runtime()
 
 
 def test_live_production_requires_explicit_acknowledgement() -> None:
     settings = Settings(
         app_env="production",
         secret_key="s" * 32,
-        whatsapp_app_secret="verified-secret",
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
         cors_origins="https://jobs.example.test",
         draft_only=False,
         dry_run=False,
         live_automation_acknowledged=False,
+        llm_provider="ollama",
+        tasks_always_eager=False,
     )
     with pytest.raises(ValueError, match="LIVE_AUTOMATION_ACKNOWLEDGED"):
         settings.validate_runtime()
@@ -55,13 +172,15 @@ def test_live_production_requires_postgresql() -> None:
     settings = Settings(
         app_env="production",
         secret_key="s" * 32,
-        whatsapp_app_secret="verified-secret",
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
         cors_origins="https://jobs.example.test",
         database_url="sqlite:///unsafe-live.db",
         draft_only=False,
         dry_run=False,
         portal_final_submit_enabled=True,
         live_automation_acknowledged=True,
+        llm_provider="ollama",
+        tasks_always_eager=False,
     )
     with pytest.raises(ValueError, match="requires PostgreSQL"):
         settings.validate_runtime()
@@ -94,10 +213,10 @@ def test_short_custom_development_secret_still_protects_prepare_only_api(monkeyp
     monkeypatch.setattr(api_main.settings, "portal_final_submit_enabled", False)
     client = TestClient(api_main.app)
 
-    assert client.get("/api/applications").status_code == 401
+    assert client.get("/api/runtime/capabilities").status_code == 401
     assert (
         client.get(
-            "/api/applications",
+            "/api/runtime/capabilities",
             headers={"Authorization": "Bearer short-custom-token"},
         ).status_code
         == 200
@@ -143,6 +262,47 @@ def test_public_control_plane_survives_redis_outage(monkeypatch) -> None:
     )
     assert protected.status_code == 503
     assert protected.json() == {"detail": "Service unavailable"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["health", "runtime"])
+async def test_readiness_http_probe_does_not_block_event_loop(
+    monkeypatch,
+    endpoint: str,
+) -> None:
+    import api.main as api_main
+    from api.routes import runtime as runtime_route
+
+    report = {
+        "status": "degraded",
+        "checks": {
+            "llm": {
+                "ok": False,
+                "provider": "ollama",
+                "model": "qwen2.5:7b",
+                "local": True,
+                "digest": None,
+                "reason_code": "LLM_PROVIDER_UNAVAILABLE",
+            }
+        },
+    }
+
+    def slow_readiness(*_args):
+        time.sleep(0.15)
+        return report
+
+    if endpoint == "health":
+        monkeypatch.setattr(api_main, "readiness_report", slow_readiness)
+        probe = api_main.health_ready
+    else:
+        monkeypatch.setattr(runtime_route, "readiness_report", slow_readiness)
+        probe = runtime_route.get_runtime_capabilities
+
+    task = asyncio.create_task(probe())
+    started = time.perf_counter()
+    await asyncio.sleep(0.02)
+    assert time.perf_counter() - started < 0.08
+    await task
 
 
 def test_readiness_degrades_for_missing_dependency(tmp_path: Path) -> None:

@@ -51,7 +51,7 @@ def test_rendered_qa_prompt_has_no_zero_salary():
     rendered = QA_ANSWERS_PROMPT.format(
         job_title="AI Engineer",
         company="Acme",
-        name="Ali Hamed",
+        name="Example Candidate",
         user_location="Haifa",
         work_authorization="Israeli citizen",
         resume_text="...",
@@ -166,12 +166,12 @@ def test_placeholder_application_is_not_auto_approved(tmp_path):
     app = db.query(Application).filter(Application.job_id == job_id).one()
     assert app.status == JobStatus.DRAFT, "placeholders must block auto-approval"
     assert app.approved_at is None
-    assert app.needs_review_reason == "UNFILLED_PLACEHOLDERS:notice period"
+    assert app.needs_review_reason == "UNFILLED_PLACEHOLDER"
     db.close()
 
 
-def test_clean_application_is_ready_for_explicit_approval(tmp_path):
-    """A clean score-qualified application is prepared, never self-approved."""
+def test_clean_text_without_a_verified_cv_artifact_still_requires_review(tmp_path):
+    """Clean prose alone cannot make an attachment-unbound draft eligible."""
     factory = _factory(tmp_path)
     job_id = _scored_job(factory)
 
@@ -193,5 +193,6 @@ def test_clean_application_is_ready_for_explicit_approval(tmp_path):
     assert app.status == JobStatus.DRAFT
     assert app.approved_at is None
     assert app.approval_source is None
-    assert app.needs_review_reason is None
+    assert app.needs_review_reason == "MATERIAL_CV_ARTIFACT_REQUIRED"
+    assert app.material_eligible is False
     db.close()

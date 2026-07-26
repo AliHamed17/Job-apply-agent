@@ -1,5 +1,5 @@
 # ── Stage 1: base ──────────────────────────────────────────────────────────
-FROM python:3.11-slim AS base
+FROM python:3.13-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -21,8 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Stage 2: deps ──────────────────────────────────────────────────────────
 FROM base AS deps
 
-COPY pyproject.toml ./
-# Install the package without editable mode (copies sources later).
+# Build metadata references README.md and package discovery requires sources,
+# so copy the sanitized Docker context before installing the dependency graph.
+# `.dockerignore` excludes every personal CV, profile, session, secret, and
+# local database from this layer.
+COPY . .
 # `email` extra (aiosmtplib) is required at runtime: text-post ingestion in
 # web-api sends the CV by email when a recruiter post has only an email
 # contact — without it that send is swallowed and reported as no_contact.

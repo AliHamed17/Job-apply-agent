@@ -52,6 +52,7 @@ from db.models import (
 )
 from db.session import get_session_factory
 from ingestion.url_utils import normalize_url, url_hash
+from llm.execution_guard import prohibit_llm_generation
 
 logger = structlog.get_logger(__name__)
 
@@ -356,6 +357,12 @@ def _load_domain_plan(plan: FormPlan) -> FormPlanV1:
         fields=json.loads(plan.fields_json),
         decisions=json.loads(plan.decisions_json),
         blockers=json.loads(plan.blockers_json),
+        locale=plan.locale,
+        answer_policy_version=plan.answer_policy_version,
+        llm_prompt_version=plan.llm_prompt_version,
+        llm_model_provider=plan.llm_model_provider,
+        llm_model_name=plan.llm_model_name,
+        llm_model_digest=plan.llm_model_digest,
     )
 
 
@@ -795,12 +802,13 @@ def execute_claimed_submission_command(
         return "superseded"
 
     try:
-        raw_preflight = run_async(
-            executor.preflight(
-                plan=domain_plan,
-                permit=domain_permit,
+        with prohibit_llm_generation():
+            raw_preflight = run_async(
+                executor.preflight(
+                    plan=domain_plan,
+                    permit=domain_permit,
+                )
             )
-        )
         preflight = parse_preflight_outcome(raw_preflight)
     except Exception as exc:
         logger.warning(
@@ -918,12 +926,13 @@ def execute_claimed_submission_command(
         return AttemptOutcome.UNKNOWN.value
 
     try:
-        raw_outcome = run_async(
-            executor.commit(
-                action=action,
-                permit=domain_permit,
+        with prohibit_llm_generation():
+            raw_outcome = run_async(
+                executor.commit(
+                    action=action,
+                    permit=domain_permit,
+                )
             )
-        )
         outcome = parse_commit_outcome(raw_outcome)
     except Exception as exc:
         logger.warning(

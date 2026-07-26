@@ -35,6 +35,7 @@ from db.models import Application, ExtractedURL, Job, JobStatus, Message
 from db.session import get_db
 from ingestion.text_post_parser import looks_like_job
 from ingestion.url_utils import normalize_url, url_hash
+from worker.task_dispatch import dispatch_url_processing
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -523,13 +524,10 @@ async def receive_message(
             db.add(db_url)
             db.flush()
 
-            # Enqueue URL processing
-            from worker.tasks import process_url_task
-
-            if settings.tasks_always_eager:
-                process_url_task.apply(args=[db_url.id])
-            else:
-                process_url_task.delay(db_url.id)
+            dispatch_url_processing(
+                db_url.id,
+                tasks_always_eager=settings.tasks_always_eager,
+            )
 
         if urls:
             await _send_whatsapp_message(

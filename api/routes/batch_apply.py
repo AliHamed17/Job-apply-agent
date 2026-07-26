@@ -43,7 +43,7 @@ async def trigger_batch_apply_queue(
         job_ids=summary.job_ids,
         application_ids=summary.application_ids,
         message=(
-            "Review the listed applications, then approve the exact IDs with "
-            "POST /api/applications/batch-approve."
+            "Review the listed applications, then prepare the exact IDs with "
+            "POST /api/applications/batch-prepare. Preparation never sends an application."
         ),
     )

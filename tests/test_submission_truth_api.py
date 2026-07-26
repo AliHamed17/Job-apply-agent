@@ -235,6 +235,32 @@ async def test_application_hides_legacy_submitted_timestamp(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_application_responses_expose_form_plan_expiry_and_invalidation(tmp_path):
+    db = _db(tmp_path)
+    application = _application(db)
+    attempt = _success_attempt(db, application)
+    db.add(attempt)
+    db.flush()
+    plan = db.get(FormPlan, attempt.form_plan_id)
+    assert plan is not None
+    invalidated_at = datetime.now(UTC).replace(tzinfo=None)
+    plan.invalidated_at = invalidated_at
+    plan.invalidation_reason = "FORM_CHANGED"
+    expires_at = plan.expires_at
+    db.commit()
+
+    detail = await applications_route.get_application(application.id, db)
+    listing = await applications_route.list_applications(status=None, db=db)
+    listed = next(item for item in listing if item.id == application.id)
+
+    for response in (detail, listed):
+        assert response.form_plan_valid is False
+        assert response.form_plan_expires_at == expires_at.isoformat()
+        assert response.form_plan_invalidated_at == invalidated_at.isoformat()
+    db.close()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_counts_only_latest_employer_verified_attempt(
     tmp_path,
     monkeypatch,

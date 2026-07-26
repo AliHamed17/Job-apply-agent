@@ -40,6 +40,7 @@ from db.models import (
     SubmissionCommand,
     UserProfileVersion,
 )
+from llm.qualification_registry import load_qualified_local_model
 from submitters.platforms import (
     TWO_PHASE_EXECUTION_CONTRACT_VERSION,
     QualificationTier,
@@ -50,6 +51,17 @@ from worker.submission_commands import (
     execute_claimed_submission_command,
     reconcile_stale_submission_commands,
 )
+
+_QUALIFIED_MODEL_DIGEST = load_qualified_local_model().digest
+
+
+@pytest.fixture(autouse=True)
+def _current_qualification_report(monkeypatch):
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda: True,
+    )
+
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("DATABASE_URL", "").startswith("postgresql"),
@@ -141,7 +153,14 @@ def _seed_reviewed(factory):
         job=job,
         status=JobStatus.DRAFT,
         selected_cv_id="cv-test",
+        selected_cv_hash="c" * 64,
         profile_version=1,
+        material_eligible=True,
+        material_blockers_json="[]",
+        material_model_provider="ollama",
+        material_model_name="qwen2.5:7b",
+        material_model_digest=_QUALIFIED_MODEL_DIGEST,
+        material_prompt_version="application-materials-v1",
         revision=1,
         prepared_revision=1,
         approved_at=now,
@@ -278,6 +297,14 @@ def _admit(factory, seeded, key: str):
                     "boot_id": identity.boot_id,
                 },
                 "submission": {"allowed": True, "reasons": []},
+                "llm": {
+                    "provider": "ollama",
+                    "model": "qwen2.5:7b",
+                    "local": True,
+                    "digest": _QUALIFIED_MODEL_DIGEST,
+                    "ready": True,
+                    "reason_code": None,
+                },
             },
             descriptor_resolver=lambda _url: seeded["descriptor"],
             session_checker=lambda *_args: True,

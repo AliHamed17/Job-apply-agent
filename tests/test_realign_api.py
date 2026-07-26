@@ -1,11 +1,16 @@
+import hashlib
 import json
-import pytest
+from profile.models import CVArtifact, SelectedCVArtifact
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
+
 from api.main import app
+from core.config import Settings
 from db.models import Application, Job, JobStatus
 from db.session import get_session_factory
+from llm.generation import GeneratedApplication
 
 
 @pytest.fixture
@@ -13,7 +18,7 @@ def client():
     return TestClient(app)
 
 
-def test_realign_application_endpoint(client, auth_headers):
+def test_realign_application_endpoint(client, auth_headers, tmp_path):
     db_session = get_session_factory()()
     try:
         # Create test job & application
@@ -42,13 +47,44 @@ def test_realign_application_endpoint(client, auth_headers):
         db_session.commit()
         db_session.refresh(app_rec)
 
-        with patch("api.routes.realign.generate_full_application", new_callable=AsyncMock) as mock_gen:
-            mock_gen.return_value.cover_letter = "Tailored AI Engineer Cover Letter with 75% speedup metric"
-            mock_gen.return_value.recruiter_message = "Hi, interested in AI role"
-            mock_gen.return_value.qa_answers = {"why_this_role": "Experienced with RAG and LLMs"}
-            mock_gen.return_value.has_placeholders = False
-            mock_gen.return_value.placeholder_fields = []
-
+        generated = GeneratedApplication(
+            cover_letter="Tailored AI Engineer Cover Letter with 75% speedup metric",
+            recruiter_message="Hi, interested in AI role",
+            qa_answers={"why_this_role": "Experienced with RAG and LLMs"},
+        )
+        cv_bytes = b"%PDF-1.4\nsynthetic test-only CV artifact\n"
+        cv_path = tmp_path / "ai-engineer.pdf"
+        cv_path.write_bytes(cv_bytes)
+        cv_digest = hashlib.sha256(cv_bytes).hexdigest()
+        selected_cv = SelectedCVArtifact(
+            cv_id="ai-engineer",
+            resolved_path=str(cv_path),
+            artifact=CVArtifact(
+                pdf_sha256=cv_digest,
+                byte_size=len(cv_bytes),
+                extracted_text="Relevant experience: Built synthetic test systems.",
+            ),
+        )
+        routing_path = tmp_path / "cv-routing-fixture.yaml"
+        routing_path.write_text("# loader is patched with a sanitized fixture\n", encoding="utf-8")
+        settings = Settings(
+            _env_file=None,
+            cv_routing_path=str(routing_path),
+            cv_directory=str(tmp_path),
+            llm_cv_alignment=False,
+        )
+        with (
+            patch("api.routes.realign.get_settings", return_value=settings),
+            patch("api.routes.realign.load_routing_config", return_value=object()),
+            patch(
+                "api.routes.realign.load_configured_cv_artifacts",
+                return_value={"ai-engineer": selected_cv},
+            ),
+            patch(
+                "api.routes.realign.generate_full_application",
+                new=AsyncMock(return_value=generated),
+            ),
+        ):
             response = client.post(
                 f"/api/applications/{app_rec.id}/realign",
                 json={"forced_cv_id": "ai-engineer"},
@@ -59,6 +95,7 @@ def test_realign_application_endpoint(client, auth_headers):
             data = response.json()
             assert data["id"] == app_rec.id
             assert data["selected_cv_id"] == "ai-engineer"
+            assert data["selected_cv_hash"] == cv_digest
             assert "75% speedup" in data["cover_letter"]
             assert data["qa_answers"]["why_this_role"] == "Experienced with RAG and LLMs"
     finally:

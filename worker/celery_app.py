@@ -4,13 +4,37 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import beat_init, worker_init
 
-from core.config import get_settings
+from core.config import Settings, get_settings
 
 
-def create_celery_app() -> Celery:
-    """Create and configure the Celery application."""
-    settings = get_settings()
+def validate_celery_runtime(settings: Settings | None = None) -> Settings:
+    """Fail closed before a worker or Beat process can start."""
+
+    resolved = settings or get_settings()
+    resolved.validate_runtime()
+    return resolved
+
+
+@worker_init.connect
+def validate_worker_startup(**_kwargs: object) -> None:
+    """Revalidate when Celery initializes a worker process."""
+
+    validate_celery_runtime()
+
+
+@beat_init.connect
+def validate_beat_startup(**_kwargs: object) -> None:
+    """Revalidate when Celery initializes the scheduler process."""
+
+    validate_celery_runtime()
+
+
+def create_celery_app(settings: Settings | None = None) -> Celery:
+    """Validate runtime safety, then create and configure Celery."""
+
+    settings = validate_celery_runtime(settings)
 
     broker = settings.redis_url
     backend = settings.redis_url
@@ -96,9 +120,7 @@ def create_celery_app() -> Celery:
         "task": "worker.submission_commands.reconcile_stale_commands_task",
         "schedule": 300.0,
     }
-    from core.config import get_settings as _gs  # noqa: E402, F401
-
-    _interval = _gs().discovery_interval_h * 3600
+    _interval = settings.discovery_interval_h * 3600
     app.conf.beat_schedule["discover-jobs"] = {
         "task": "worker.discovery_tasks.discover_jobs_task",
         "schedule": float(_interval),

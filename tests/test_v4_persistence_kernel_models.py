@@ -67,6 +67,7 @@ def _verified_form_plan(db, application_id: int, now: datetime) -> FormPlan:
         attachment_verified=True,
         profile_version=3,
         session_verified_at=now,
+        created_at=now,
         expires_at=now + timedelta(minutes=30),
     )
     db.add(form_plan)

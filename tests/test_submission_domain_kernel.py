@@ -9,6 +9,8 @@ import pytest
 from pydantic import ValidationError
 
 from core.submission_domain import (
+    VERIFIED_ATTACHMENT_EVIDENCE_REF,
+    VERIFIED_ATTACHMENT_SENTINEL,
     AlreadyAppliedOutcome,
     AnswerDecisionV1,
     AnswerDisposition,
@@ -40,11 +42,26 @@ from core.submission_state import (
     require_transition,
 )
 from db.models import SubmissionStatus
+from llm.contracts import (
+    FORM_RESOLUTION_PROMPT_VERSION,
+    QUALIFIED_LOCAL_LLM_MODEL,
+    QUALIFIED_LOCAL_LLM_PROVIDER,
+)
+from llm.qualification_registry import load_qualified_local_model
 
 _HASH_A = "a" * 64
 _HASH_B = "b" * 64
 _HASH_C = "c" * 64
+_QUALIFIED_MODEL_DIGEST = load_qualified_local_model().digest
 _NOW = datetime(2026, 7, 26, 9, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _current_qualification_report(monkeypatch):
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda: True,
+    )
 
 
 def _text_field(
@@ -86,6 +103,10 @@ def _form_plan(
     blockers: tuple[ReasonCode, ...] = (),
     created_at: datetime = _NOW,
     expires_at: datetime | None = None,
+    llm_prompt_version: str | None = None,
+    llm_model_provider: str | None = None,
+    llm_model_name: str | None = None,
+    llm_model_digest: str | None = None,
 ) -> FormPlanV1:
     fields = fields if fields is not None else (_text_field(),)
     decisions = decisions if decisions is not None else (_resolved_answer(),)
@@ -109,6 +130,10 @@ def _form_plan(
         fields=fields,
         decisions=decisions,
         blockers=blockers,
+        llm_prompt_version=llm_prompt_version,
+        llm_model_provider=llm_model_provider,
+        llm_model_name=llm_model_name,
+        llm_model_digest=llm_model_digest,
     )
 
 
@@ -241,12 +266,56 @@ def test_sensitive_answer_rejects_llm_or_cv_provenance() -> None:
         field_id="nationality",
         value="confirmed",
         provenance=AnswerProvenance.USER_CONFIRMED,
-    )
+    ).model_copy(update={"evidence_refs": ("profile:user_confirmed:nationality",)})
     assert _form_plan(fields=(nationality,), decisions=(confirmed,)).ready_for_permit
 
     unsupported = confirmed.model_copy(update={"evidence_refs": ()})
     with pytest.raises(ValidationError, match="at least one evidence reference"):
         _form_plan(fields=(nationality,), decisions=(unsupported,))
+
+
+def test_non_sensitive_local_llm_answer_requires_exact_model_audit_identity() -> None:
+    llm_answer = _resolved_answer(
+        value="supported",
+        provenance=AnswerProvenance.LOCAL_LLM,
+    )
+
+    with pytest.raises(ValidationError, match="audit identity"):
+        _form_plan(decisions=(llm_answer,))
+
+    qualified = _form_plan(
+        decisions=(llm_answer,),
+        llm_prompt_version=FORM_RESOLUTION_PROMPT_VERSION,
+        llm_model_provider=QUALIFIED_LOCAL_LLM_PROVIDER,
+        llm_model_name=QUALIFIED_LOCAL_LLM_MODEL,
+        llm_model_digest=_QUALIFIED_MODEL_DIGEST,
+    )
+    assert qualified.ready_for_permit
+
+    for overrides in (
+        {"llm_prompt_version": "form-resolution-stale"},
+        {"llm_model_provider": "openai"},
+        {"llm_model_name": "gpt-4o"},
+    ):
+        identity = {
+            "llm_prompt_version": FORM_RESOLUTION_PROMPT_VERSION,
+            "llm_model_provider": QUALIFIED_LOCAL_LLM_PROVIDER,
+            "llm_model_name": QUALIFIED_LOCAL_LLM_MODEL,
+            "llm_model_digest": _QUALIFIED_MODEL_DIGEST,
+        }
+        identity.update(overrides)
+        with pytest.raises(ValidationError, match="qualified prompt and model identity"):
+            _form_plan(decisions=(llm_answer,), **identity)
+
+
+def test_non_llm_answers_reject_orphan_model_audit_metadata() -> None:
+    with pytest.raises(ValidationError, match="exactly when local LLM answers exist"):
+        _form_plan(
+            llm_prompt_version=FORM_RESOLUTION_PROMPT_VERSION,
+            llm_model_provider=QUALIFIED_LOCAL_LLM_PROVIDER,
+            llm_model_name=QUALIFIED_LOCAL_LLM_MODEL,
+            llm_model_digest=_QUALIFIED_MODEL_DIGEST,
+        )
 
 
 @pytest.mark.parametrize(
@@ -340,7 +409,7 @@ def test_resolved_answers_are_strictly_typed_for_the_observed_control(
         disposition=AnswerDisposition.RESOLVED,
         provenance=AnswerProvenance.USER_CONFIRMED,
         value=value,
-        evidence_refs=("operator:typed-control",),
+        evidence_refs=("operator_confirmation:typed-control",),
     )
 
     with pytest.raises(ValidationError, match=message):
@@ -361,7 +430,7 @@ def test_boolean_legal_controls_and_numeric_constraints_are_enforced() -> None:
         disposition=AnswerDisposition.RESOLVED,
         provenance=AnswerProvenance.USER_CONFIRMED,
         value=True,
-        evidence_refs=("operator:consent:v1",),
+        evidence_refs=("operator_confirmation:consent-v1",),
     )
     assert _form_plan(fields=(consent,), decisions=(accepted,)).ready_for_permit
 
@@ -382,6 +451,203 @@ def test_boolean_legal_controls_and_numeric_constraints_are_enforced() -> None:
         )
         with pytest.raises(ValidationError, match="minimum|maximum|finite"):
             _form_plan(fields=(years,), decisions=(decision,))
+
+
+def test_verified_resume_attachment_uses_only_non_path_sentinel() -> None:
+    field = FormFieldV1(
+        field_id="resume-upload",
+        canonical_name="resume_upload",
+        label="Upload your resume",
+        field_type=FieldType.FILE,
+        required=True,
+        position=0,
+        constraints=FormFieldConstraintsV1(
+            accepted_file_types=("application/pdf",),
+        ),
+    )
+    decision = AnswerDecisionV1(
+        field_id=field.field_id,
+        disposition=AnswerDisposition.RESOLVED,
+        provenance=AnswerProvenance.VERIFIED_ATTACHMENT,
+        value=VERIFIED_ATTACHMENT_SENTINEL,
+        evidence_refs=(VERIFIED_ATTACHMENT_EVIDENCE_REF,),
+    )
+
+    plan = _form_plan(fields=(field,), decisions=(decision,))
+
+    assert plan.ready_for_permit
+    assert _HASH_B not in str(decision.model_dump())
+    assert "ai-engineer" not in str(decision.model_dump())
+
+
+def test_file_control_rejects_arbitrary_path_or_operator_string() -> None:
+    field = FormFieldV1(
+        field_id="resume-upload",
+        canonical_name="resume_upload",
+        label="Resume upload",
+        field_type=FieldType.FILE,
+        required=True,
+        position=0,
+    )
+    decision = AnswerDecisionV1(
+        field_id=field.field_id,
+        disposition=AnswerDisposition.RESOLVED,
+        provenance=AnswerProvenance.USER_CONFIRMED,
+        value=r"C:\private\candidate.pdf",
+        evidence_refs=("operator_confirmation:review-1",),
+    )
+
+    with pytest.raises(ValidationError, match="only verified attachment provenance"):
+        _form_plan(fields=(field,), decisions=(decision,))
+
+
+def test_verified_attachment_provenance_rejects_non_file_or_mismatched_metadata() -> None:
+    text_field = _text_field(field_id="resume")
+    non_file_decision = AnswerDecisionV1(
+        field_id=text_field.field_id,
+        disposition=AnswerDisposition.RESOLVED,
+        provenance=AnswerProvenance.VERIFIED_ATTACHMENT,
+        value=VERIFIED_ATTACHMENT_SENTINEL,
+        evidence_refs=(VERIFIED_ATTACHMENT_EVIDENCE_REF,),
+    )
+    with pytest.raises(ValidationError, match="exact reviewed attachment metadata"):
+        _form_plan(fields=(text_field,), decisions=(non_file_decision,))
+
+    file_field = FormFieldV1(
+        field_id="resume-upload",
+        canonical_name="resume_upload",
+        label="Resume upload",
+        field_type=FieldType.FILE,
+        required=True,
+        position=0,
+    )
+    file_decision = non_file_decision.model_copy(update={"field_id": file_field.field_id})
+    valid_plan = _form_plan(fields=(file_field,), decisions=(file_decision,))
+    mismatched = valid_plan.model_dump(mode="json")
+    mismatched["attached_cv_hash"] = _HASH_C
+
+    with pytest.raises(ValidationError, match="exact reviewed attachment metadata"):
+        FormPlanV1.model_validate(mismatched)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        (
+            {"value": "A", "label": "Alpha"},
+            {"value": "a", "label": "Beta"},
+        ),
+        (
+            {"value": "a", "label": "Yes"},
+            {"value": "b", "label": " yes "},
+        ),
+        (
+            {"value": "yes", "label": "Allowed"},
+            {"value": "b", "label": "YES"},
+        ),
+        (
+            {"option_id": "choice-a", "value": "a", "label": "Alpha"},
+            {"option_id": "CHOICE-A", "value": "b", "label": "Beta"},
+        ),
+    ],
+)
+def test_option_contract_rejects_normalized_or_cross_alias_ambiguity(options) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="option IDs|normalized option values and labels",
+    ):
+        FormFieldV1(
+            field_id="ambiguous-options",
+            label="Choose one",
+            field_type=FieldType.SELECT,
+            required=True,
+            position=0,
+            options=options,
+        )
+
+
+def test_form_collection_bounds_accept_boundary_and_reject_one_over() -> None:
+    boundary_options = tuple(
+        FormOptionV1(value=f"value-{index}", label=f"Option {index}") for index in range(200)
+    )
+    field = FormFieldV1(
+        field_id="bounded-options",
+        label="Choose one",
+        field_type=FieldType.SELECT,
+        required=False,
+        position=0,
+        options=boundary_options,
+    )
+    assert len(field.options) == 200
+
+    with pytest.raises(ValidationError, match="at most 200"):
+        FormFieldV1(
+            field_id="too-many-options",
+            label="Choose one",
+            field_type=FieldType.SELECT,
+            required=False,
+            position=0,
+            options=(
+                *boundary_options,
+                FormOptionV1(value="overflow", label="Overflow"),
+            ),
+        )
+
+    boundary_types = tuple(f"application/x-type-{index}" for index in range(32))
+    assert len(FormFieldConstraintsV1(accepted_file_types=boundary_types).accepted_file_types) == 32
+    with pytest.raises(ValidationError, match="at most 32"):
+        FormFieldConstraintsV1(
+            accepted_file_types=(*boundary_types, "application/x-overflow"),
+        )
+
+
+def test_form_plan_field_and_total_serialized_size_bounds() -> None:
+    fields = tuple(
+        FormFieldV1(
+            field_id=f"optional-{index}",
+            label=f"Optional field {index}",
+            field_type=FieldType.TEXT,
+            required=False,
+            position=index,
+        )
+        for index in range(200)
+    )
+    decisions = tuple(
+        AnswerDecisionV1(
+            field_id=field.field_id,
+            disposition=AnswerDisposition.ABSTAINED,
+            provenance=AnswerProvenance.ABSTAINED,
+            reason_code=ReasonCode.REQUIRED_FIELD_UNKNOWN,
+        )
+        for field in fields
+    )
+    assert len(_form_plan(fields=fields, decisions=decisions).fields) == 200
+
+    overflow_field = FormFieldV1(
+        field_id="optional-overflow",
+        label="Optional overflow",
+        field_type=FieldType.TEXT,
+        required=False,
+        position=200,
+    )
+    overflow_decision = AnswerDecisionV1(
+        field_id=overflow_field.field_id,
+        disposition=AnswerDisposition.ABSTAINED,
+        provenance=AnswerProvenance.ABSTAINED,
+        reason_code=ReasonCode.REQUIRED_FIELD_UNKNOWN,
+    )
+    with pytest.raises(ValidationError, match="at most 200"):
+        _form_plan(
+            fields=(*fields, overflow_field),
+            decisions=(*decisions, overflow_decision),
+        )
+
+    oversized_fields = tuple(
+        field.model_copy(update={"label": f"Field {index} " + ("x" * 1_900)})
+        for index, field in enumerate(fields)
+    )
+    with pytest.raises(ValidationError, match="serialized form plan"):
+        _form_plan(fields=oversized_fields, decisions=decisions)
 
 
 def test_text_constraints_use_bounded_safe_pattern_validation() -> None:
@@ -416,6 +682,112 @@ def test_text_constraints_use_bounded_safe_pattern_validation() -> None:
         _form_plan(
             fields=(unsupported_pattern,),
             decisions=(_resolved_answer(field_id="employee_code", value="aaaa"),),
+        )
+
+
+@pytest.mark.parametrize("field_name", ["min_value", "max_value"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_numeric_form_constraints_are_rejected(field_name, value) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        FormFieldConstraintsV1.model_validate({field_name: value})
+
+
+@pytest.mark.parametrize(
+    ("field_type", "valid", "invalid"),
+    [
+        (FieldType.DATE, "2026-07-26", "tomorrow-ish"),
+        (FieldType.DATE, "2024-02-29", "2023-02-29"),
+        (FieldType.EMAIL, "candidate@example.test", "not-an-email"),
+        (FieldType.PHONE, "+1 (555) 123-4567", "abc"),
+        (FieldType.URL, "https://example.test/profile", "definitely not a url"),
+        (FieldType.URL, "http://localhost:8000/path", "javascript:alert(1)"),
+    ],
+)
+def test_typed_string_controls_require_canonical_semantic_values(
+    field_type,
+    valid,
+    invalid,
+) -> None:
+    field = FormFieldV1(
+        field_id=f"typed-{field_type.value}",
+        label=field_type.value,
+        field_type=field_type,
+        required=True,
+        position=0,
+    )
+    assert _form_plan(
+        fields=(field,),
+        decisions=(_resolved_answer(field_id=field.field_id, value=valid),),
+    ).ready_for_permit
+
+    with pytest.raises(ValidationError, match="valid canonical value"):
+        _form_plan(
+            fields=(field,),
+            decisions=(_resolved_answer(field_id=field.field_id, value=invalid),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("pattern", "value"),
+    [
+        (r"^[A-Z]{2}\d{2,6}$", "AB1234"),
+        (r"^\+?\d{10,15}$", "+15551234567"),
+        (r"[A-Za-z0-9._-]{1,64}", "applicant_01"),
+        (r"\d{5}-?\d{0,4}", "12345-6789"),
+        (r"\$", "$"),
+    ],
+)
+def test_safe_common_form_patterns_use_the_finite_matcher(pattern, value) -> None:
+    field = FormFieldV1(
+        field_id="bounded-pattern",
+        label="Bounded pattern",
+        field_type=FieldType.TEXT,
+        required=True,
+        position=0,
+        constraints=FormFieldConstraintsV1(pattern=pattern),
+    )
+
+    assert _form_plan(
+        fields=(field,),
+        decisions=(_resolved_answer(field_id=field.field_id, value=value),),
+    ).ready_for_permit
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"(a+)+$",
+        r"(a|aa)+$",
+        r"([A-Z]*)*$",
+        r"(?:a){1,3}",
+        r"(?=a)a",
+        r"(a)\1",
+        r"a*a*a*a*a*a*a*a*a*a*",
+        r"[a-zA-Z]+",
+        r"a{1,64}a{1,64}a{1,64}a{1,64}a{1,64}",
+        r"[^a]{1,10}",
+        r"\D{1,10}",
+    ],
+)
+def test_untrusted_regex_features_are_rejected_without_regex_execution(pattern) -> None:
+    field = FormFieldV1(
+        field_id="unsafe-pattern",
+        label="Unsafe pattern",
+        field_type=FieldType.TEXT,
+        required=True,
+        position=0,
+        constraints=FormFieldConstraintsV1(pattern=pattern),
+    )
+
+    with pytest.raises(ValidationError, match="safe observed pattern"):
+        _form_plan(
+            fields=(field,),
+            decisions=(
+                _resolved_answer(
+                    field_id=field.field_id,
+                    value="a" * 2_000,
+                ),
+            ),
         )
 
 

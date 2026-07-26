@@ -13,6 +13,7 @@ from core.config import get_settings
 from db.models import Application, ExtractedURL, Job, Message, URLStatus
 from db.session import get_db
 from ingestion.url_utils import normalize_url, url_hash
+from worker.task_dispatch import dispatch_url_processing
 
 router = APIRouter(tags=["webhooks"])
 
@@ -106,13 +107,11 @@ async def ingest_whatsapp_job_link(
     db.commit()
     db.refresh(record)
 
-    from worker.tasks import process_url_task
-
     settings = get_settings()
-    if settings.tasks_always_eager:
-        process_url_task.apply(args=[record.id])
-    else:
-        process_url_task.delay(record.id)
+    dispatch_url_processing(
+        record.id,
+        tasks_always_eager=settings.tasks_always_eager,
+    )
 
     db.expire_all()
     refreshed = db.get(ExtractedURL, record.id)

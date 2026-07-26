@@ -10,7 +10,6 @@ overridden to an in-memory SQLite session.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -83,24 +82,39 @@ def test_receive_message_routes_no_url_job_text_but_not_url_text():
 
     def _payload(text, msg_id, sender="15550009999"):
         return {
-            "entry": [{
-                "changes": [{
-                    "value": {
-                        "messages": [{
-                            "id": msg_id,
-                            "from": sender,
-                            "type": "text",
-                            "text": {"body": text},
-                        }]
-                    }
-                }]
-            }]
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": msg_id,
+                                        "from": sender,
+                                        "type": "text",
+                                        "text": {"body": text},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
         }
 
     try:
-        with patch.object(webhook, "_route_text_post", new=AsyncMock(return_value="sent_whatsapp")) as route_mock, \
-             patch("worker.tasks.process_url_task.apply", new=MagicMock()) as apply_mock:
-
+        with (
+            patch.object(
+                webhook,
+                "_route_text_post",
+                new=AsyncMock(return_value="sent_whatsapp"),
+            ) as route_mock,
+            patch.object(
+                webhook,
+                "dispatch_url_processing",
+                new=MagicMock(),
+            ) as dispatch_mock,
+        ):
             # URL-bearing text -> URL extraction branch, no outbound routing.
             resp1 = client.post(
                 "/webhook/whatsapp",
@@ -108,7 +122,7 @@ def test_receive_message_routes_no_url_job_text_but_not_url_text():
             )
             assert resp1.status_code == 200
             assert route_mock.await_count == 0
-            assert apply_mock.called
+            assert dispatch_mock.call_count == 1
 
             # No-URL "hiring" text -> outbound routing branch.
             resp2 = client.post(

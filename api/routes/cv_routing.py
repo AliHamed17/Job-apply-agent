@@ -58,12 +58,14 @@ def _config():
 
 def _persist_decision(db: Session, application: Application, decision: RoutingDecision) -> None:
     from core.application_revision import bump_application_revision
+    from core.material_audit import invalidate_material_audit
 
     bump_application_revision(
         db,
         application,
         reason_code="CV_ROUTING_CHANGED",
     )
+    invalidate_material_audit(application)
     latest_profile = (
         db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
     )
@@ -142,12 +144,14 @@ async def override_application_cv(
     locked = _lock_content_mutation(db, application_id)
     application = locked.application
     from core.application_revision import bump_application_revision
+    from core.material_audit import invalidate_material_audit
 
     bump_application_revision(
         db,
         application,
         reason_code="CV_OVERRIDE_CHANGED",
     )
+    invalidate_material_audit(application)
     application.cv_override_id = cv.id
     application.selected_cv_id = cv.id
     application.cv_routing_confidence = 1.0

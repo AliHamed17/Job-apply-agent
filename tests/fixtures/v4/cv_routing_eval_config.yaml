@@ -1,0 +1,76 @@
+minimum_confidence: 0.35
+fallback_cv_id: null
+cvs:
+  - id: ai-ml
+    file: synthetic-ai-ml.pdf
+    title_terms:
+      - machine
+      - learning
+      - artificial
+      - intelligence
+    skills:
+      - python
+      - pytorch
+      - tensorflow
+      - nlp
+      - vision
+      - models
+    seniority:
+      - junior
+      - mid
+      - senior
+  - id: data
+    file: synthetic-data.pdf
+    title_terms:
+      - data
+      - analytics
+      - analyst
+      - bi
+    skills:
+      - sql
+      - dbt
+      - spark
+      - tableau
+      - etl
+      - pandas
+    seniority:
+      - junior
+      - mid
+      - senior
+  - id: software
+    file: synthetic-software.pdf
+    title_terms:
+      - backend
+      - software
+      - frontend
+      - developer
+    skills:
+      - java
+      - typescript
+      - react
+      - api
+      - selenium
+      - pytest
+    seniority:
+      - junior
+      - mid
+      - senior
+  - id: platform
+    file: synthetic-platform.pdf
+    title_terms:
+      - devops
+      - infrastructure
+      - embedded
+      - firmware
+    skills:
+      - kubernetes
+      - terraform
+      - aws
+      - linux
+      - firmware
+      - rtos
+      - c++
+    seniority:
+      - junior
+      - mid
+      - senior

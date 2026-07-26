@@ -16,6 +16,8 @@ from sqlalchemy import text
 from core.config import Settings, get_settings
 from core.runtime_identity import get_runtime_identity
 from db.session import get_engine
+from llm.contracts import LLMReasonCode, ModelIdentity
+from llm.ollama_runtime import OllamaReadiness, OllamaRuntime
 
 HEARTBEAT_PREFIX = "job-agent:heartbeat:"
 
@@ -71,7 +73,7 @@ def _heartbeat_status(component: str, settings: Settings) -> dict[str, Any]:
     if not math.isfinite(seen_at):
         return {"ok": False, "detail": "invalid"}
     age = max(0.0, time.time() - seen_at)
-    result = {
+    result: dict[str, Any] = {
         "ok": age <= settings.dependency_heartbeat_ttl_seconds,
         "age_seconds": round(age, 1),
     }
@@ -96,6 +98,31 @@ def browser_available() -> bool:
         return True
     cache = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", Path.home() / ".cache/ms-playwright"))
     return cache.exists() and any(cache.glob("chromium-*"))
+
+
+def llm_readiness(settings: Settings | None = None) -> dict[str, Any]:
+    """Return bounded local-model readiness without exposing prompts or URLs."""
+
+    cfg = settings or get_settings()
+    if cfg.llm_provider == "ollama":
+        return OllamaRuntime(cfg).readiness_sync().as_check()
+    if cfg.llm_provider == "mock" and cfg.app_env in {"development", "test"}:
+        return OllamaReadiness(
+            ok=True,
+            model_identity=ModelIdentity(
+                provider="mock",
+                model="deterministic-test",
+                local=True,
+            ),
+        ).as_check()
+    return {
+        "ok": False,
+        "provider": cfg.llm_provider,
+        "model": cfg.llm_model[:128],
+        "local": False,
+        "digest": None,
+        "reason_code": LLMReasonCode.MODEL_NOT_LOCAL.value,
+    }
 
 
 def readiness_report(settings: Settings | None = None) -> dict[str, Any]:
@@ -132,5 +159,16 @@ def readiness_report(settings: Settings | None = None) -> dict[str, Any]:
         checks["browser"] = _heartbeat_status("browser", cfg)
     except Exception:
         checks["browser"] = {"ok": False, "detail": "unavailable"}
+    try:
+        checks["llm"] = llm_readiness(cfg)
+    except Exception:
+        checks["llm"] = {
+            "ok": False,
+            "provider": "ollama" if cfg.llm_provider == "ollama" else cfg.llm_provider,
+            "model": cfg.llm_model[:128],
+            "local": cfg.llm_provider in {"ollama", "mock"},
+            "digest": None,
+            "reason_code": LLMReasonCode.PROVIDER_UNAVAILABLE.value,
+        }
     status = "ready" if all(value["ok"] for value in checks.values()) else "degraded"
     return {"status": status, "checks": checks}

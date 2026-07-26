@@ -1,0 +1,882 @@
+[
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed machine learning models with PyTorch.",
+      "Built Python feature pipelines.",
+      "Evaluated model performance with offline datasets.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "ai_ml",
+    "id": "material-001",
+    "job": {
+      "company": "Synthetic Engineering Group 01",
+      "description": "Develop tested machine learning workflows using Python and PyTorch. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Machine Learning Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built distributed data pipelines with Spark.",
+      "Built data transformations with dbt.",
+      "Designed auditable schemas in PostgreSQL.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "data",
+    "id": "material-002",
+    "job": {
+      "company": "Synthetic Engineering Group 02",
+      "description": "Build auditable data pipelines using Spark, dbt, and SQL. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Data Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed production services in Python.",
+      "Implemented backend APIs with FastAPI.",
+      "Wrote automated tests with Pytest.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "software",
+    "id": "material-003",
+    "job": {
+      "company": "Synthetic Engineering Group 03",
+      "description": "Implement reliable Python services, APIs, and automated tests. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Backend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Automated browser tests with Selenium.",
+      "Wrote regression suites with Pytest.",
+      "Investigated reproducible software defects.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "qa",
+    "id": "material-004",
+    "job": {
+      "company": "Synthetic Engineering Group 04",
+      "description": "Build browser automation and maintain reliable regression coverage. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Quality Automation Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated workloads on Kubernetes.",
+      "Authored infrastructure modules with Terraform.",
+      "Deployed services on AWS.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "devops",
+    "id": "material-005",
+    "job": {
+      "company": "Synthetic Engineering Group 05",
+      "description": "Operate cloud workloads using Kubernetes, Terraform, and AWS. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "DevOps Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated production services on Linux.",
+      "Automated infrastructure monitoring.",
+      "Maintained reliable service configurations.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "infrastructure",
+    "id": "material-006",
+    "job": {
+      "company": "Synthetic Engineering Group 06",
+      "description": "Maintain observable Linux services and automated infrastructure. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Infrastructure Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed embedded software in C++.",
+      "Built real-time software with FreeRTOS.",
+      "Tested device interfaces.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "embedded",
+    "id": "material-007",
+    "job": {
+      "company": "Synthetic Engineering Group 07",
+      "description": "Develop and test embedded C++ software for real-time systems. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Embedded Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built user interfaces in TypeScript.",
+      "Implemented frontend components with React.",
+      "Wrote frontend tests.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "frontend",
+    "id": "material-008",
+    "job": {
+      "company": "Synthetic Engineering Group 08",
+      "description": "Build tested web interfaces using TypeScript and React. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Frontend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Designed auditable schemas in PostgreSQL.",
+      "Built SQL reports.",
+      "Created analytics dashboards with Tableau.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "analytics",
+    "id": "material-009",
+    "job": {
+      "company": "Synthetic Engineering Group 09",
+      "description": "Create governed SQL models and decision-ready analytics views. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Analytics Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Completed software projects in Python.",
+      "Managed source code with Git.",
+      "Wrote automated tests with Pytest.",
+      "Collaborated with engineering teams on documented software changes."
+    ],
+    "family": "junior",
+    "id": "material-010",
+    "job": {
+      "company": "Synthetic Engineering Group 10",
+      "description": "Contribute tested Python changes with version-control workflows. Scenario variant 1 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Junior Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed machine learning models with PyTorch.",
+      "Built Python feature pipelines.",
+      "Evaluated model performance with offline datasets.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "ai_ml",
+    "id": "material-011",
+    "job": {
+      "company": "Synthetic Engineering Group 11",
+      "description": "Develop tested machine learning workflows using Python and PyTorch. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Machine Learning Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built distributed data pipelines with Spark.",
+      "Built data transformations with dbt.",
+      "Designed auditable schemas in PostgreSQL.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "data",
+    "id": "material-012",
+    "job": {
+      "company": "Synthetic Engineering Group 12",
+      "description": "Build auditable data pipelines using Spark, dbt, and SQL. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Data Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed production services in Python.",
+      "Implemented backend APIs with FastAPI.",
+      "Wrote automated tests with Pytest.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "software",
+    "id": "material-013",
+    "job": {
+      "company": "Synthetic Engineering Group 13",
+      "description": "Implement reliable Python services, APIs, and automated tests. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Backend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Automated browser tests with Selenium.",
+      "Wrote regression suites with Pytest.",
+      "Investigated reproducible software defects.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "qa",
+    "id": "material-014",
+    "job": {
+      "company": "Synthetic Engineering Group 14",
+      "description": "Build browser automation and maintain reliable regression coverage. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Quality Automation Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated workloads on Kubernetes.",
+      "Authored infrastructure modules with Terraform.",
+      "Deployed services on AWS.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "devops",
+    "id": "material-015",
+    "job": {
+      "company": "Synthetic Engineering Group 15",
+      "description": "Operate cloud workloads using Kubernetes, Terraform, and AWS. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "DevOps Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated production services on Linux.",
+      "Automated infrastructure monitoring.",
+      "Maintained reliable service configurations.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "infrastructure",
+    "id": "material-016",
+    "job": {
+      "company": "Synthetic Engineering Group 16",
+      "description": "Maintain observable Linux services and automated infrastructure. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Infrastructure Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed embedded software in C++.",
+      "Built real-time software with FreeRTOS.",
+      "Tested device interfaces.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "embedded",
+    "id": "material-017",
+    "job": {
+      "company": "Synthetic Engineering Group 17",
+      "description": "Develop and test embedded C++ software for real-time systems. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Embedded Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built user interfaces in TypeScript.",
+      "Implemented frontend components with React.",
+      "Wrote frontend tests.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "frontend",
+    "id": "material-018",
+    "job": {
+      "company": "Synthetic Engineering Group 18",
+      "description": "Build tested web interfaces using TypeScript and React. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Frontend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Designed auditable schemas in PostgreSQL.",
+      "Built SQL reports.",
+      "Created analytics dashboards with Tableau.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "analytics",
+    "id": "material-019",
+    "job": {
+      "company": "Synthetic Engineering Group 19",
+      "description": "Create governed SQL models and decision-ready analytics views. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Analytics Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Completed software projects in Python.",
+      "Managed source code with Git.",
+      "Wrote automated tests with Pytest.",
+      "Maintained version-controlled technical documentation."
+    ],
+    "family": "junior",
+    "id": "material-020",
+    "job": {
+      "company": "Synthetic Engineering Group 20",
+      "description": "Contribute tested Python changes with version-control workflows. Scenario variant 2 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Junior Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed machine learning models with PyTorch.",
+      "Built Python feature pipelines.",
+      "Evaluated model performance with offline datasets.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "ai_ml",
+    "id": "material-021",
+    "job": {
+      "company": "Synthetic Engineering Group 21",
+      "description": "Develop tested machine learning workflows using Python and PyTorch. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Machine Learning Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built distributed data pipelines with Spark.",
+      "Built data transformations with dbt.",
+      "Designed auditable schemas in PostgreSQL.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "data",
+    "id": "material-022",
+    "job": {
+      "company": "Synthetic Engineering Group 22",
+      "description": "Build auditable data pipelines using Spark, dbt, and SQL. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Data Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed production services in Python.",
+      "Implemented backend APIs with FastAPI.",
+      "Wrote automated tests with Pytest.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "software",
+    "id": "material-023",
+    "job": {
+      "company": "Synthetic Engineering Group 23",
+      "description": "Implement reliable Python services, APIs, and automated tests. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Backend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Automated browser tests with Selenium.",
+      "Wrote regression suites with Pytest.",
+      "Investigated reproducible software defects.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "qa",
+    "id": "material-024",
+    "job": {
+      "company": "Synthetic Engineering Group 24",
+      "description": "Build browser automation and maintain reliable regression coverage. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Quality Automation Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated workloads on Kubernetes.",
+      "Authored infrastructure modules with Terraform.",
+      "Deployed services on AWS.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "devops",
+    "id": "material-025",
+    "job": {
+      "company": "Synthetic Engineering Group 25",
+      "description": "Operate cloud workloads using Kubernetes, Terraform, and AWS. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "DevOps Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated production services on Linux.",
+      "Automated infrastructure monitoring.",
+      "Maintained reliable service configurations.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "infrastructure",
+    "id": "material-026",
+    "job": {
+      "company": "Synthetic Engineering Group 26",
+      "description": "Maintain observable Linux services and automated infrastructure. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Infrastructure Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed embedded software in C++.",
+      "Built real-time software with FreeRTOS.",
+      "Tested device interfaces.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "embedded",
+    "id": "material-027",
+    "job": {
+      "company": "Synthetic Engineering Group 27",
+      "description": "Develop and test embedded C++ software for real-time systems. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Embedded Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built user interfaces in TypeScript.",
+      "Implemented frontend components with React.",
+      "Wrote frontend tests.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "frontend",
+    "id": "material-028",
+    "job": {
+      "company": "Synthetic Engineering Group 28",
+      "description": "Build tested web interfaces using TypeScript and React. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Frontend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Designed auditable schemas in PostgreSQL.",
+      "Built SQL reports.",
+      "Created analytics dashboards with Tableau.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "analytics",
+    "id": "material-029",
+    "job": {
+      "company": "Synthetic Engineering Group 29",
+      "description": "Create governed SQL models and decision-ready analytics views. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Analytics Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Completed software projects in Python.",
+      "Managed source code with Git.",
+      "Wrote automated tests with Pytest.",
+      "Reviewed automated test results before releases."
+    ],
+    "family": "junior",
+    "id": "material-030",
+    "job": {
+      "company": "Synthetic Engineering Group 30",
+      "description": "Contribute tested Python changes with version-control workflows. Scenario variant 3 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Junior Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed machine learning models with PyTorch.",
+      "Built Python feature pipelines.",
+      "Evaluated model performance with offline datasets.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "ai_ml",
+    "id": "material-031",
+    "job": {
+      "company": "Synthetic Engineering Group 31",
+      "description": "Develop tested machine learning workflows using Python and PyTorch. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Machine Learning Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built distributed data pipelines with Spark.",
+      "Built data transformations with dbt.",
+      "Designed auditable schemas in PostgreSQL.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "data",
+    "id": "material-032",
+    "job": {
+      "company": "Synthetic Engineering Group 32",
+      "description": "Build auditable data pipelines using Spark, dbt, and SQL. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Data Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed production services in Python.",
+      "Implemented backend APIs with FastAPI.",
+      "Wrote automated tests with Pytest.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "software",
+    "id": "material-033",
+    "job": {
+      "company": "Synthetic Engineering Group 33",
+      "description": "Implement reliable Python services, APIs, and automated tests. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Backend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Automated browser tests with Selenium.",
+      "Wrote regression suites with Pytest.",
+      "Investigated reproducible software defects.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "qa",
+    "id": "material-034",
+    "job": {
+      "company": "Synthetic Engineering Group 34",
+      "description": "Build browser automation and maintain reliable regression coverage. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Quality Automation Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated workloads on Kubernetes.",
+      "Authored infrastructure modules with Terraform.",
+      "Deployed services on AWS.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "devops",
+    "id": "material-035",
+    "job": {
+      "company": "Synthetic Engineering Group 35",
+      "description": "Operate cloud workloads using Kubernetes, Terraform, and AWS. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "DevOps Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Operated production services on Linux.",
+      "Automated infrastructure monitoring.",
+      "Maintained reliable service configurations.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "infrastructure",
+    "id": "material-036",
+    "job": {
+      "company": "Synthetic Engineering Group 36",
+      "description": "Maintain observable Linux services and automated infrastructure. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Infrastructure Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Developed embedded software in C++.",
+      "Built real-time software with FreeRTOS.",
+      "Tested device interfaces.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "embedded",
+    "id": "material-037",
+    "job": {
+      "company": "Synthetic Engineering Group 37",
+      "description": "Develop and test embedded C++ software for real-time systems. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Embedded Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Built user interfaces in TypeScript.",
+      "Implemented frontend components with React.",
+      "Wrote frontend tests.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "frontend",
+    "id": "material-038",
+    "job": {
+      "company": "Synthetic Engineering Group 38",
+      "description": "Build tested web interfaces using TypeScript and React. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Frontend Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Designed auditable schemas in PostgreSQL.",
+      "Built SQL reports.",
+      "Created analytics dashboards with Tableau.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "analytics",
+    "id": "material-039",
+    "job": {
+      "company": "Synthetic Engineering Group 39",
+      "description": "Create governed SQL models and decision-ready analytics views. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Analytics Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  },
+  {
+    "confirmed_facts": {
+      "notice_period": "Available after 30 days",
+      "salary_expectations": "Open to the approved role band"
+    },
+    "cv_lines": [
+      "Completed software projects in Python.",
+      "Managed source code with Git.",
+      "Wrote automated tests with Pytest.",
+      "Investigated production issues using structured logs."
+    ],
+    "family": "junior",
+    "id": "material-040",
+    "job": {
+      "company": "Synthetic Engineering Group 40",
+      "description": "Contribute tested Python changes with version-control workflows. Scenario variant 4 emphasizes documented review.",
+      "location": "Synthetic City",
+      "title": "Junior Software Engineer"
+    },
+    "locale": "en",
+    "synthetic_label": "complete_non_sensitive_input"
+  }
+]

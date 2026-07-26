@@ -29,6 +29,8 @@ const LOADED_DASHBOARD_RELEASE = Object.freeze({
     protocol_version: runtimeMeta('job-agent-protocol'),
     boot_id: runtimeMeta('job-agent-boot-id'),
 });
+const QUALIFIED_MATERIAL_PROMPT_VERSION = 'application-materials-v1';
+const QUALIFIED_FORM_PROMPT_VERSION = 'form-resolution-v1';
 
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -51,7 +53,35 @@ const state = {
     runtimeCapabilities: null,
     readiness: null,
     runtimeProbeStatus: 'loading',
+    sendIdempotencyKeys: new Map(),
 };
+
+const reviewModalState = {
+    applicationId: null,
+    requestToken: 0,
+};
+
+function beginReviewModalRequest(applicationId) {
+    reviewModalState.applicationId = applicationId;
+    reviewModalState.requestToken += 1;
+    return reviewModalState.requestToken;
+}
+
+function isCurrentReviewModalRequest(applicationId, requestToken) {
+    return reviewModalState.applicationId === applicationId
+        && reviewModalState.requestToken === requestToken;
+}
+
+function invalidateReviewModalRequest() {
+    reviewModalState.applicationId = null;
+    reviewModalState.requestToken += 1;
+}
+
+function hideModal(modal) {
+    if (!modal) return;
+    if (modal.id === 'review-modal') invalidateReviewModalRequest();
+    modal.classList.remove('visible');
+}
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -148,10 +178,10 @@ function setupListeners() {
 
     // Close modals
     document.querySelectorAll('.close-btn').forEach(btn => {
-        btn.addEventListener('click', e => e.target.closest('.modal').classList.remove('visible'));
+        btn.addEventListener('click', e => hideModal(e.target.closest('.modal')));
     });
     document.querySelectorAll('.modal').forEach(m => {
-        m.addEventListener('click', e => { if (e.target === m) m.classList.remove('visible'); });
+        m.addEventListener('click', e => { if (e.target === m) hideModal(m); });
     });
 
     // Ingest modal open
@@ -182,7 +212,9 @@ function setupListeners() {
     document.addEventListener('keydown', e => {
         if (e.key === 'r' && !e.ctrlKey && !e.metaKey && !isInputFocused()) refreshAllData();
         if ((e.key === 'k') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); openIngestModal(); }
-        if (e.key === 'Escape') document.querySelectorAll('.modal.visible').forEach(m => m.classList.remove('visible'));
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal.visible').forEach(hideModal);
+        }
     });
 }
 
@@ -392,6 +424,10 @@ function renderRuntimeModeBanner() {
         ? String(runtime.release.build_sha).slice(0, 10)
         : 'unknown';
     const protocol = runtime.release.protocol_version || 'unknown';
+    const llm = capabilities?.llm;
+    const llmLabel = llm
+        ? `${llm.provider} ${llm.model} · ${llm.ready && llm.local ? 'local ready' : llm.reason_code || 'not ready'}`
+        : 'local model unavailable';
 
     banner.className = `runtime-mode-banner runtime-mode-${variant}`;
     banner.innerHTML = `
@@ -404,6 +440,7 @@ function renderRuntimeModeBanner() {
             <span>${esc(runtime.modeName)}</span>
             <span>build ${esc(build)}</span>
             <span>protocol ${esc(protocol)}</span>
+            <span>${esc(llmLabel)}</span>
         </div>`;
 
     const indicator = $('runtime-status-indicator');
@@ -1017,8 +1054,16 @@ function matchesApplicationFilter(application, filter) {
     return application.status === filter;
 }
 
+function parseServerTimestamp(rawValue) {
+    if (typeof rawValue !== 'string' || rawValue.trim() === '') return Number.NaN;
+    const raw = rawValue.trim();
+    const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw) ? raw : `${raw}Z`;
+    return Date.parse(normalized);
+}
+
 function hasValidFormPlan(application) {
     const plan = application?.form_plan || application?.latest_form_plan || {};
+    if (plan.invalidated_at || application?.form_plan_invalidated_at) return false;
     const explicitlyValid = application?.form_plan_valid === true
         || application?.form_plan_status === 'valid'
         || plan.valid === true
@@ -1027,7 +1072,8 @@ function hasValidFormPlan(application) {
     if (!explicitlyValid) return false;
 
     const expiresAt = plan.expires_at || application?.form_plan_expires_at;
-    return !expiresAt || new Date(expiresAt).getTime() > Date.now();
+    const expiresAtMs = parseServerTimestamp(expiresAt);
+    return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
 }
 
 const ACTIVE_SUBMISSION_STAGES = new Set([
@@ -1046,8 +1092,34 @@ function hasActiveSubmissionAttempt(application) {
 
 function liveSendBlockers(application) {
     const blockers = [...runtimeSubmissionState().reasons];
+    const runtimeModel = state.runtimeCapabilities?.llm;
     if (hasActiveSubmissionAttempt(application)) {
         blockers.push('A submission attempt is already in progress');
+    }
+    if (application?.material_eligible !== true) {
+        blockers.push('Evidence-validated application materials are required');
+    } else if (
+        !runtimeModel
+        || runtimeModel.ready !== true
+        || runtimeModel.local !== true
+        || application.material_prompt_version !== QUALIFIED_MATERIAL_PROMPT_VERSION
+        || application.material_model_provider !== runtimeModel.provider
+        || application.material_model_name !== runtimeModel.model
+        || application.material_model_digest !== runtimeModel.digest
+    ) {
+        blockers.push('The local model changed; regenerate and review the materials');
+    }
+    if (
+        application?.form_plan_uses_local_llm === true
+        && (
+            !runtimeModel
+            || application.form_plan_llm_prompt_version !== QUALIFIED_FORM_PROMPT_VERSION
+            || application.form_plan_llm_model_provider !== runtimeModel.provider
+            || application.form_plan_llm_model_name !== runtimeModel.model
+            || application.form_plan_llm_model_digest !== runtimeModel.digest
+        )
+    ) {
+        blockers.push('The local model changed; inspect the employer form again');
     }
     if (!hasValidFormPlan(application)) blockers.push('A current validated form plan is required');
     if (application?.portal_session_ready === false) blockers.push('Sign in to the employer portal');
@@ -1380,9 +1452,282 @@ async function submitIngest() {
 }
 
 // ── Review Modal ──────────────────────────────────────────────────────────────
+function formPlanIsReviewable(plan) {
+    if (!plan || plan.invalidated_at) return false;
+    const expiresAt = parseServerTimestamp(plan.expires_at);
+    return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function formConstraintSummary(field) {
+    const constraints = field.constraints || {};
+    const parts = [];
+    if (constraints.min_length !== null && constraints.min_length !== undefined) {
+        parts.push(`minimum ${constraints.min_length} characters`);
+    }
+    if (constraints.max_length !== null && constraints.max_length !== undefined) {
+        parts.push(`maximum ${constraints.max_length} characters`);
+    }
+    if (constraints.min_value !== null && constraints.min_value !== undefined) {
+        parts.push(`minimum ${constraints.min_value}`);
+    }
+    if (constraints.max_value !== null && constraints.max_value !== undefined) {
+        parts.push(`maximum ${constraints.max_value}`);
+    }
+    if (constraints.pattern) parts.push('employer format rule');
+    if (constraints.multiple) parts.push('multiple selections allowed');
+    return parts.join(' · ');
+}
+
+function formAnswerControl(field, decision, index, reviewable) {
+    const controlId = `form-answer-${index}`;
+    const reusableId = `form-reusable-${index}`;
+    const value = decision?.disposition === 'resolved' ? decision.value : null;
+    const disabled = reviewable ? '' : ' disabled';
+    let control = '';
+
+    if (['select', 'radio', 'multi_select'].includes(field.field_type)) {
+        const selected = Array.isArray(value) ? value.map(String) : [String(value ?? '')];
+        const multiple = field.field_type === 'multi_select' ? ' multiple' : '';
+        const prompt = field.field_type === 'multi_select'
+            ? ''
+            : '<option value="">Choose an answer</option>';
+        const options = (field.options || []).map(option => {
+            const isSelected = selected.includes(String(option.value)) ? ' selected' : '';
+            const isDisabled = option.disabled ? ' disabled' : '';
+            return `<option value="${esc(option.value)}"${isSelected}${isDisabled}>${esc(option.label)}</option>`;
+        }).join('');
+        control = `<select id="${controlId}" class="form-input"${multiple}${disabled}>${prompt}${options}</select>`;
+    } else if (['checkbox', 'consent', 'attestation'].includes(field.field_type)) {
+        const yes = value === true ? ' selected' : '';
+        const no = value === false ? ' selected' : '';
+        control = `<select id="${controlId}" class="form-input"${disabled}>
+            <option value="">Choose an answer</option>
+            <option value="true"${yes}>Yes</option>
+            <option value="false"${no}>No</option>
+        </select>`;
+    } else if (field.field_type === 'textarea') {
+        const maxLength = field.constraints?.max_length;
+        const maxAttr = Number.isInteger(maxLength) ? ` maxlength="${maxLength}"` : '';
+        control = `<textarea id="${controlId}" class="form-input" rows="3"${maxAttr}${disabled}>${esc(value ?? '')}</textarea>`;
+    } else if (['text', 'date', 'number', 'email', 'phone', 'url'].includes(field.field_type)) {
+        const htmlType = {
+            text: 'text',
+            date: 'date',
+            number: 'number',
+            email: 'email',
+            phone: 'tel',
+            url: 'url',
+        }[field.field_type];
+        const constraints = field.constraints || {};
+        const min = field.field_type === 'number' && Number.isFinite(constraints.min_value)
+            ? ` min="${constraints.min_value}"`
+            : '';
+        const max = field.field_type === 'number' && Number.isFinite(constraints.max_value)
+            ? ` max="${constraints.max_value}"`
+            : '';
+        const minLength = Number.isInteger(constraints.min_length)
+            ? ` minlength="${constraints.min_length}"`
+            : '';
+        const maxLength = Number.isInteger(constraints.max_length)
+            ? ` maxlength="${constraints.max_length}"`
+            : '';
+        control = `<input id="${controlId}" class="form-input" type="${htmlType}"
+            value="${esc(value ?? '')}"${min}${max}${minLength}${maxLength}${disabled}>`;
+    } else {
+        const message = field.field_type === 'file'
+            ? 'Attachments are verified separately and cannot be confirmed here.'
+            : 'This control is unsupported. Reinspect the application before continuing.';
+        return `<div class="text-sm text-dim">${esc(message)}</div>`;
+    }
+
+    const reusable = field.canonical_name
+        ? `<label class="text-sm text-dim" style="display:flex;gap:7px;align-items:center;">
+            <input id="${reusableId}" type="checkbox"${disabled}>
+            Reuse only for this exact field and form version
+        </label>`
+        : '';
+    return `${control}
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+            <button type="button" class="btn btn-sm btn-secondary"
+                    data-confirm-field-index="${index}"${disabled}>
+                ${decision?.disposition === 'resolved' ? 'Update answer' : 'Confirm answer'}
+            </button>
+            ${reusable}
+        </div>`;
+}
+
+function renderFormPlanPanel(appId, plan) {
+    const panel = $('modal-form-plan');
+    const fields = Array.isArray(plan.fields) ? plan.fields : [];
+    const decisions = Array.isArray(plan.decisions) ? plan.decisions : [];
+    const decisionByField = new Map(decisions.map(item => [item.field_id, item]));
+    const resolved = fields.filter(
+        field => decisionByField.get(field.field_id)?.disposition === 'resolved'
+    ).length;
+    const unresolvedRequired = fields.filter(
+        field => field.required
+            && decisionByField.get(field.field_id)?.disposition !== 'resolved'
+    ).length;
+    const provenance = [...new Set(
+        decisions.map(item => item.provenance).filter(Boolean)
+    )];
+    const reviewable = formPlanIsReviewable(plan);
+    const planLabel = plan.valid
+        ? 'Current, prepared plan'
+        : reviewable
+            ? 'Current plan — prepare again after changes'
+            : 'Expired or changed plan';
+    const blockers = Array.isArray(plan.blockers) ? plan.blockers : [];
+    const fieldRows = fields.map((field, index) => {
+        const decision = decisionByField.get(field.field_id);
+        const constraints = formConstraintSummary(field);
+        const status = decision?.disposition === 'resolved'
+            ? `Resolved · ${decision.provenance || 'recorded source'}`
+            : decision?.reason_code || 'Operator review required';
+        return `<div class="qa-item" data-form-field-index="${index}">
+            <div class="qa-q">
+                ${esc(field.label)}
+                ${field.required ? '<span class="text-warning"> · Required</span>' : ''}
+                ${field.sensitive_category ? `<span class="text-warning"> · ${esc(field.sensitive_category)}</span>` : ''}
+            </div>
+            <div class="qa-a">${esc(field.field_type)} · ${esc(status)}</div>
+            ${constraints ? `<div class="qa-a text-dim">${esc(constraints)}</div>` : ''}
+            <div style="margin-top:9px;">
+                ${formAnswerControl(field, decision, index, reviewable)}
+            </div>
+        </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+        <div class="qa-item">
+            <div class="qa-q">${esc(planLabel)}</div>
+            <div class="qa-a">${esc(plan.adapter_name)} ${esc(plan.adapter_version)} · selector ${esc(plan.selector_version)}</div>
+        </div>
+        <div class="qa-item">
+            <div class="qa-q">Answers</div>
+            <div class="qa-a">${resolved}/${fields.length} resolved · ${unresolvedRequired} required answers need review</div>
+        </div>
+        <div class="qa-item">
+            <div class="qa-q">Provenance</div>
+            <div class="qa-a">${esc(provenance.join(' · ') || 'No resolved answers')}</div>
+        </div>
+        ${blockers.length ? `<div class="qa-item">
+            <div class="qa-q">Plan blockers</div>
+            <div class="qa-a">${esc(blockers.join(' · '))}</div>
+        </div>` : ''}
+        ${fieldRows || '<div class="text-dim text-sm">No observed fields were recorded.</div>'}`;
+
+    panel.querySelectorAll('[data-confirm-field-index]').forEach(button => {
+        button.addEventListener('click', () => {
+            const index = Number(button.dataset.confirmFieldIndex);
+            void confirmFormAnswer(appId, plan, index);
+        });
+    });
+}
+
+function readFormAnswer(field, index) {
+    const control = $(`form-answer-${index}`);
+    if (!control) throw new Error('This form control cannot be confirmed here.');
+    if (typeof control.checkValidity === 'function' && !control.checkValidity()) {
+        if (typeof control.reportValidity === 'function') control.reportValidity();
+        throw new Error('Enter an answer that satisfies the observed form constraints.');
+    }
+    if (field.field_type === 'multi_select') {
+        const values = [...control.selectedOptions].map(option => option.value);
+        if (!values.length) throw new Error('Choose at least one answer.');
+        return values;
+    }
+    if (['checkbox', 'consent', 'attestation'].includes(field.field_type)) {
+        if (control.value === '') throw new Error('Choose Yes or No.');
+        return control.value === 'true';
+    }
+    if (field.field_type === 'number') {
+        if (control.value.trim() === '') throw new Error('Enter a number.');
+        const value = Number(control.value);
+        if (!Number.isFinite(value)) throw new Error('Enter a valid number.');
+        return value;
+    }
+    const value = control.value.trim();
+    if (!value) throw new Error('Enter an answer before confirming.');
+    return value;
+}
+
+async function confirmFormAnswer(appId, plan, index) {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
+    const field = plan.fields?.[index];
+    if (!field) return;
+    let value;
+    try {
+        value = readFormAnswer(field, index);
+    } catch (error) {
+        showToast(error.message, 'warning');
+        return;
+    }
+    const reusable = Boolean($(`form-reusable-${index}`)?.checked);
+    const button = document.querySelector(`[data-confirm-field-index="${index}"]`);
+    if (button) button.disabled = true;
+    const result = await probeJson(
+        `/api/applications/${appId}/answers/${encodeURIComponent(field.field_id)}/confirm`,
+        'POST',
+        {
+            plan_id: plan.plan_id,
+            application_revision: plan.application_revision,
+            value,
+            reusable,
+            evidence_source: 'operator_confirmation',
+            evidence_reference: 'dashboard_review',
+        }
+    );
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
+    if (result.ok && result.data) {
+        const application = state.applications.find(item => item.id === appId);
+        if (application) {
+            application.status = 'draft';
+            application.approved_at = null;
+            application.prepared_revision = null;
+            application.revision = result.data.application_revision;
+            application.application_revision = result.data.application_revision;
+            application.form_plan_id = result.data.plan_id;
+            application.form_plan_valid = result.data.valid === true;
+            application.form_plan_blockers = result.data.blockers || [];
+        }
+        showToast('Answer confirmed. Review the updated plan, then prepare again.', 'info');
+        renderFormPlanPanel(appId, result.data);
+        return;
+    }
+    if (result.status === 409) {
+        showToast('The form changed while you were reviewing it. Loading the latest plan.', 'warning');
+        const refreshed = await probeJson(`/api/applications/${appId}/form-plan`);
+        if (refreshed.ok && refreshed.data) renderFormPlanPanel(appId, refreshed.data);
+        return;
+    }
+    showToast(
+        boundedApiError(result.data, `Answer confirmation failed (HTTP ${result.status})`),
+        'error'
+    );
+    if (button) button.disabled = false;
+}
+
 window.openReviewModal = async appId => {
     const app = state.applications.find(a => a.id === appId);
     if (!app) return;
+    const requestToken = beginReviewModalRequest(appId);
+    const reviewModal = $('review-modal');
+    const actionButtons = [
+        $('btn-preview-cv'),
+        $('btn-override-cv'),
+        $('btn-approve-app'),
+        $('btn-reject-app'),
+        $('btn-retry-app'),
+        $('btn-send-app'),
+    ].filter(Boolean);
+    actionButtons.forEach(button => {
+        button.disabled = true;
+        button.onclick = null;
+    });
+    $('btn-approve-app').innerHTML = 'Prepare application';
+    $('btn-send-app').innerHTML = '<i data-lucide="send"></i> Send application';
 
     $('modal-job-title').textContent = app.job_title;
     $('modal-company').textContent = app.job_company;
@@ -1392,10 +1737,65 @@ window.openReviewModal = async appId => {
     $('modal-recruiter-msg').textContent = app.recruiter_message || 'N/A';
     const routingEvidence = (app.cv_routing_evidence || []).join(' · ');
     $('modal-cv-routing').textContent = app.selected_cv_id
-        ? `${app.selected_cv_id} · confidence ${Math.round((app.cv_routing_confidence || 0) * 100)}%${routingEvidence ? ' · ' + routingEvidence : ''}`
+        ? `${app.selected_cv_id} · ${app.selected_cv_hash ? 'SHA-256 ' + app.selected_cv_hash.slice(0, 12) + '… · ' : ''}confidence ${Math.round((app.cv_routing_confidence || 0) * 100)}%${routingEvidence ? ' · ' + routingEvidence : ''}`
         : `Review required${app.cv_routing_fallback_reason ? ' · ' + app.cv_routing_fallback_reason : ''}`;
     $('btn-preview-cv').onclick = () => previewCvRoute(app.id);
     $('btn-override-cv').onclick = () => overrideCvRoute(app.id);
+
+    const materialBlockers = app.material_blockers || [];
+    const claimEvidence = app.material_claim_evidence || [];
+    const supportedClaims = claimEvidence.filter(claim => claim.supported === true).length;
+    const materialState = app.material_eligible === true
+        ? 'Eligible after evidence validation'
+        : app.material_eligible === false
+            ? 'Blocked — operator review required'
+            : 'Legacy material — no v4 audit';
+    const modelLabel = app.material_model_provider
+        ? `${app.material_model_provider} ${app.material_model_name || ''}${app.material_model_digest ? ' · ' + app.material_model_digest.slice(0, 19) + '…' : ''}`
+        : 'No model identity recorded';
+    $('modal-material-quality').innerHTML = `
+        <div class="qa-item">
+            <div class="qa-q">${esc(materialState)}</div>
+            <div class="qa-a">${esc(modelLabel)}</div>
+        </div>
+        <div class="qa-item">
+            <div class="qa-q">Claim evidence</div>
+            <div class="qa-a">${supportedClaims}/${claimEvidence.length} factual claims supported</div>
+        </div>
+        ${materialBlockers.length ? `<div class="qa-item">
+            <div class="qa-q">Blockers</div>
+            <div class="qa-a">${esc(materialBlockers.join(' · '))}</div>
+        </div>` : ''}`;
+
+    const formPlanPanel = $('modal-form-plan');
+    formPlanPanel.innerHTML = '<div class="text-dim text-sm">Loading the current form inspection…</div>';
+    reviewModal.classList.add('visible');
+    lucide.createIcons();
+    if (app.form_plan_id) {
+        const planResult = await probeJson(`/api/applications/${app.id}/form-plan`);
+        if (!isCurrentReviewModalRequest(app.id, requestToken)) return;
+        if (planResult.ok) {
+            app.form_plan_expires_at = planResult.data?.expires_at || null;
+            app.form_plan_invalidated_at = planResult.data?.invalidated_at || null;
+            app.form_plan_valid = (
+                planResult.data?.valid === true
+                && !app.form_plan_invalidated_at
+            );
+            renderFormPlanPanel(app.id, planResult.data);
+        } else {
+            app.form_plan_valid = false;
+            app.form_plan_expires_at = null;
+            app.form_plan_invalidated_at = null;
+            formPlanPanel.innerHTML = '<div class="text-dim text-sm">The recorded plan is no longer available.</div>';
+        }
+    } else {
+        app.form_plan_valid = false;
+        app.form_plan_expires_at = null;
+        app.form_plan_invalidated_at = null;
+        formPlanPanel.innerHTML = '<div class="text-dim text-sm">No current form inspection is available.</div>';
+    }
+
+    if (!isCurrentReviewModalRequest(app.id, requestToken)) return;
 
     // Q&A
     let qaHtml = '';
@@ -1472,8 +1872,15 @@ window.openReviewModal = async appId => {
     const isPrepared = isPreparedApplication(app);
     $('btn-approve-app').style.display = isPending ? 'inline-flex' : 'none';
     $('btn-reject-app').style.display  = isPending ? 'inline-flex' : 'none';
+    $('btn-approve-app').disabled = false;
+    $('btn-reject-app').disabled = false;
+    $('btn-preview-cv').disabled = false;
+    $('btn-override-cv').disabled = false;
     const retryBtn = $('btn-retry-app');
-    if (retryBtn) retryBtn.style.display = canRetry ? 'inline-flex' : 'none';
+    if (retryBtn) {
+        retryBtn.style.display = canRetry ? 'inline-flex' : 'none';
+        retryBtn.disabled = false;
+    }
     const sendBtn = $('btn-send-app');
     const sendReason = $('modal-send-disabled-reason');
     if (sendBtn) {
@@ -1495,25 +1902,31 @@ window.openReviewModal = async appId => {
     } else if (sendReason) {
         sendReason.style.display = 'none';
     }
-    $('modal-cover-letter').readOnly = !isPending;
+    // Material eligibility is bound to the exact audited text. Editing this
+    // field would create a false impression that a correction was persisted.
+    $('modal-cover-letter').readOnly = true;
 
     $('btn-approve-app').onclick = () => handlePrepare(app.id);
     $('btn-reject-app').onclick  = () => handleReject(app.id);
     if (retryBtn) retryBtn.onclick = () => handleRetry(app.id);
 
-    $('review-modal').classList.add('visible');
+    reviewModal.classList.add('visible');
     lucide.createIcons();
 };
 
 async function previewCvRoute(appId) {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     const result = await apiCall('/api/cv-routing/preview', 'POST', { application_id: appId });
-    if (!result) return;
+    if (!isCurrentReviewModalRequest(appId, requestToken) || !result) return;
     showToast(result.selected_cv_id ? `Selected CV: ${result.selected_cv_id}` : 'Routing abstained — choose a CV', 'info');
+    hideModal($('review-modal'));
     await refreshAllData();
-    $('review-modal').classList.remove('visible');
 }
 
 async function overrideCvRoute(appId) {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     const cvId = $('modal-cv-override').value.trim();
     if (!cvId) {
         showToast('Enter a configured CV id', 'info');
@@ -1521,10 +1934,10 @@ async function overrideCvRoute(appId) {
     }
 
     const result = await apiCall(`/api/applications/${appId}/cv-override`, 'POST', { cv_id: cvId });
-    if (!result) return;
+    if (!isCurrentReviewModalRequest(appId, requestToken) || !result) return;
     showToast(`CV override saved: ${result.selected_cv_id}`, 'info');
+    hideModal($('review-modal'));
     await refreshAllData();
-    $('review-modal').classList.remove('visible');
 }
 
 window.copyCoverLetter = () => {
@@ -1648,13 +2061,16 @@ async function requestPreparation(appId) {
 }
 
 async function handlePrepare(appId) {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     const btn = $('btn-approve-app');
     btn.disabled = true;
     btn.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Preparing…';
     lucide.createIcons();
     const res = await requestPreparation(appId);
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     if (res) {
-        $('review-modal').classList.remove('visible');
+        hideModal($('review-modal'));
         void monitorOperation(res, 'Preparation');
     }
     btn.disabled = false;
@@ -1662,7 +2078,85 @@ async function handlePrepare(appId) {
     lucide.createIcons();
 }
 
+function sendIdempotencyStorageKey(application) {
+    const revision = application.revision ?? application.application_revision ?? 'unknown';
+    return `job-agent-send:${application.id}:${revision}:${application.form_plan_id || 'no-plan'}`;
+}
+
+function getOrCreateSendIdempotencyKey(application) {
+    const storageKey = sendIdempotencyStorageKey(application);
+    let value = state.sendIdempotencyKeys.get(storageKey) || '';
+    try {
+        value = value || sessionStorage.getItem(storageKey) || '';
+    } catch {
+        // The in-memory map still preserves the key for this loaded dashboard.
+    }
+    if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(value)) {
+        value = globalThis.crypto?.randomUUID
+            ? globalThis.crypto.randomUUID()
+            : `dashboard-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+    state.sendIdempotencyKeys.set(storageKey, value);
+    try {
+        sessionStorage.setItem(storageKey, value);
+    } catch {
+        // Session storage can be disabled; the in-memory map remains authoritative.
+    }
+    return { storageKey, value };
+}
+
+function clearSendIdempotencyKey(storageKey) {
+    state.sendIdempotencyKeys.delete(storageKey);
+    try {
+        sessionStorage.removeItem(storageKey);
+    } catch {
+        // Nothing else is required when browser storage is unavailable.
+    }
+}
+
+function replaceApplicationState(application) {
+    const index = state.applications.findIndex(item => item.id === application.id);
+    if (index >= 0) state.applications[index] = application;
+}
+
+async function reconcileAmbiguousSend(
+    application,
+    previousAttemptIds,
+    storageKey,
+    requestToken
+) {
+    for (let probeAttempt = 0; probeAttempt < 3; probeAttempt += 1) {
+        if (probeAttempt > 0) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        const refreshed = await probeJson(`/api/applications/${application.id}`);
+        if (!refreshed.ok || !refreshed.data) continue;
+        replaceApplicationState(refreshed.data);
+        const newAttempt = (refreshed.data.attempts || []).find(
+            attempt => !previousAttemptIds.has(attempt.id)
+        );
+        if (newAttempt) {
+            clearSendIdempotencyKey(storageKey);
+            if (isCurrentReviewModalRequest(application.id, requestToken)) {
+                hideModal($('review-modal'));
+            }
+            void monitorOperation({ attempt: newAttempt }, 'Recovered send request');
+            return true;
+        }
+    }
+    showToast(
+        'The send response was interrupted. No new attempt is visible yet; retry will reuse the same request key.',
+        'warning'
+    );
+    if (isCurrentReviewModalRequest(application.id, requestToken)) {
+        await window.openReviewModal(application.id);
+    }
+    return false;
+}
+
 async function handleSend(appId) {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     const app = state.applications.find(application => application.id === appId);
     if (!app) return;
     const blockers = liveSendBlockers(app);
@@ -1678,42 +2172,73 @@ async function handleSend(appId) {
     btn.disabled = true;
     btn.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Sending…';
     lucide.createIcons();
-    const idempotencyKey = globalThis.crypto?.randomUUID
-        ? globalThis.crypto.randomUUID()
-        : `dashboard-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const result = await apiCall(`/api/applications/${appId}/submit`, 'POST', {
-        acknowledgement: 'SEND_APPLICATION',
-        idempotency_key: idempotencyKey,
-        application_revision: app.revision ?? app.application_revision,
-        form_plan_id: app.form_plan_id,
-        client_release: LOADED_DASHBOARD_RELEASE,
-    });
-    if (result) {
-        $('review-modal').classList.remove('visible');
+    const idempotency = getOrCreateSendIdempotencyKey(app);
+    const previousAttemptIds = new Set((app.attempts || []).map(attempt => attempt.id));
+    const response = await probeJson(
+        `/api/applications/${appId}/submit`,
+        'POST',
+        {
+            acknowledgement: 'SEND_APPLICATION',
+            idempotency_key: idempotency.value,
+            application_revision: app.revision ?? app.application_revision,
+            form_plan_id: app.form_plan_id,
+            client_release: LOADED_DASHBOARD_RELEASE,
+        }
+    );
+    if (response.ok && response.data) {
+        clearSendIdempotencyKey(idempotency.storageKey);
+        if (isCurrentReviewModalRequest(appId, requestToken)) {
+            hideModal($('review-modal'));
+        }
         await refreshAllData();
-        void monitorOperation(result, 'Send request');
+        void monitorOperation(response.data, 'Send request');
+        return;
     }
-    btn.disabled = false;
-    btn.innerHTML = '<i data-lucide="send"></i> Send application';
-    lucide.createIcons();
+    if (response.status === 0 || response.status >= 500) {
+        await reconcileAmbiguousSend(
+            app,
+            previousAttemptIds,
+            idempotency.storageKey,
+            requestToken
+        );
+        return;
+    }
+    clearSendIdempotencyKey(idempotency.storageKey);
+    showToast(
+        boundedApiError(response.data, `Send request rejected (HTTP ${response.status})`),
+        'error'
+    );
+    const refreshed = await probeJson(`/api/applications/${appId}`);
+    if (refreshed.ok && refreshed.data) replaceApplicationState(refreshed.data);
+    if (isCurrentReviewModalRequest(appId, requestToken)) {
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="send"></i> Send application';
+        lucide.createIcons();
+    }
 }
 
 async function handleReject(appId) {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     const res = await apiCall(`/api/applications/${appId}/reject?reason=Skipped+from+dashboard`, 'POST');
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     if (res) {
         showToast('Application skipped', 'info');
-        $('review-modal').classList.remove('visible');
+        hideModal($('review-modal'));
         refreshAllData();
     }
 }
 
 window.handleRetry = async appId => {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     if (!window.confirm(
         'Prepare a new retry? Nothing will be submitted. Review it, then use Send application separately.'
     )) return;
     const res = await apiCall(`/api/applications/${appId}/retry`, 'POST');
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
     if (res) {
-        $('review-modal').classList.remove('visible');
+        hideModal($('review-modal'));
         void monitorOperation(res, 'Retry preparation');
     }
 };
