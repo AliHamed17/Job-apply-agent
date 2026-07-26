@@ -183,7 +183,7 @@ jobs:
       - name: Build API image
         run: docker build --target web-api -t job-agent-api:ci .
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: job-agent-api:ci
           format: table
