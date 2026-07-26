@@ -1,0 +1,93 @@
+{
+  "adapter": {
+    "adapter_name": "workday",
+    "adapter_version": "2.0.0",
+    "execution_contract_version": "two-phase-v2",
+    "selector_version": "workday-candidate-v2",
+    "transport": "browser"
+  },
+  "achieved_tier": "fixture_qualified",
+  "fixture_evidence": {
+    "cases": [
+      {
+        "expected_reason_code": "ALREADY_APPLIED",
+        "expected_state": "already_applied",
+        "file": "already_applied.html",
+        "sha256": "ff3ec275e0c573483ea76b0159113ca9a2f922d18475cbb169138be6f7b260c7"
+      },
+      {
+        "expected_reason_code": "CHALLENGE_DETECTED",
+        "expected_state": "challenge",
+        "file": "captcha.html",
+        "sha256": "0c4af330d4d8d894959e55a0dd3939dde32277e8a4e13f60d6205959e78256dd"
+      },
+      {
+        "expected_reason_code": "JOB_CLOSED",
+        "expected_state": "closed",
+        "file": "closed_job.html",
+        "sha256": "b0394efc5619d18a9ebae5d2a7fffe408826a2df65452acd6bc9791e33815ec4"
+      },
+      {
+        "expected_reason_code": "SESSION_EXPIRED",
+        "expected_state": "login",
+        "file": "login.html",
+        "sha256": "9af39cab42d63527bb4218c12ba1894551e8f0e122e4c5ff879cc6b22f286a18"
+      },
+      {
+        "expected_reason_code": "MFA_REQUIRED",
+        "expected_state": "mfa",
+        "file": "mfa.html",
+        "sha256": "c66097f9fc5215f6664c3156df245aba12ab09e05d865354e6fd0be0b3593c4f"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "resume_upload",
+        "file": "resume_upload.html",
+        "sha256": "6bdfe913b3e6d479e0712831775f34c87b7610a42039cc52a8eebccec1824783"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "review.html",
+        "sha256": "e317aff838db55bf06e9ca83756b8ecd345d7c96fcbadcfc7cb19c74d771d77a"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "selector_drift.html",
+        "sha256": "b2a3f6aae0cf96e9652595b485627c8151c59314d9450a1ae9312e673b2d2b42"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "confirmation",
+        "file": "verified_confirmation.html",
+        "sha256": "06c71ce3703beec7c374989b4556813b2754261ff16b4ab04e63358e57ebdec0"
+      }
+    ],
+    "digest_algorithm": "sha256-manifest-v1",
+    "fixture_count": 9,
+    "fixture_digest": "2f0dcda0a633b37472010ca7d87ba3681a7b9a28f39ecba893c04020c252dc99",
+    "fixture_directory": "tests/fixtures/workday_v2"
+  },
+  "interpretation": "Sanitized offline fixture qualification only. It does not qualify a real form, a live canary, or an external final action.",
+  "qualification_gates": {
+    "final_external_action_enabled": false,
+    "fixture_contract": "passed",
+    "live_canary": "pending",
+    "qualified_form_scope": [],
+    "real_url_dry_run": "pending"
+  },
+  "recorded_on": "2026-07-26",
+  "safety_observations": {
+    "external_network_used": false,
+    "final_action_performed": false,
+    "private_data_used": false,
+    "real_application_used": false,
+    "stored_content_scope": [
+      "sanitized fixture identifiers",
+      "bounded states and reason codes",
+      "cryptographic digests"
+    ]
+  },
+  "schema_version": "ats-browser-qualification-report-v1"
+}

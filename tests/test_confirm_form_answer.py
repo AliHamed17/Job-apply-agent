@@ -159,6 +159,67 @@ async def test_confirm_answer_clones_plan_and_requires_reprepare(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_partial_plan_rejects_one_off_confirmation(tmp_path):
+    db = _db(tmp_path)
+    application, plan = _reviewed_plan(db)
+    plan.blockers_json = '["REQUIRED_FIELD_UNKNOWN","FORM_PLAN_INCOMPLETE"]'
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await applications_route.confirm_application_answer(
+            application.id,
+            "nationality",
+            applications_route.ConfirmAnswerRequest(
+                plan_id=plan.plan_id,
+                application_revision=1,
+                value="Canadian",
+                reusable=False,
+                evidence_source="operator_confirmation",
+                evidence_reference="review-session-partial",
+            ),
+            db,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "FORM_PLAN_INCOMPLETE"
+    db.expire_all()
+    assert db.get(Application, application.id).revision == 1
+    assert db.query(FormPlan).count() == 1
+    assert db.query(OperatorApprovedAnswer).count() == 0
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_partial_plan_reusable_confirmation_preserves_global_blocker(tmp_path):
+    db = _db(tmp_path)
+    application, plan = _reviewed_plan(db)
+    plan.blockers_json = '["REQUIRED_FIELD_UNKNOWN","FORM_PLAN_INCOMPLETE"]'
+    db.commit()
+
+    result = await applications_route.confirm_application_answer(
+        application.id,
+        "nationality",
+        applications_route.ConfirmAnswerRequest(
+            plan_id=plan.plan_id,
+            application_revision=1,
+            value="Canadian",
+            reusable=True,
+            evidence_source="operator_confirmation",
+            evidence_reference="review-session-partial",
+        ),
+        db,
+    )
+
+    db.expire_all()
+    cloned = db.query(FormPlan).order_by(FormPlan.id.desc()).first()
+    cloned_domain = reconstruct_persisted_form_plan(cloned)
+    assert cloned_domain.blockers == (applications_route.ReasonCode.FORM_PLAN_INCOMPLETE,)
+    assert result.valid is False
+    assert db.query(OperatorApprovedAnswer).count() == 1
+    db.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "field_reason",
     [

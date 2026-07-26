@@ -75,14 +75,15 @@ _COMMON_CONTROLS = ("text", "textarea", "select", "radio", "checkbox", "file")
 _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     AdapterDescriptor(
         platform="workday",
-        adapter_version="1.0.0",
-        selector_version="workday-candidate-v1",
+        adapter_version="2.0.0",
+        selector_version="workday-candidate-v2",
         transport="browser",
         authentication_mode="persistent_profile",
         supported_controls=_COMMON_CONTROLS,
-        qualification=QualificationTier.DRY_RUN_ONLY,
+        qualification=QualificationTier.FIXTURE_QUALIFIED,
         qualified_form_scope=(),
         domains=("myworkdayjobs.com", "myworkday.com", "workday.com"),
+        execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
     ),
     AdapterDescriptor(
         platform="greenhouse",

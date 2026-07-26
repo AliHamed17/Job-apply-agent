@@ -256,18 +256,23 @@ def _job() -> JobData:
     )
 
 
-def test_current_adapters_have_no_final_execution_contract():
+def test_current_adapters_have_no_live_final_execution_scope():
     registry = SubmitterRegistry()
 
     for descriptor in registered_adapters():
         assert descriptor.allows_live_submission is False
         assert descriptor.allows_final_execution is False
-        assert descriptor.execution_contract_version is None
+        assert descriptor.qualified_form_scope == ()
+        if descriptor.platform == "workday":
+            assert descriptor.execution_contract_version == TWO_PHASE_EXECUTION_CONTRACT_VERSION
+            assert descriptor.qualification is QualificationTier.FIXTURE_QUALIFIED
+        else:
+            assert descriptor.execution_contract_version is None
 
     descriptor = adapter_for_platform("greenhouse")
     assert descriptor is not None
     registry.register_two_phase(_TwoPhaseAdapter(descriptor))
-    assert registry.get_inspector(_job()) is not None
+    assert registry.get_inspector(_job()) is None
     assert (
         registry.get_final_executor(
             _job(),

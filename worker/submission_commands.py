@@ -14,6 +14,10 @@ from celery import shared_task
 
 from core.application_audit import record_application_event
 from core.application_revision import preparation_is_current
+from core.async_lifecycle import (
+    SameEventLoopLifecycle,
+    cleanup_prepared_action_if_supported,
+)
 from core.config import Settings, get_settings
 from core.metrics import GOVERNOR_DENIALS
 from core.runtime_identity import get_runtime_identity, runtime_source_is_current
@@ -41,7 +45,6 @@ from core.submit_permits import (
     consume_final_submit_permit,
     validate_final_submit_permit,
 )
-from core.utils import run_async
 from db.models import (
     Application,
     FormPlan,
@@ -762,11 +765,19 @@ def execute_claimed_submission_command(
         )
 
     from jobs.models import JobData
-    from submitters.base import two_phase_registry
-    from submitters.platforms import adapter_for_url
+    from submitters.base import (  # noqa: PLC0415
+        AdapterPreflightContext,
+        supports_preflight_context,
+    )
+    from submitters.platforms import adapter_for_url  # noqa: PLC0415
 
     descriptor = adapter_for_url(job.apply_url or job.source_url or "")
-    resolved_registry = registry or two_phase_registry
+    if registry is None:
+        from submitters.registry import get_two_phase_registry  # noqa: PLC0415
+
+        resolved_registry = get_two_phase_registry()
+    else:
+        resolved_registry = registry
     job_data = JobData(
         title=job.title or "",
         company=job.company or "",
@@ -794,6 +805,51 @@ def execute_claimed_submission_command(
             now=timestamp,
         )
 
+    preflight_context: AdapterPreflightContext | None = None
+    if supports_preflight_context(executor):
+        try:
+            from profile.cv_content_cache import (  # noqa: PLC0415
+                get_selected_cv_artifact_by_id,
+                require_current_selected_cv_artifact,
+            )
+
+            selected_cv_id = str(application.selected_cv_id or "").strip()
+            if not selected_cv_id or selected_cv_id != domain_plan.selected_cv_id:
+                raise ValueError("selected CV identity changed")
+            selected_cv = get_selected_cv_artifact_by_id(
+                selected_cv_id,
+                cv_routing_path=runtime_settings.cv_routing_path,
+                cv_directory=runtime_settings.cv_directory,
+            )
+            if selected_cv is None:
+                raise ValueError("selected CV is unavailable")
+            selected_cv = require_current_selected_cv_artifact(
+                selected_cv,
+                expected_sha256=domain_plan.selected_cv_hash,
+            )
+            if selected_cv.cv_id != selected_cv_id:
+                raise ValueError("selected CV resolver returned another identity")
+            preflight_context = AdapterPreflightContext(
+                normalized_job_url=normalized_url,
+                selected_cv_id=selected_cv.cv_id,
+                selected_cv_hash=selected_cv.pdf_sha256,
+                resume_path=selected_cv.resolved_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "submission_preflight_cv_unavailable",
+                command_id=command_id,
+                attempt_id=attempt.id,
+                error_type=type(exc).__name__[:80],
+            )
+            return _finish_claimed_before_commit(
+                db,
+                command_id=command_id,
+                expected_claim_token=claim_token,
+                reason=ReasonCode.ATTACHMENT_UNVERIFIED,
+                now=_now(),
+            )
+
     if not _enter_claimed_preflight(
         db,
         command_id=command_id,
@@ -801,169 +857,220 @@ def execute_claimed_submission_command(
     ):
         return "superseded"
 
+    lifecycle = SameEventLoopLifecycle()
     try:
-        with prohibit_llm_generation():
-            raw_preflight = run_async(
-                executor.preflight(
-                    plan=domain_plan,
-                    permit=domain_permit,
-                )
-            )
-        preflight = parse_preflight_outcome(raw_preflight)
+        lifecycle.open()
     except Exception as exc:
         logger.warning(
-            "submission_preflight_failed",
+            "submission_async_lifecycle_unavailable",
             command_id=command_id,
             attempt_id=attempt.id,
             error_type=type(exc).__name__[:80],
         )
-        preflight = FailedBeforeCommitOutcome(reason_code=ReasonCode.INTERNAL_ERROR)
-
-    if not isinstance(preflight, PreparedFinalActionV1):
-        finishing_context = _lock_claimed_context(
-            db,
-            command_id=command_id,
-            expected_claim_token=claim_token,
-        )
-        if finishing_context is None:
-            return "superseded"
-        _application, attempt, command = finishing_context
-        _finish_attempt(
-            db,
-            attempt=attempt,
-            command=command,
-            outcome=preflight,
-            now=_now(),
-        )
-        db.commit()
-        return AttemptOutcome(preflight.kind).value
-
-    action = preflight
-    ready_result = _mark_claimed_attempt_ready(
-        db,
-        command_id=command_id,
-        expected_claim_token=claim_token,
-        action=action,
-        now=_now(),
-    )
-    if ready_result == "superseded":
-        return "superseded"
-    if ready_result == "invalid":
         return _finish_claimed_before_commit(
             db,
             command_id=command_id,
             expected_claim_token=claim_token,
-            reason=ReasonCode.FORM_CHANGED,
+            reason=ReasonCode.INTERNAL_ERROR,
             now=_now(),
         )
-
-    # This transaction is the ambiguity boundary. A crash after it commits can
-    # never be treated as a safe retry.
-    if governor is None:
-        from core.governor import GovernorUnavailableError, get_governor
-
-        try:
-            governor = get_governor(require_shared=True)
-        except GovernorUnavailableError:
-            governor = None
-
-    def governor_gate():
-        if governor is None:
-            return False, "governor backend unavailable"
-        return governor.reserve_final_action(
-            reservation_id=f"attempt-{attempt.id}",
-            platform=str(attempt.adapter_name or ""),
-        )
-
+    action: PreparedFinalActionV1 | None = None
     try:
-        boundary = _enter_commit_boundary(
+        try:
+            with prohibit_llm_generation():
+                preflight_call = (
+                    executor.preflight(
+                        plan=domain_plan,
+                        permit=domain_permit,
+                        context=preflight_context,
+                    )
+                    if preflight_context is not None
+                    else executor.preflight(
+                        plan=domain_plan,
+                        permit=domain_permit,
+                    )
+                )
+                raw_preflight = lifecycle.run(preflight_call)
+            preflight = parse_preflight_outcome(raw_preflight)
+        except Exception as exc:
+            logger.warning(
+                "submission_preflight_failed",
+                command_id=command_id,
+                attempt_id=attempt.id,
+                error_type=type(exc).__name__[:80],
+            )
+            preflight = FailedBeforeCommitOutcome(reason_code=ReasonCode.INTERNAL_ERROR)
+
+        if not isinstance(preflight, PreparedFinalActionV1):
+            finishing_context = _lock_claimed_context(
+                db,
+                command_id=command_id,
+                expected_claim_token=claim_token,
+            )
+            if finishing_context is None:
+                return "superseded"
+            _application, attempt, command = finishing_context
+            _finish_attempt(
+                db,
+                attempt=attempt,
+                command=command,
+                outcome=preflight,
+                now=_now(),
+            )
+            db.commit()
+            return AttemptOutcome(preflight.kind).value
+
+        action = preflight
+        ready_result = _mark_claimed_attempt_ready(
             db,
             command_id=command_id,
             expected_claim_token=claim_token,
-            job_url_hash=url_hash(normalized_url),
             action=action,
-            governor_gate=governor_gate,
+            now=_now(),
         )
-    except _CommitBoundaryRejectedError:
-        return AttemptOutcome.FAILED_BEFORE_COMMIT.value
-    if boundary is None:
-        return "superseded"
-    attempt, _command = boundary
+        if ready_result == "superseded":
+            return "superseded"
+        if ready_result == "invalid":
+            return _finish_claimed_before_commit(
+                db,
+                command_id=command_id,
+                expected_claim_token=claim_token,
+                reason=ReasonCode.FORM_CHANGED,
+                now=_now(),
+            )
 
-    # Hold the application/command row locks across the one irreversible
-    # adapter call. This is deliberately a short critical section: if the
-    # worker is alive but slow, stale reconciliation cannot publish UNKNOWN
-    # and authorize operator retry while the original click can still occur.
-    # If the worker process dies, its connection releases these locks while
-    # the already-committed COMMITTING stage remains available for quarantine.
-    commit_context = _lock_claimed_context(
-        db,
-        command_id=command_id,
-        expected_claim_token=claim_token,
-    )
-    if commit_context is None:
-        return "superseded"
-    _application, attempt, command = commit_context
-    if (
-        attempt.stage != AttemptStage.COMMITTING.value
-        or attempt.final_action_at is None
-        or attempt.final_submit_permit is None
-        or attempt.final_submit_permit.consumed_at is None
-    ):
-        db.rollback()
-        return "superseded"
+        # This transaction is the ambiguity boundary. A crash after it commits
+        # can never be treated as a safe retry.
+        if governor is None:
+            from core.governor import GovernorUnavailableError, get_governor
 
-    commit_started_at = _now()
-    if not action.binds(domain_plan, domain_permit, at=_aware(commit_started_at)):
+            try:
+                governor = get_governor(require_shared=True)
+            except GovernorUnavailableError:
+                governor = None
+
+        def governor_gate():
+            if governor is None:
+                return False, "governor backend unavailable"
+            return governor.reserve_final_action(
+                reservation_id=f"attempt-{attempt.id}",
+                platform=str(attempt.adapter_name or ""),
+            )
+
+        try:
+            boundary = _enter_commit_boundary(
+                db,
+                command_id=command_id,
+                expected_claim_token=claim_token,
+                job_url_hash=url_hash(normalized_url),
+                action=action,
+                governor_gate=governor_gate,
+            )
+        except _CommitBoundaryRejectedError:
+            return AttemptOutcome.FAILED_BEFORE_COMMIT.value
+        if boundary is None:
+            return "superseded"
+        attempt, _command = boundary
+
+        # Hold the application/command row locks across the one irreversible
+        # adapter call. This is deliberately a short critical section: if the
+        # worker is alive but slow, stale reconciliation cannot publish UNKNOWN
+        # and authorize operator retry while the original click can still occur.
+        # If the worker process dies, its connection releases these locks while
+        # the already-committed COMMITTING stage remains available for quarantine.
+        commit_context = _lock_claimed_context(
+            db,
+            command_id=command_id,
+            expected_claim_token=claim_token,
+        )
+        if commit_context is None:
+            return "superseded"
+        _application, attempt, command = commit_context
+        if (
+            attempt.stage != AttemptStage.COMMITTING.value
+            or attempt.final_action_at is None
+            or attempt.final_submit_permit is None
+            or attempt.final_submit_permit.consumed_at is None
+        ):
+            db.rollback()
+            return "superseded"
+
+        commit_started_at = _now()
+        if not action.binds(domain_plan, domain_permit, at=_aware(commit_started_at)):
+            _finish_attempt(
+                db,
+                attempt=attempt,
+                command=command,
+                outcome=UnknownOutcome(reason_code=ReasonCode.FINAL_ACTION_UNCONFIRMED),
+                now=commit_started_at,
+            )
+            db.commit()
+            return AttemptOutcome.UNKNOWN.value
+
+        try:
+            with prohibit_llm_generation():
+                raw_outcome = lifecycle.run(
+                    executor.commit(
+                        action=action,
+                        permit=domain_permit,
+                    )
+                )
+            outcome = parse_commit_outcome(raw_outcome)
+        except Exception as exc:
+            logger.warning(
+                "submission_commit_indeterminate",
+                command_id=command_id,
+                attempt_id=attempt.id,
+                error_type=type(exc).__name__[:80],
+            )
+            outcome = UnknownOutcome(reason_code=ReasonCode.INTERNAL_ERROR)
+
+        finished_at = _now()
+        if isinstance(outcome, ConfirmedSubmittedOutcome) and not _confirmed_evidence_is_valid(
+            attempt,
+            outcome,
+            observed_by=finished_at,
+        ):
+            outcome = UnknownOutcome(reason_code=ReasonCode.EVIDENCE_INVALID)
+        if isinstance(outcome, ConfirmedSubmittedOutcome):
+            _set_stage(attempt, AttemptStage.VERIFYING)
+        elif not isinstance(outcome, UnknownOutcome):
+            outcome = UnknownOutcome(reason_code=ReasonCode.FINAL_ACTION_UNCONFIRMED)
+
         _finish_attempt(
             db,
             attempt=attempt,
             command=command,
-            outcome=UnknownOutcome(reason_code=ReasonCode.FINAL_ACTION_UNCONFIRMED),
-            now=commit_started_at,
+            outcome=outcome,
+            now=finished_at,
         )
         db.commit()
-        return AttemptOutcome.UNKNOWN.value
-
-    try:
-        with prohibit_llm_generation():
-            raw_outcome = run_async(
-                executor.commit(
-                    action=action,
-                    permit=domain_permit,
+        return AttemptOutcome(outcome.kind).value
+    finally:
+        try:
+            with prohibit_llm_generation():
+                lifecycle.run(
+                    cleanup_prepared_action_if_supported(
+                        executor,
+                        action=action,
+                    )
                 )
+        except Exception as exc:
+            logger.warning(
+                "submission_async_lifecycle_cleanup_failed",
+                command_id=command_id,
+                attempt_id=attempt.id,
+                error_type=type(exc).__name__[:80],
             )
-        outcome = parse_commit_outcome(raw_outcome)
-    except Exception as exc:
-        logger.warning(
-            "submission_commit_indeterminate",
-            command_id=command_id,
-            attempt_id=attempt.id,
-            error_type=type(exc).__name__[:80],
-        )
-        outcome = UnknownOutcome(reason_code=ReasonCode.INTERNAL_ERROR)
-
-    finished_at = _now()
-    if isinstance(outcome, ConfirmedSubmittedOutcome) and not _confirmed_evidence_is_valid(
-        attempt,
-        outcome,
-        observed_by=finished_at,
-    ):
-        outcome = UnknownOutcome(reason_code=ReasonCode.EVIDENCE_INVALID)
-    if isinstance(outcome, ConfirmedSubmittedOutcome):
-        _set_stage(attempt, AttemptStage.VERIFYING)
-    elif not isinstance(outcome, UnknownOutcome):
-        outcome = UnknownOutcome(reason_code=ReasonCode.FINAL_ACTION_UNCONFIRMED)
-
-    _finish_attempt(
-        db,
-        attempt=attempt,
-        command=command,
-        outcome=outcome,
-        now=finished_at,
-    )
-    db.commit()
-    return AttemptOutcome(outcome.kind).value
+        try:
+            lifecycle.close()
+        except Exception as exc:
+            logger.warning(
+                "submission_async_lifecycle_close_failed",
+                command_id=command_id,
+                attempt_id=attempt.id,
+                error_type=type(exc).__name__[:80],
+            )
 
 
 def reconcile_stale_submission_commands(

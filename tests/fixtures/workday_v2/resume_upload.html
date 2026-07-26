@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <main>
+      <section data-automation-id="resumeUpload">
+        <div
+          data-automation-id="formField"
+          data-field-id="resume"
+          data-canonical-name="resume"
+          aria-required="true"
+        >
+          <label for="resume-file">Resume</label>
+          <input
+            id="resume-file"
+            data-automation-id="file-upload-input"
+            type="file"
+            accept=".pdf,application/pdf"
+            required
+          >
+        </div>
+      </section>
+      <div
+        data-automation-id="formField"
+        data-field-id="first_name"
+        data-canonical-name="first_name"
+        aria-required="true"
+      >
+        <label for="first-name">First name</label>
+        <input id="first-name" type="text" maxlength="100" required>
+      </div>
+      <div
+        data-automation-id="formField"
+        data-field-id="contact_email"
+        data-canonical-name="email"
+        aria-required="true"
+      >
+        <label for="contact-email">Email address</label>
+        <input id="contact-email" type="email" maxlength="200" required>
+      </div>
+    </main>
+  </body>
+</html>

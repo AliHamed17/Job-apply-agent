@@ -231,6 +231,25 @@ def option_set_hash(field: FormFieldV1) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def reusable_field_contract_fingerprint(
+    field: FormFieldV1,
+    *,
+    adapter_name: str,
+    adapter_version: str,
+    selector_version: str,
+) -> str:
+    """Hash one exact reusable field independently of cumulative form steps."""
+
+    payload = {
+        "adapter_name": adapter_name,
+        "adapter_version": adapter_version,
+        "selector_version": selector_version,
+        "field": field.model_dump(mode="json"),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _canonical_field(field: FormFieldV1) -> str:
     return canonical_fact_key(field.canonical_name or "")
 
@@ -605,6 +624,13 @@ class AnswerPolicyV1:
                 OperatorApprovedAnswer.adapter_version == context.adapter_version,
                 OperatorApprovedAnswer.selector_version == context.selector_version,
                 OperatorApprovedAnswer.form_fingerprint == context.form_fingerprint,
+                OperatorApprovedAnswer.field_contract_fingerprint
+                == reusable_field_contract_fingerprint(
+                    field,
+                    adapter_name=context.adapter_name,
+                    adapter_version=context.adapter_version,
+                    selector_version=context.selector_version,
+                ),
                 OperatorApprovedAnswer.policy_version == context.policy_version,
                 OperatorApprovedAnswer.revoked_at.is_(None),
             )
