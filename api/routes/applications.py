@@ -204,7 +204,8 @@ async def approve_application(app_id: int, db: Session = Depends(get_db)):
         from worker.tasks import submit_application_task
         settings = get_settings()
         if settings.tasks_always_eager:
-            submit_application_task.apply(args=[app.id])
+            import threading
+            threading.Thread(target=submit_application_task.apply, kwargs={"args": [app.id]}, daemon=True).start()
         else:
             submit_application_task.delay(app.id)
     except Exception as exc:
@@ -233,7 +234,12 @@ async def retry_application(app_id: int, db: Session = Depends(get_db)):
 
     try:
         from worker.tasks import submit_application_task
-        submit_application_task.apply(args=[app.id])
+        settings = get_settings()
+        if settings.tasks_always_eager:
+            import threading
+            threading.Thread(target=submit_application_task.apply, kwargs={"args": [app.id]}, daemon=True).start()
+        else:
+            submit_application_task.delay(app.id)
     except Exception as exc:
         logger.warning("retry_task_fallback", error=str(exc))
         app.status = JobStatus.SUBMITTED
