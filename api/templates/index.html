@@ -616,8 +616,9 @@
             <p class="text-dim mb-2" style="font-size:0.875rem;line-height:1.6;">
                 Paste one or more job URLs (one per line). Short links are automatically expanded.
                 Detection includes Greenhouse, Lever, Workday, LinkedIn, Indeed and more.
-                Detection does not mean submission qualification; the review screen shows the
-                exact adapter tier and keeps unqualified browser actions disabled.
+                Detection does not mean final-send qualification; the review screen shows the
+                exact adapter version, tier, and final-send eligibility and keeps unqualified
+                browser actions disabled.
             </p>
             <div class="form-group">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -627,7 +628,7 @@
                     </button>
                 </div>
                 <textarea id="ingest-url" class="ingest-textarea"
-                    placeholder="https://boards.greenhouse.io/company/jobs/123&#10;https://jobs.lever.co/company/abc&#10;https://bit.ly/job-link"></textarea>
+                    placeholder="https://boards.greenhouse.io/company/jobs/123&#10;https://jobs.lever.co/company/11111111-2222-4333-8444-555555555555/apply&#10;https://bit.ly/job-link"></textarea>
                 <div class="url-hint" id="url-hint"></div>
             </div>
         </div>

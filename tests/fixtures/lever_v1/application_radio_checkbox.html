@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><body>
+<form data-qa="application-form" data-site="sample-company" data-posting-id="11111111-2222-4333-8444-555555555555" action="https://jobs.lever.co/sample-company/11111111-2222-4333-8444-555555555555/apply" method="post" enctype="multipart/form-data">
+  <fieldset data-qa="application-field" data-field-id="work-mode">
+    <legend>Preferred work mode</legend>
+    <input type="radio" name="cards[mode]" value="hybrid" data-option-id="mode-hybrid" data-option-label="Hybrid" required>
+    <input type="radio" name="cards[mode]" value="remote" data-option-id="mode-remote" data-option-label="Remote" required>
+  </fieldset>
+  <div data-qa="application-field" data-field-id="updates">
+    <label>Receive application updates</label><input type="checkbox" name="updates" value="yes">
+  </div>
+  <div data-qa="application-field" data-field-id="candidate-resume" data-canonical-name="resume">
+    <label>Resume</label><input type="file" name="resume" accept=".pdf" required>
+  </div>
+  <button data-qa="btn-submit" type="submit">Submit application</button>
+</form>
+</body></html>

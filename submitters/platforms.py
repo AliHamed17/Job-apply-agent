@@ -43,6 +43,7 @@ class AdapterDescriptor:
     qualified_form_scope: tuple[str, ...]
     domains: tuple[str, ...]
     execution_contract_version: str | None = None
+    allow_subdomains: bool = True
 
     @property
     def allows_live_submission(self) -> bool:
@@ -121,14 +122,16 @@ _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     ),
     AdapterDescriptor(
         platform="lever",
-        adapter_version="0.1.0",
-        selector_version="legacy-v1",
-        transport="legacy_hybrid",
-        authentication_mode="optional_api_key",
+        adapter_version="1.0.0",
+        selector_version="lever-candidate-v2",
+        transport="browser",
+        authentication_mode="public_candidate_flow",
         supported_controls=_COMMON_CONTROLS,
-        qualification=QualificationTier.DRY_RUN_ONLY,
+        qualification=QualificationTier.FIXTURE_QUALIFIED,
         qualified_form_scope=(),
-        domains=("jobs.lever.co", "lever.co"),
+        domains=("jobs.lever.co", "jobs.eu.lever.co"),
+        execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
+        allow_subdomains=False,
     ),
     AdapterDescriptor(
         platform="ashby",
@@ -225,8 +228,8 @@ _ADAPTERS_BY_PLATFORM: Mapping[str, AdapterDescriptor] = MappingProxyType(
 )
 
 
-def _matches_domain(hostname: str, domain: str) -> bool:
-    return hostname == domain or hostname.endswith(f".{domain}")
+def _matches_domain(hostname: str, domain: str, *, allow_subdomains: bool) -> bool:
+    return hostname == domain or (allow_subdomains and hostname.endswith(f".{domain}"))
 
 
 def detect_platform(url: str) -> str:
@@ -241,7 +244,14 @@ def detect_platform(url: str) -> str:
     for descriptor in _ADAPTERS:
         if descriptor.platform == "greenhouse":
             continue
-        if any(_matches_domain(hostname, domain) for domain in descriptor.domains):
+        if any(
+            _matches_domain(
+                hostname,
+                domain,
+                allow_subdomains=descriptor.allow_subdomains,
+            )
+            for domain in descriptor.domains
+        ):
             return descriptor.platform
     return "generic_portal" if hostname else "unknown"
 

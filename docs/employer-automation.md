@@ -131,18 +131,21 @@ POST /api/applications/batch-approve
 
 The detector recognizes Workday, Greenhouse, Lever, Ashby, Workable,
 SmartRecruiters, Jobvite, iCIMS, Comeet, LinkedIn, and Indeed. Detection is not
-submission qualification. Workday v2 and Greenhouse v1 have versioned
-candidate-browser implementations, but both remain fixture-qualified with an
-empty live form scope. Their real-URL inspection and final action are disabled.
+submission qualification. Workday v2, Greenhouse v1, and Lever v1 have
+versioned candidate-browser implementations, but all remain fixture-qualified
+with empty live form scopes. Their real-URL inspection and final action are
+disabled.
 Employer API transports are separate and disabled unless legitimate,
 tenant-bound authorization is explicitly implemented and qualified.
+Candidate-browser and API transports never silently switch between each other.
 
 Every candidate-browser adapter shares the same rules:
 
 - required unknown field → `REQUIRED_FIELD_UNKNOWN`;
 - security challenge → review/cooldown;
 - missing selector before submit → `SELECTOR_DRIFT`;
-- submit clicked without confirmation → `FINAL_ACTION_UNCONFIRMED` and `unknown`;
+- possible final action without exact employer confirmation →
+  `FINAL_ACTION_UNCONFIRMED` and `unknown`;
 - unsupported portal → reviewable draft.
 
 Employer pages change. A fixture-qualified adapter proves only its sanitized

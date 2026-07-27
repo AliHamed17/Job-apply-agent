@@ -350,6 +350,7 @@ def _same_execution_identity(
         and left.qualification == right.qualification
         and left.qualified_form_scope == right.qualified_form_scope
         and left.domains == right.domains
+        and left.allow_subdomains == right.allow_subdomains
     )
 
 

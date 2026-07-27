@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <style>
+    .submit-shell:has([data-proof-proxy]) button[data-qa="btn-submit"] {
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<section class="submit-shell">
+  <form data-qa="application-form" data-site="sample-company" data-posting-id="11111111-2222-4333-8444-555555555555" action="https://jobs.lever.co/sample-company/11111111-2222-4333-8444-555555555555/apply" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="authenticity_token" value="sanitized-token">
+    <div data-qa="application-field" data-field-id="candidate-name" data-canonical-name="full_name">
+      <label>Full name</label><input name="name" required>
+    </div>
+    <div data-qa="application-field" data-field-id="candidate-email" data-canonical-name="email">
+      <label>Email</label><input type="email" name="email" required>
+    </div>
+    <div data-qa="application-field" data-field-id="candidate-resume" data-canonical-name="resume">
+      <label>Resume</label><input type="file" name="resume" accept=".pdf,.docx" required>
+    </div>
+    <button data-qa="btn-submit" type="submit">Submit application</button>
+  </form>
+</section>
+</body>
+</html>

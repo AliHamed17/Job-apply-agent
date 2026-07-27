@@ -49,12 +49,14 @@ resume when profile persistence fails.
 1.  **Ingestion Layer**: WhatsApp Cloud API webhook handler with interactive button routing (Approve/Skip/Edit).
 2.  **Job Discovery**: 
     - URL expansion (Shorteners) and normalization.
-    - Parsers for **Greenhouse**, **Lever**, **JSON-LD (Schema.org)**, and a **General HTML Heuristic** fallback.
+    - Parsers for **Greenhouse**, exact-host **Lever**, **JSON-LD
+      (Schema.org)**, and a **General HTML Heuristic** fallback.
 3.  **Scoring Engine**: Weighted multi-factor matching (Title, Keywords, Location/Remote, Seniority, Employment Type).
 4.  **LLM Generation**: Generates Cover Letters, Recruiter Messages, and Q&A answers with strict guardrails (no fabrication, placeholder detection).
 5.  **Submission System**:
     - Evidence-verified, two-phase candidate-browser adapters for Workday v2 and
-      Greenhouse v1, currently limited to sanitized fixture qualification.
+      Greenhouse v1 and Lever v1, currently limited to sanitized fixture
+      qualification with empty live form scopes.
     - Employer API transports remain disabled unless separately authorized and
       tenant-bound; legacy Greenhouse/Lever API claims are not submission paths.
     - **DraftOnly Submitter** (Fallback for manual application or unsupported boards).
