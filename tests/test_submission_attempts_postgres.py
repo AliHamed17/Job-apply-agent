@@ -129,7 +129,9 @@ def test_postgres_serializes_profile_versions_across_runner_sessions(
 
 
 def _seed_reviewed(factory):
-    suffix = uuid4().hex
+    # Greenhouse candidate job identifiers are numeric. Keep the seed unique
+    # without weakening canonical adapter routing with a synthetic hex ID.
+    suffix = str(uuid4().int % (10**20))
     now = datetime.now(UTC).replace(tzinfo=None)
     url = f"https://boards.greenhouse.io/acme/jobs/{suffix}"
     descriptor = adapter_for_url(url)

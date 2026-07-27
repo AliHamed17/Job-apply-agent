@@ -52,9 +52,11 @@ resume when profile persistence fails.
     - Parsers for **Greenhouse**, **Lever**, **JSON-LD (Schema.org)**, and a **General HTML Heuristic** fallback.
 3.  **Scoring Engine**: Weighted multi-factor matching (Title, Keywords, Location/Remote, Seniority, Employment Type).
 4.  **LLM Generation**: Generates Cover Letters, Recruiter Messages, and Q&A answers with strict guardrails (no fabrication, placeholder detection).
-5.  **Submission System**: 
-    - **Greenhouse Harvest API** (Candidate creation).
-    - **Lever Postings API** (Form data submission).
+5.  **Submission System**:
+    - Evidence-verified, two-phase candidate-browser adapters for Workday v2 and
+      Greenhouse v1, currently limited to sanitized fixture qualification.
+    - Employer API transports remain disabled unless separately authorized and
+      tenant-bound; legacy Greenhouse/Lever API claims are not submission paths.
     - **DraftOnly Submitter** (Fallback for manual application or unsupported boards).
 6.  **Worker Pipeline**: 5-stage Celery task chain with **Approval Enforcement** (won't submit unless status is `APPROVED`).
 7.  **Dashboard UI**: A sleek, dark-themed management portal to review pending applications, edit cover letters, and track pipeline stats.

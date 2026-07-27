@@ -293,9 +293,10 @@ job-agent/
 │   ├── models.py           # UserProfile Pydantic model
 │   └── loader.py           # YAML loader with validation
 ├── submitters/             # Job board integrations
-│   ├── base.py             # Abstract interface + DraftOnly + Registry
-│   ├── greenhouse.py       # Greenhouse Harvest API
-│   └── lever.py            # Lever Postings API
+│   ├── base.py             # Typed two-phase interface + safe registry
+│   ├── workday_v2.py       # Fixture-qualified candidate-browser adapter
+│   ├── greenhouse_v1.py    # Fixture-qualified candidate-browser adapter
+│   └── greenhouse.py       # Deprecated fail-closed compatibility shim
 ├── worker/                 # Async task pipeline
 │   ├── celery_app.py       # Celery configuration
 │   └── tasks.py            # 5-stage pipeline with approval enforcement

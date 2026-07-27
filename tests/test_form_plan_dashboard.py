@@ -194,6 +194,39 @@ def test_send_requires_exact_live_qualified_adapter_and_form_scope() -> None:
     assert "blockers.push(...adapterQualificationBlockers(application));" in blockers
 
 
+def test_inspection_and_preparation_use_adapter_capabilities_not_platform_names() -> None:
+    assert "function adapterCapabilityForPlatform(platform)" in APP_JS
+    assert "function requiresVersionedFormPlan(application)" in APP_JS
+    assert "application?.requires_versioned_form_plan === true" in APP_JS
+    assert "capability?.execution_contract_version === 'two-phase-v2'" in APP_JS
+    assert "function adapterInspectionBlockers(application)" in APP_JS
+    inspection = APP_JS.split(
+        "function adapterInspectionBlockers(application)",
+        maxsplit=1,
+    )[1].split(
+        "function adapterQualificationBlockers",
+        maxsplit=1,
+    )[0]
+    assert "capability.execution_contract_version !== 'two-phase-v2'" in inspection
+    assert "'dry_run_qualified', 'live_canary_qualified'" in inspection
+    assert "capability.qualified_form_scope.length === 0" in inspection
+    assert "real-URL inspection is disabled" in inspection
+
+    modal = APP_JS.split(
+        "const isPending = isReviewableApplication(app);",
+        maxsplit=1,
+    )[1].split(
+        "const retryBtn = $('btn-retry-app');",
+        maxsplit=1,
+    )[0]
+    assert "const requiresPlan = requiresVersionedFormPlan(app);" in modal
+    assert "const inspectionBlockers = adapterInspectionBlockers(app);" in modal
+    assert "isPending && requiresPlan" in modal
+    assert "inspectionBlockers.length > 0" in modal
+    assert "app.platform === 'workday'" not in modal
+    assert "current employer form" in modal
+
+
 def test_send_rechecks_form_plan_expiry_and_invalidation_at_click_time() -> None:
     assert "function parseServerTimestamp(rawValue)" in APP_JS
     validity = APP_JS.split(

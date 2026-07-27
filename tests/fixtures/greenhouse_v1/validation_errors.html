@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en" data-greenhouse-variant="hosted">
+  <body>
+    <form id="application_form" data-greenhouse-application>
+      <div data-gh-field data-field-id="resume" data-canonical-name="resume" data-required="true">
+        <label>Resume</label>
+        <input name="resume" type="file" required accept=".pdf">
+      </div>
+      <div data-gh-field data-field-id="question_required" data-required="true">
+        <label>Required custom answer</label>
+        <input name="question_required" type="text" required>
+        <span class="field-error" role="alert" data-qa="validation-error">
+          This field requires review
+        </span>
+      </div>
+      <button id="submit_app" type="submit">Submit application</button>
+    </form>
+  </body>
+</html>

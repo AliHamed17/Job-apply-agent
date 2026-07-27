@@ -165,6 +165,11 @@ class ApplicationResponse(BaseModel):
     form_plan_id: str | None = None
     form_plan_fingerprint: str | None = None
     form_plan_valid: bool = False
+    form_plan_review_ready: bool = False
+    requires_versioned_form_plan: bool = False
+    form_plan_adapter_name: str | None = None
+    form_plan_adapter_version: str | None = None
+    form_plan_selector_version: str | None = None
     form_plan_expires_at: str | None = None
     form_plan_invalidated_at: str | None = None
     form_plan_uses_local_llm: bool = False
@@ -832,6 +837,11 @@ async def list_applications(
                 form_plan_id=form_plan.plan_id if form_plan else None,
                 form_plan_fingerprint=form_plan.fingerprint if form_plan else None,
                 form_plan_valid=_form_plan_valid(form_plan, app),
+                form_plan_review_ready=_form_plan_review_ready(form_plan, app),
+                requires_versioned_form_plan=_requires_versioned_form_plan(app),
+                form_plan_adapter_name=form_plan.adapter_name if form_plan else None,
+                form_plan_adapter_version=form_plan.adapter_version if form_plan else None,
+                form_plan_selector_version=form_plan.selector_version if form_plan else None,
                 form_plan_expires_at=(form_plan.expires_at.isoformat() if form_plan else None),
                 form_plan_invalidated_at=(
                     form_plan.invalidated_at.isoformat()
@@ -908,6 +918,11 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         form_plan_id=form_plan.plan_id if form_plan else None,
         form_plan_fingerprint=form_plan.fingerprint if form_plan else None,
         form_plan_valid=_form_plan_valid(form_plan, app),
+        form_plan_review_ready=_form_plan_review_ready(form_plan, app),
+        requires_versioned_form_plan=_requires_versioned_form_plan(app),
+        form_plan_adapter_name=form_plan.adapter_name if form_plan else None,
+        form_plan_adapter_version=form_plan.adapter_version if form_plan else None,
+        form_plan_selector_version=form_plan.selector_version if form_plan else None,
         form_plan_expires_at=(form_plan.expires_at.isoformat() if form_plan else None),
         form_plan_invalidated_at=(
             form_plan.invalidated_at.isoformat() if form_plan and form_plan.invalidated_at else None
@@ -1182,7 +1197,7 @@ async def inspect_application_form(
                 "The selected CV attachment could not be verified."
             ),
             ReasonCode.SELECTOR_DRIFT.value: (
-                "The Workday form differs from the qualified selector version."
+                "The employer form differs from the qualified selector version."
             ),
         }
         logger.warning(

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-greenhouse-variant="hosted">
+  <body>
+    <form id="application_form" data-greenhouse-application>
+      <div data-gh-field data-field-id="first_name" data-canonical-name="first_name" data-required="true">
+        <label>First name</label>
+        <input name="first_name" type="text" required maxlength="80">
+      </div>
+      <div data-gh-field data-field-id="email" data-canonical-name="email" data-required="true">
+        <label>Email</label>
+        <input name="email" type="email" required maxlength="200">
+      </div>
+      <div data-gh-field data-field-id="resume" data-canonical-name="resume" data-required="true">
+        <label>Resume</label>
+        <input id="resume" name="resume" type="file" required accept=".pdf,.docx">
+        <span data-qa="resume-upload-complete" data-upload-id="upload-fixture"
+              data-file-name="resume-fixture.pdf"></span>
+      </div>
+      <div data-gh-field data-field-id="question_python" data-required="true">
+        <label>Years of Python experience</label>
+        <input name="question_python" type="number" required min="0" max="60">
+      </div>
+      <div data-gh-field data-field-id="question_work_mode">
+        <label>Preferred work mode</label>
+        <select name="question_work_mode">
+          <option value="">Choose</option>
+          <option data-option-id="remote" value="remote">Remote</option>
+          <option data-option-id="hybrid" value="hybrid">Hybrid</option>
+        </select>
+      </div>
+      <button id="submit_app" type="submit">Submit application</button>
+    </form>
+  </body>
+</html>
