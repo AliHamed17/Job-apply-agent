@@ -14,6 +14,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from urllib.parse import urlparse
 
+from submitters.greenhouse_identity import is_greenhouse_candidate_url
+
 TWO_PHASE_EXECUTION_CONTRACT_VERSION = "two-phase-v2"
 
 
@@ -68,6 +70,22 @@ class AdapterDescriptor:
 
 
 _COMMON_CONTROLS = ("text", "textarea", "select", "radio", "checkbox", "file")
+_GREENHOUSE_CONTROLS = (
+    "text",
+    "textarea",
+    "select",
+    "multi_select",
+    "radio",
+    "checkbox",
+    "date",
+    "number",
+    "email",
+    "phone",
+    "url",
+    "file",
+    "consent",
+    "attestation",
+)
 
 # PR1 deliberately qualifies no adapter for live use.  The first five planned
 # ATS families remain available for safe inspection/dry-run work; legacy
@@ -87,14 +105,19 @@ _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     ),
     AdapterDescriptor(
         platform="greenhouse",
-        adapter_version="0.1.0",
-        selector_version="legacy-v1",
-        transport="legacy_hybrid",
-        authentication_mode="optional_api_key",
-        supported_controls=_COMMON_CONTROLS,
-        qualification=QualificationTier.DRY_RUN_ONLY,
+        adapter_version="1.0.0",
+        selector_version="greenhouse-candidate-v9",
+        transport="browser",
+        authentication_mode="public_candidate_flow",
+        supported_controls=_GREENHOUSE_CONTROLS,
+        qualification=QualificationTier.FIXTURE_QUALIFIED,
         qualified_form_scope=(),
-        domains=("greenhouse.io", "greenhouse-hosted.com"),
+        domains=(
+            "boards.greenhouse.io",
+            "job-boards.greenhouse.io",
+            "greenhouse-hosted.com",
+        ),
+        execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
     ),
     AdapterDescriptor(
         platform="lever",
@@ -208,8 +231,16 @@ def _matches_domain(hostname: str, domain: str) -> bool:
 
 def detect_platform(url: str) -> str:
     """Return a stable platform name without performing network requests."""
-    hostname = (urlparse((url or "").strip()).hostname or "").lower().rstrip(".")
+    candidate_url = (url or "").strip()
+    if is_greenhouse_candidate_url(candidate_url):
+        return "greenhouse"
+    try:
+        hostname = (urlparse(candidate_url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return "unknown"
     for descriptor in _ADAPTERS:
+        if descriptor.platform == "greenhouse":
+            continue
         if any(_matches_domain(hostname, domain) for domain in descriptor.domains):
             return descriptor.platform
     return "generic_portal" if hostname else "unknown"

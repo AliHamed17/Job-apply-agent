@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-greenhouse-variant="job_id">
+  <body>
+    <main data-greenhouse-job-id="123456">
+      <form data-greenhouse-application>
+        <div class="field" data-field-id="email" data-canonical-name="email" data-required="true">
+          <label>Email</label>
+          <input name="email" type="email" required>
+        </div>
+        <div class="field" data-field-id="resume" data-canonical-name="resume" data-required="true">
+          <label>CV</label>
+          <input name="resume" type="file" required accept=".pdf,.docx">
+        </div>
+        <fieldset data-field-id="question_location" data-required="true">
+          <legend>Preferred office</legend>
+          <input id="office-north" name="question_location" type="radio" value="north"
+                 data-option-id="north">
+          <label for="office-north">North</label>
+          <input id="office-south" name="question_location" type="radio" value="south"
+                 data-option-id="south">
+          <label for="office-south">South</label>
+        </fieldset>
+        <button type="submit">Submit application</button>
+      </form>
+    </main>
+  </body>
+</html>

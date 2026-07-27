@@ -1101,6 +1101,50 @@ function hasActiveSubmissionAttempt(application) {
     return ACTIVE_SUBMISSION_STAGES.has(stage);
 }
 
+function adapterCapabilityForPlatform(platform) {
+    if (!Array.isArray(state.adapterCapabilities)) return null;
+    const normalized = String(platform || '').trim().toLowerCase();
+    return state.adapterCapabilities.find(adapter => adapter.ats === normalized) || null;
+}
+
+function requiresVersionedFormPlan(application) {
+    const capability = adapterCapabilityForPlatform(application?.platform);
+    return (
+        application?.requires_versioned_form_plan === true
+        || capability?.execution_contract_version === 'two-phase-v2'
+    );
+}
+
+function adapterInspectionBlockers(application) {
+    const capability = adapterCapabilityForPlatform(application?.platform);
+    if (!capability) {
+        return [
+            state.adapterProbeStatus === 'authentication_required'
+                ? 'Enter the API Secret to verify ATS inspection qualification'
+                : 'ATS inspection qualification is unavailable'
+        ];
+    }
+    if (capability.execution_contract_version !== 'two-phase-v2') {
+        return ['This ATS does not have a versioned two-phase browser adapter'];
+    }
+    if (!['dry_run_qualified', 'live_canary_qualified'].includes(
+        capability.qualification_tier
+    )) {
+        return [
+            `${capability.ats} ${capability.adapter_version} is `
+            + `${capability.qualification_tier.replace(/_/g, ' ')} only; `
+            + 'real-URL inspection is disabled'
+        ];
+    }
+    if (
+        !Array.isArray(capability.qualified_form_scope)
+        || capability.qualified_form_scope.length === 0
+    ) {
+        return ['No qualified real-form scope is recorded for this adapter version'];
+    }
+    return [];
+}
+
 function adapterQualificationBlockers(application) {
     const blockers = [];
     if (!Array.isArray(state.adapterCapabilities)) {
@@ -2032,24 +2076,32 @@ window.openReviewModal = async appId => {
     const canRetry = ['failed', 'failed_before_commit', 'draft_only'].includes(outcome);
     const isPrepared = isPreparedApplication(app);
     const inspectBtn = $('btn-inspect-app');
+    const requiresPlan = requiresVersionedFormPlan(app);
+    const inspectionBlockers = adapterInspectionBlockers(app);
     if (inspectBtn) {
-        inspectBtn.style.display = isPending && app.platform === 'workday'
+        inspectBtn.style.display = isPending && requiresPlan
             ? 'inline-flex'
             : 'none';
-        inspectBtn.disabled = app.material_eligible !== true || !app.selected_cv_id;
-        inspectBtn.title = inspectBtn.disabled
+        inspectBtn.disabled = (
+            app.material_eligible !== true
+            || !app.selected_cv_id
+            || inspectionBlockers.length > 0
+        );
+        inspectBtn.title = app.material_eligible !== true || !app.selected_cv_id
             ? 'A routed CV and evidence-eligible material are required first'
-            : 'May upload or replace the routed CV to verify it; never clicks final submit';
+            : inspectionBlockers.length
+                ? inspectionBlockers.join(' · ')
+                : 'May upload or replace the routed CV to verify it; never clicks final submit';
         inspectBtn.onclick = () => inspectApplicationForm(app.id);
     }
     $('btn-approve-app').style.display = isPending ? 'inline-flex' : 'none';
     $('btn-reject-app').style.display  = isPending ? 'inline-flex' : 'none';
     $('btn-approve-app').disabled = (
-        app.platform === 'workday'
+        requiresPlan
         && app.form_plan_review_ready !== true
     );
     $('btn-approve-app').title = $('btn-approve-app').disabled
-        ? 'Inspect and resolve the current Workday form before preparation'
+        ? 'Inspect and resolve the current employer form before preparation'
         : '';
     $('btn-reject-app').disabled = false;
     $('btn-preview-cv').disabled = false;

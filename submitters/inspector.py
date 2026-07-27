@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
 import structlog
+
 from core.config import get_settings
+from submitters.platforms import TWO_PHASE_EXECUTION_CONTRACT_VERSION, registered_adapters
 
 logger = structlog.get_logger(__name__)
 
@@ -25,21 +28,15 @@ def inspect_submitter_health() -> SubmitterHealthReport:
     playwright_ok = False
     try:
         import playwright  # noqa: F401
+
         playwright_ok = True
     except ImportError:
         playwright_ok = False
 
     platforms = [
-        "linkedin_v2",
-        "greenhouse",
-        "lever",
-        "ashby",
-        "workable",
-        "smartrecruiters",
-        "jobvite",
-        "indeed",
-        "icims",
-        "comeet",
+        descriptor.platform
+        for descriptor in registered_adapters()
+        if descriptor.execution_contract_version == TWO_PHASE_EXECUTION_CONTRACT_VERSION
     ]
 
     return SubmitterHealthReport(

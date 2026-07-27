@@ -129,19 +129,25 @@ POST /api/applications/batch-approve
 
 ## Platform coverage
 
-The registry detects Workday, Greenhouse, Lever, Ashby, Workable,
-SmartRecruiters, Jobvite, iCIMS, Comeet, LinkedIn, and Indeed. Public APIs are
-preferred when available. Browser fallbacks share the same rules:
+The detector recognizes Workday, Greenhouse, Lever, Ashby, Workable,
+SmartRecruiters, Jobvite, iCIMS, Comeet, LinkedIn, and Indeed. Detection is not
+submission qualification. Workday v2 and Greenhouse v1 have versioned
+candidate-browser implementations, but both remain fixture-qualified with an
+empty live form scope. Their real-URL inspection and final action are disabled.
+Employer API transports are separate and disabled unless legitimate,
+tenant-bound authorization is explicitly implemented and qualified.
+
+Every candidate-browser adapter shares the same rules:
 
 - required unknown field → `REQUIRED_FIELD_UNKNOWN`;
 - security challenge → review/cooldown;
 - missing selector before submit → `SELECTOR_DRIFT`;
-- submit clicked without confirmation → `SUBMIT_UNCONFIRMED` and `unknown`;
+- submit clicked without confirmation → `FINAL_ACTION_UNCONFIRMED` and `unknown`;
 - unsupported portal → reviewable draft.
 
-Employer pages change. “Supported” means there is a deterministic adapter and
-safe failure behavior; it is not a guarantee that every tenant-specific form
-will submit without new selector or workflow metadata.
+Employer pages change. A fixture-qualified adapter proves only its sanitized
+offline contract. It does not claim current tenant support, real-URL
+qualification, or permission to submit.
 
 ## Configuration
 

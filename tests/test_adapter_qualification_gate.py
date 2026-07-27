@@ -74,7 +74,11 @@ def test_detection_and_qualification_share_one_adapter_inventory():
     assert len({descriptor.platform for descriptor in descriptors}) == len(descriptors)
 
     for descriptor in descriptors:
-        url = f"https://{descriptor.domains[0]}/jobs/qualification-test"
+        url = (
+            "https://boards.greenhouse.io/qualification/jobs/1"
+            if descriptor.platform == "greenhouse"
+            else f"https://{descriptor.domains[0]}/jobs/qualification-test"
+        )
         assert detect_platform(url) == descriptor.platform
         assert adapter_for_url(url) is descriptor
         assert adapter_for_platform(descriptor.platform) is descriptor
@@ -90,24 +94,38 @@ def test_detection_and_qualification_share_one_adapter_inventory():
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.DRY_RUN_ONLY
-    } == _PLANNED_FIRST_FIVE - {"workday"}
+    } == _PLANNED_FIRST_FIVE - {"workday", "greenhouse"}
     assert {
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.FIXTURE_QUALIFIED
-    } == {"workday"}
+    } == {"workday", "greenhouse"}
 
 
 @pytest.mark.asyncio
-async def test_ats_inventory_exposes_fixture_only_workday_as_send_disabled():
+async def test_ats_inventory_exposes_fixture_only_browser_adapters_as_send_disabled():
     inventory = await list_ats_adapters()
     workday = next(adapter for adapter in inventory if adapter.ats == "workday")
+    greenhouse = next(adapter for adapter in inventory if adapter.ats == "greenhouse")
 
     assert workday.qualification_tier == "fixture_qualified"
     assert workday.final_execution_enabled is False
     assert workday.qualified_form_scope == []
     assert workday.adapter_version == "2.0.3"
     assert workday.selector_version == "workday-candidate-v2.4"
+    assert greenhouse.qualification_tier == "fixture_qualified"
+    assert greenhouse.final_execution_enabled is False
+    assert greenhouse.qualified_form_scope == []
+    assert greenhouse.adapter_version == "1.0.0"
+    assert greenhouse.selector_version == "greenhouse-candidate-v9"
+    assert greenhouse.execution_contract_version == "two-phase-v2"
+    descriptor = adapter_for_platform("greenhouse")
+    assert descriptor is not None
+    assert descriptor.domains == (
+        "boards.greenhouse.io",
+        "job-boards.greenhouse.io",
+        "greenhouse-hosted.com",
+    )
 
 
 @pytest.mark.parametrize(

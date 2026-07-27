@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-greenhouse-variant="hosted">
+  <body>
+    <form id="application_form" data-greenhouse-application>
+      <div data-gh-field data-field-id="resume" data-canonical-name="resume" data-required="true">
+        <label>Resume</label>
+        <input name="resume" type="file" required accept=".pdf">
+      </div>
+      <fieldset data-field-id="gender" data-section="eeoc" data-required="true">
+        <legend>Gender</legend>
+        <input id="gender-a" name="gender" type="radio" value="option_a">
+        <label for="gender-a">Option A</label>
+        <input id="gender-b" name="gender" type="radio" value="option_b">
+        <label for="gender-b">Option B</label>
+      </fieldset>
+      <div data-gh-field data-field-id="privacy_consent"
+           data-field-category="gdpr consent" data-required="true">
+        <label>I consent to the privacy notice</label>
+        <input name="privacy_consent" type="checkbox" required>
+      </div>
+      <div data-gh-field data-field-id="truth_attestation"
+           data-field-category="attestation" data-required="true">
+        <label>I certify that my answers are accurate</label>
+        <input name="truth_attestation" type="checkbox" required>
+      </div>
+      <button id="submit_app" type="submit">Submit application</button>
+    </form>
+  </body>
+</html>

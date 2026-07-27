@@ -1402,12 +1402,15 @@ async def test_mismatched_preflight_handle_invalidates_plan_and_requires_reinspe
         "_validate_selected_cv",
         lambda _application: None,
     )
-    await applications_route.retry_application(reviewed.application_id, db=db)
+    with pytest.raises(HTTPException) as retry_exc:
+        await applications_route.retry_application(reviewed.application_id, db=db)
+    assert retry_exc.value.status_code == 409
+    assert retry_exc.value.detail["code"] == "FORM_PLAN_REQUIRED"
     db.close()
 
     with pytest.raises(SubmissionAdmissionError) as exc:
         _admit(factory, reviewed, key="retry-with-stale-plan")
-    assert exc.value.reason_code == "FORM_CHANGED"
+    assert exc.value.reason_code == "APPLICATION_NOT_ELIGIBLE"
 
     verify = factory()
     assert verify.query(Submission).count() == 1

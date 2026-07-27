@@ -88,6 +88,9 @@ jobs:
           submitters/employer_workflows.py submitters/confirmation.py
           submitters/workday.py core/async_lifecycle.py
           submitters/workday_v2.py submitters/workday_playwright.py
+          submitters/greenhouse.py submitters/greenhouse_api.py
+          submitters/greenhouse_identity.py
+          submitters/greenhouse_v1.py submitters/greenhouse_playwright.py
           submitters/registry.py
       - name: Typed v4 submission orchestration
         run: >
@@ -176,6 +179,9 @@ jobs:
           scripts/build_v4_local_model_material_fixtures.py
           submitters/form_brain.py submitters/registry.py
           submitters/workday_v2.py submitters/workday_playwright.py
+          submitters/greenhouse.py submitters/greenhouse_api.py
+          submitters/greenhouse_identity.py
+          submitters/greenhouse_v1.py submitters/greenhouse_playwright.py
           worker/celery_app.py
           worker/submission_commands.py worker/task_dispatch.py worker/tasks.py
       - name: Compose validation

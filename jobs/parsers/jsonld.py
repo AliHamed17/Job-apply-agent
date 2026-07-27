@@ -131,7 +131,12 @@ def _find_job_postings(data: Any) -> list[dict]:
     return postings
 
 
-def _convert_posting(data: dict, source_url: str) -> JobData:
+def _convert_posting(
+    data: dict,
+    source_url: str,
+    *,
+    require_explicit_url: bool = False,
+) -> JobData:
     """Convert a single Schema.org JobPosting dict to our canonical JobData."""
     title = data.get("title", data.get("name", ""))
     company = ""
@@ -160,7 +165,10 @@ def _convert_posting(data: dict, source_url: str) -> JobData:
         requirements_raw = "\n".join(str(r) for r in requirements_raw)
     requirements = str(requirements_raw)
 
-    apply_url = data.get("url", source_url)
+    explicit_url = data.get("url")
+    if require_explicit_url and (not isinstance(explicit_url, str) or not explicit_url.strip()):
+        raise ValueError("JSONLD_EXPLICIT_URL_REQUIRED")
+    apply_url = explicit_url if isinstance(explicit_url, str) else source_url
 
     keywords_raw = data.get("skills", data.get("occupationalCategory", ""))
     keywords: list[str] = []
@@ -188,8 +196,17 @@ def _convert_posting(data: dict, source_url: str) -> JobData:
     )
 
 
-def parse_jsonld(html: str, source_url: str) -> list[JobData]:
+def parse_jsonld(
+    html: str,
+    source_url: str,
+    *,
+    require_explicit_url: bool = False,
+) -> list[JobData]:
     """Parse JSON-LD script tags for Schema.org JobPosting data.
+
+    ``require_explicit_url`` preserves target provenance for callers that
+    already have an authoritative application identity. A missing schema URL
+    must not inherit that identity and make unrelated metadata look trusted.
 
     Returns a list of JobData objects (may be empty if none found).
     """
@@ -222,7 +239,11 @@ def parse_jsonld(html: str, source_url: str) -> list[JobData]:
     jobs: list[JobData] = []
     for posting in all_postings:
         try:
-            job = _convert_posting(posting, source_url)
+            job = _convert_posting(
+                posting,
+                source_url,
+                require_explicit_url=require_explicit_url,
+            )
             if job.is_complete:
                 jobs.append(job)
         except Exception as exc:

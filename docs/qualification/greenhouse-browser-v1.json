@@ -1,0 +1,182 @@
+{
+  "adapter": {
+    "adapter_name": "greenhouse",
+    "adapter_version": "1.0.0",
+    "execution_contract_version": "two-phase-v2",
+    "selector_version": "greenhouse-candidate-v9",
+    "transport": "browser"
+  },
+  "achieved_tier": "fixture_qualified",
+  "fixture_evidence": {
+    "cases": [
+      {
+        "expected_reason_code": "ALREADY_APPLIED",
+        "expected_state": "already_applied",
+        "file": "already_applied.html",
+        "sha256": "fe754673680c5fd94e603a2355f3c8387a568cdae76e8c6baa2258ebb7ff8660"
+      },
+      {
+        "expected_reason_code": "CHALLENGE_DETECTED",
+        "expected_state": "challenge",
+        "file": "captcha.html",
+        "sha256": "8c786bfefdbbe42a1db9516d6e30ece212610fb761e64cebe39f0efa2bdc70e6"
+      },
+      {
+        "expected_reason_code": "JOB_CLOSED",
+        "expected_state": "closed",
+        "file": "closed_job.html",
+        "sha256": "a9a40b6670af832a4e3aca9e7071ed9b1a3a60fd839f8693349ce51ac9803115"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "compliance_consent.html",
+        "sha256": "74bc9a3f156f8dc2a77d1e01c24a3ae9b93855de32a5c77241bd09091bdfac30"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "conditional_expanded.html",
+        "sha256": "0a37ece1dcd268fd8db8dc58e018fd9751359dc1b4dedd168626155bdaa4144c"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "conditional_initial.html",
+        "sha256": "b259c5189b5658f32d7e8ae9f24e81916480987baece6a6f0765efe00e807004"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "duplicate_confirmation.html",
+        "sha256": "042a5bc761620ce00d2d574a7d97b012047234f89917324c7eaadcb67cbd08a7"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "embedded_form.html",
+        "sha256": "7a57c9a9839571d58fe8afe89c5051d43a27a7aa0ee71d9079c26bde64aa75c2"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "generic_thank_you.html",
+        "sha256": "8a8da8100d5349883a355e3e20f335ad3171079ea75065207f9242b83779e153"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "hidden_confirmation.html",
+        "sha256": "cd1c54b67a33bdb2d1516075f10d96d94f07ccc9a2142ba044aecb2a5f26c566"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "hosted_custom_questions.html",
+        "sha256": "fb81dac757a35cf93648a70a6576604f0ad9efb735a5e2e9380f2bec061fec9d"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "job_id_form.html",
+        "sha256": "5c6b5dbb302857741bf2dc120833bae9ae211faa2feaeb70759fcb3cd263036b"
+      },
+      {
+        "expected_reason_code": "SESSION_EXPIRED",
+        "expected_state": "login",
+        "file": "login.html",
+        "sha256": "3b0138971dd01061b3992b56a55763161174dc6e6400a3c447950ea25a824647"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "non_actionable_submit.html",
+        "sha256": "1f9b4241b543f6334dea2eb4c17c204f4d8e59a73028a18cc8f1d04d7bf28cc6"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "preexisting_confirmation.html",
+        "sha256": "9b5d0cb210f3aa769ce96b8529476a2b3a1c21ef05b26add079026d0b23e1fa4"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "selector_drift.html",
+        "sha256": "2393cee24fd3cb67a59e5d166a0d284b742998009a4a930356b60471b0740f75"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "submitter_proxy_actionability_drift.html",
+        "sha256": "b30b39c285bb37091f887f51305c2afa2b0949e6a44b08436fee2eca52d2204b"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "review",
+        "file": "upload_complete.html",
+        "sha256": "9251bd98578ca483fca29cb951d50b8094c198cd35e456c3cb902d55093d762f"
+      },
+      {
+        "expected_reason_code": "ATTACHMENT_UNVERIFIED",
+        "expected_state": "form",
+        "file": "upload_failed.html",
+        "sha256": "0975965c90ed8310fcf45a283b5562077ec1e8f71c8065f92de6d7e23bf4b13d"
+      },
+      {
+        "expected_reason_code": "ATTACHMENT_UNVERIFIED",
+        "expected_state": "form",
+        "file": "upload_pending.html",
+        "sha256": "9d569ba0e163f081d86b2b292d7ebb04571b537fb08283e2eff535824ced11dc"
+      },
+      {
+        "expected_reason_code": "REQUIRED_FIELD_UNKNOWN",
+        "expected_state": "form",
+        "file": "validation_errors.html",
+        "sha256": "442b503bb6d8a15dd9464318d5f4a7b889ed196e6243e7e1133c46dc94106848"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "confirmation",
+        "file": "verified_confirmation.html",
+        "sha256": "fc5f31202bbc1f3137b13410be108bd2d586185e6a602d3a7a2ef336caffd54c"
+      }
+    ],
+    "digest_algorithm": "sha256-lf-normalized-manifest-v1",
+    "fixture_count": 22,
+    "fixture_digest": "98fd27896ab0be06beecd64572a24fdedcc0fb62f96993686278bb80417ee4b7",
+    "fixture_directory": "tests/fixtures/greenhouse_v1"
+  },
+  "interpretation": "Sanitized offline fixture qualification only. It does not qualify a real form, a live canary, or an external final action.",
+  "qualification_gates": {
+    "final_external_action_enabled": false,
+    "fixture_contract": "passed",
+    "live_canary": "pending",
+    "qualified_form_scope": [],
+    "real_url_dry_run": "pending"
+  },
+  "recorded_on": "2026-07-27",
+  "safety_observations": {
+    "asynchronous_upload_mutations": "blocked_pending_exact_qualification",
+    "atomic_outcome_mapping": "total_stage_reason_typed_v1",
+    "atomic_status_allowlist": "native_or_two_explicit_pre_request_failures",
+    "attachment_transport_scope": "local_file_selection_only",
+    "external_network_used": false,
+    "evaluate_exception_after_gate": "unknown_non_retryable",
+    "final_control_actionability": "post_proxy_adjacent_exception_safe",
+    "final_action_performed": false,
+    "final_request_resource_type": "document",
+    "intrinsic_submit_exception": "invocation_ambiguous_no_cleanup",
+    "post_invocation_without_request": "unknown_non_retryable",
+    "private_data_used": false,
+    "real_application_used": false,
+    "submitter_proxy_cleanup": "all_pre_request_exits_restore_original_form",
+    "transport_contradiction": "gate_request_forces_invoked_unknown",
+    "stored_content_scope": [
+      "sanitized fixture identifiers",
+      "bounded states and reason codes",
+      "cryptographic digests"
+    ]
+  },
+  "schema_version": "ats-browser-qualification-report-v1"
+}

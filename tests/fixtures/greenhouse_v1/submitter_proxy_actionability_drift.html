@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-greenhouse-variant="hosted">
+  <head>
+    <style>
+      form:has(input[type="hidden"][name="commit"]) #submit_app {
+        pointer-events: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <form id="application_form" data-greenhouse-application method="post"
+          action="/fixture/jobs/123456" enctype="multipart/form-data" target="_self">
+      <div data-gh-field data-field-id="resume" data-canonical-name="resume"
+           data-required="true">
+        <label>Resume</label>
+        <input name="resume" type="file" required accept=".pdf">
+        <span data-qa="resume-upload-complete"
+              data-upload-id="fresh-fixture-receipt"
+              data-file-name="resume-randomized-fixture.pdf"></span>
+      </div>
+      <button id="submit_app" type="submit" name="commit"
+              value="submit_application">Submit application</button>
+    </form>
+  </body>
+</html>
