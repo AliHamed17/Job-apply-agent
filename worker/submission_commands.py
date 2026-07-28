@@ -56,6 +56,9 @@ from db.models import (
 from db.session import get_session_factory
 from ingestion.url_utils import normalize_url, url_hash
 from llm.execution_guard import prohibit_llm_generation
+from worker.control_plane_event_outbox import (
+    enqueue_control_plane_attempt_transition,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -212,6 +215,12 @@ def claim_submission_command(
     command.claim_token = secrets.token_hex(32)
     attempt.started_at = timestamp
     _set_stage(attempt, AttemptStage.INSPECTING)
+    enqueue_control_plane_attempt_transition(
+        db,
+        attempt=attempt,
+        command=command,
+        occurred_at=timestamp,
+    )
     db.commit()
     return command.id
 
@@ -322,6 +331,12 @@ def _finish_attempt(
             "profile_version": attempt.profile_version,
             "state": attempt.outcome,
         },
+    )
+    enqueue_control_plane_attempt_transition(
+        db,
+        attempt=attempt,
+        command=command,
+        occurred_at=now,
     )
 
 
@@ -492,6 +507,12 @@ def _enter_claimed_preflight(
         db.rollback()
         return False
     _set_stage(attempt, AttemptStage.PREPARING)
+    enqueue_control_plane_attempt_transition(
+        db,
+        attempt=attempt,
+        command=_command,
+        occurred_at=_now(),
+    )
     db.commit()
     return True
 
@@ -541,6 +562,12 @@ def _mark_claimed_attempt_ready(
         db.rollback()
         return "invalid"
     _set_stage(attempt, AttemptStage.READY)
+    enqueue_control_plane_attempt_transition(
+        db,
+        attempt=attempt,
+        command=command,
+        occurred_at=now,
+    )
     command.claimed_at = now
     db.commit()
     return "ready"
@@ -673,6 +700,12 @@ def _enter_commit_boundary(
         db.commit()
         raise _CommitBoundaryRejectedError(reason.value) from exc
     _set_stage(attempt, AttemptStage.COMMITTING)
+    enqueue_control_plane_attempt_transition(
+        db,
+        attempt=attempt,
+        command=command,
+        occurred_at=commit_at,
+    )
     attempt.final_action_at = commit_at
     consume_final_submit_permit(permit, now=commit_at)
     # Renew the lease in the same transaction as the ambiguity boundary. A
@@ -1035,6 +1068,12 @@ def execute_claimed_submission_command(
             outcome = UnknownOutcome(reason_code=ReasonCode.EVIDENCE_INVALID)
         if isinstance(outcome, ConfirmedSubmittedOutcome):
             _set_stage(attempt, AttemptStage.VERIFYING)
+            enqueue_control_plane_attempt_transition(
+                db,
+                attempt=attempt,
+                command=command,
+                occurred_at=finished_at,
+            )
         elif not isinstance(outcome, UnknownOutcome):
             outcome = UnknownOutcome(reason_code=ReasonCode.FINAL_ACTION_UNCONFIRMED)
 
@@ -1142,6 +1181,12 @@ def reconcile_stale_submission_commands(
             attempt.outcome = None
             attempt.status = project_legacy_status(AttemptStage.QUEUED)
             attempt.started_at = None
+            enqueue_control_plane_attempt_transition(
+                db,
+                attempt=attempt,
+                command=command,
+                occurred_at=timestamp,
+            )
         reconciled += 1
     db.commit()
     return reconciled

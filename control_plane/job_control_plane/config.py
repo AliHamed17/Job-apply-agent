@@ -1,0 +1,236 @@
+"""Fail-closed configuration for the isolated control plane."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
+
+from .crypto import (
+    private_key_from_base64url,
+    public_key_from_base64url,
+    public_key_to_base64url,
+)
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when the control plane cannot start safely."""
+
+
+def normalize_database_url(database_url: str) -> str:
+    """Select the bundled psycopg v3 driver for common PostgreSQL URLs."""
+
+    parsed = urlsplit(database_url)
+    if parsed.scheme in {"postgres", "postgresql"}:
+        return parsed._replace(scheme="postgresql+psycopg").geturl()
+    return database_url
+
+
+def _vercel_deployment_origin(values: Mapping[str, str], *, required: bool) -> str | None:
+    vercel_url = values.get("VERCEL_URL", "").strip()
+    if not vercel_url:
+        if required:
+            raise ConfigurationError("VERCEL_URL is required")
+        return None
+    if (
+        "://" in vercel_url
+        or any(marker in vercel_url for marker in ("/", "@", "?", "#"))
+        or not vercel_url.lower().endswith(".vercel.app")
+    ):
+        raise ConfigurationError("VERCEL_URL must be a bare deployment hostname")
+    return f"https://{vercel_url}"
+
+
+def _required(env: Mapping[str, str], name: str) -> str:
+    value = env.get(name, "").strip()
+    if not value:
+        raise ConfigurationError(f"{name} is required")
+    return value
+
+
+def _strong_secret(value: str, name: str) -> str:
+    if len(value.encode("utf-8")) < 32:
+        raise ConfigurationError(f"{name} must contain at least 32 bytes")
+    lowered = value.lower()
+    if any(marker in lowered for marker in ("changeme", "placeholder", "default-secret")):
+        raise ConfigurationError(f"{name} contains a forbidden placeholder")
+    if len(set(value)) < 12:
+        raise ConfigurationError(f"{name} does not have enough character diversity")
+    return value
+
+
+def _validate_postgres_tls(database_url: str) -> None:
+    parsed = urlsplit(database_url)
+    if parsed.scheme != "postgresql+psycopg":
+        raise ConfigurationError("production database must be PostgreSQL")
+    if not parsed.hostname:
+        raise ConfigurationError("production PostgreSQL must use a network host")
+    query = parse_qs(parsed.query)
+    sslmode = query.get("sslmode", [""])[-1].lower()
+    if sslmode not in {"require", "verify-ca", "verify-full"}:
+        raise ConfigurationError("production PostgreSQL must require TLS via sslmode")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class Settings:
+    app_env: str
+    vercel_env: str
+    database_url: str
+    public_origin: str
+    operator_token: str
+    session_secret: str
+    csrf_secret: str
+    control_signing_private_key: str
+    control_signing_key_id: UUID
+    runner_device_id: UUID
+    runner_verify_public_key: str
+    deployment_origin: str | None = None
+    session_ttl_seconds: int = 3_600
+    runner_offline_seconds: int = 30
+    docs_enabled: bool = False
+    secure_cookies: bool = True
+    test_dispatch_allowed: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "database_url", normalize_database_url(self.database_url))
+        if self.vercel_env in {"production", "preview"} and self.app_env != "production":
+            raise ConfigurationError("Vercel production and preview require APP_ENV=production")
+        if self.app_env == "production" and not self.secure_cookies:
+            raise ConfigurationError("production sessions require secure cookies")
+        if self.app_env == "production":
+            _validate_postgres_tls(self.database_url)
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "production"
+
+    @property
+    def dispatch_allowed(self) -> bool:
+        """Preview deployments can never dispatch a command."""
+
+        return (self.app_env == "production" and self.vercel_env == "production") or (
+            self.app_env == "test" and self.test_dispatch_allowed
+        )
+
+    @property
+    def trusted_origins(self) -> tuple[str, ...]:
+        origins = [self.public_origin]
+        if self.deployment_origin and self.deployment_origin not in origins:
+            origins.append(self.deployment_origin)
+        return tuple(origins)
+
+    @property
+    def operator_origins(self) -> tuple[str, ...]:
+        """Only the canonical origin may authenticate or mutate production."""
+
+        return (self.public_origin,)
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
+        values = os.environ if env is None else env
+        app_env = values.get("APP_ENV", "development").strip().lower()
+        if app_env not in {"development", "test", "production"}:
+            raise ConfigurationError("APP_ENV must be development, test, or production")
+
+        vercel_env = values.get("VERCEL_ENV", "").strip().lower()
+        if vercel_env in {"production", "preview"} and app_env != "production":
+            raise ConfigurationError("Vercel production and preview require APP_ENV=production")
+        database_url = normalize_database_url(_required(values, "CONTROL_DATABASE_URL"))
+        deployment_origin = (
+            _vercel_deployment_origin(
+                values,
+                required=vercel_env == "preview",
+            )
+            if vercel_env in {"production", "preview"}
+            else None
+        )
+        if vercel_env == "preview":
+            assert deployment_origin is not None
+            public_origin = deployment_origin
+        else:
+            public_origin = _required(values, "CONTROL_PUBLIC_ORIGIN").rstrip("/")
+        try:
+            parsed_origin = urlsplit(public_origin)
+            origin_port = parsed_origin.port
+        except ValueError as exc:
+            raise ConfigurationError("CONTROL_PUBLIC_ORIGIN is invalid") from exc
+        if (
+            parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.hostname
+            or parsed_origin.username is not None
+            or parsed_origin.password is not None
+            or parsed_origin.path not in {"", "/"}
+            or parsed_origin.query
+            or parsed_origin.fragment
+        ):
+            raise ConfigurationError("CONTROL_PUBLIC_ORIGIN must be a pure HTTP(S) origin")
+        operator_token = _strong_secret(
+            _required(values, "CONTROL_OPERATOR_TOKEN"), "CONTROL_OPERATOR_TOKEN"
+        )
+        session_secret = _strong_secret(
+            _required(values, "CONTROL_SESSION_SECRET"), "CONTROL_SESSION_SECRET"
+        )
+        csrf_secret = _strong_secret(
+            _required(values, "CONTROL_CSRF_SECRET"), "CONTROL_CSRF_SECRET"
+        )
+        signing_key = _required(values, "CONTROL_SIGNING_PRIVATE_KEY_B64")
+        runner_key = _required(values, "CONTROL_RUNNER_PUBLIC_KEY_B64")
+        secrets = {operator_token, session_secret, csrf_secret, signing_key, runner_key}
+        if len(secrets) != 5:
+            raise ConfigurationError("operator, session, CSRF, and signing keys must be distinct")
+
+        try:
+            control_private_key = private_key_from_base64url(signing_key)
+            public_key_from_base64url(runner_key)
+            control_key_id = UUID(_required(values, "CONTROL_SIGNING_KEY_ID"))
+            runner_device_id = UUID(_required(values, "CONTROL_RUNNER_DEVICE_ID"))
+        except ValueError as exc:
+            raise ConfigurationError("invalid Ed25519 key or device identifier") from exc
+        if public_key_to_base64url(control_private_key.public_key()) == runner_key:
+            raise ConfigurationError("control and runner Ed25519 identities must differ")
+        if control_key_id == runner_device_id:
+            raise ConfigurationError("control and runner key identifiers must differ")
+
+        if app_env == "production":
+            _validate_postgres_tls(database_url)
+            if not public_origin.startswith("https://"):
+                raise ConfigurationError("production origin must use HTTPS")
+            if origin_port not in {None, 443}:
+                raise ConfigurationError("production origin must use the default HTTPS port")
+            if values.get("CONTROL_ALLOW_PREVIEW_DISPATCH", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }:
+                raise ConfigurationError("preview dispatch cannot be enabled")
+
+        session_ttl = int(values.get("CONTROL_SESSION_TTL_SECONDS", "3600"))
+        offline_seconds = int(values.get("CONTROL_RUNNER_OFFLINE_SECONDS", "30"))
+        if not 300 <= session_ttl <= 86_400:
+            raise ConfigurationError("session TTL must be between 300 and 86400 seconds")
+        if not 10 <= offline_seconds <= 300:
+            raise ConfigurationError("runner offline threshold must be between 10 and 300 seconds")
+
+        return cls(
+            app_env=app_env,
+            vercel_env=vercel_env,
+            database_url=database_url,
+            public_origin=public_origin,
+            operator_token=operator_token,
+            session_secret=session_secret,
+            csrf_secret=csrf_secret,
+            control_signing_private_key=signing_key,
+            control_signing_key_id=control_key_id,
+            runner_device_id=runner_device_id,
+            runner_verify_public_key=runner_key,
+            deployment_origin=deployment_origin,
+            session_ttl_seconds=session_ttl,
+            runner_offline_seconds=offline_seconds,
+            docs_enabled=app_env != "production",
+            secure_cookies=app_env == "production",
+        )
+
+
+__all__ = ["ConfigurationError", "Settings", "normalize_database_url"]

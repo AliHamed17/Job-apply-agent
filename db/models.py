@@ -250,6 +250,17 @@ class Application(Base):
         order_by="ApplicationEvent.created_at",
         cascade="all, delete-orphan",
     )
+    control_plane_reference = relationship(
+        "ControlPlaneApplicationRef",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    control_plane_review_grants = relationship(
+        "ControlPlaneReviewGrant",
+        back_populates="application",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -737,6 +748,337 @@ class SubmissionCommand(Base):
             name="uq_submission_commands_idempotency_key",
         ),
         Index("ix_submission_commands_state_available", "state", "available_at"),
+    )
+
+
+class ControlPlaneApplicationRef(Base):
+    """Opaque public reference for one private local application."""
+
+    __tablename__ = "control_plane_application_refs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    application_id = Column(
+        Integer,
+        ForeignKey("applications.id"),
+        nullable=False,
+    )
+    remote_ref = Column(String(64), nullable=False)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+    last_projected_at = Column(DateTime, nullable=True)
+
+    application = relationship("Application", back_populates="control_plane_reference")
+    review_grants = relationship(
+        "ControlPlaneReviewGrant",
+        back_populates="application_ref",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(remote_ref) BETWEEN 32 AND 64",
+            name="ck_control_plane_application_refs_bounded",
+        ),
+        UniqueConstraint(
+            "application_id",
+            name="uq_control_plane_application_refs_application_id",
+        ),
+        UniqueConstraint(
+            "remote_ref",
+            name="uq_control_plane_application_refs_remote_ref",
+        ),
+    )
+
+
+class ControlPlaneReviewGrant(Base):
+    """Private binding behind a short-lived opaque remote review grant."""
+
+    __tablename__ = "control_plane_review_grants"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    grant_ref = Column(String(64), nullable=False)
+    application_id = Column(
+        Integer,
+        ForeignKey("applications.id"),
+        nullable=False,
+    )
+    application_ref_id = Column(
+        Integer,
+        ForeignKey("control_plane_application_refs.id"),
+        nullable=False,
+    )
+    form_plan_id = Column(Integer, ForeignKey("form_plans.id"), nullable=False)
+    application_revision = Column(Integer, nullable=False)
+    job_url_hash = Column(String(64), nullable=False)
+    form_plan_fingerprint = Column(String(64), nullable=False)
+    cv_hash = Column(String(64), nullable=False)
+    adapter_name = Column(String(64), nullable=False)
+    adapter_version = Column(String(32), nullable=False)
+    selector_version = Column(String(64), nullable=False)
+    runner_release = Column(String(64), nullable=False)
+    issued_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    consumed_at = Column(DateTime, nullable=True)
+    consumed_command_ref = Column(String(64), nullable=True)
+    projection_state = Column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    projection_available_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+    projection_claimed_at = Column(DateTime, nullable=True)
+    projection_claimed_by = Column(String(64), nullable=True)
+    projection_claim_token = Column(String(64), nullable=True)
+    projection_attempts = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    projected_at = Column(DateTime, nullable=True)
+    last_projection_error_code = Column(String(64), nullable=True)
+
+    application = relationship("Application", back_populates="control_plane_review_grants")
+    application_ref = relationship(
+        "ControlPlaneApplicationRef",
+        back_populates="review_grants",
+    )
+    form_plan = relationship("FormPlan")
+    receipt = relationship(
+        "ControlPlaneCommandReceipt",
+        back_populates="review_grant",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(grant_ref) BETWEEN 32 AND 64 "
+            "AND application_revision > 0 "
+            "AND length(trim(adapter_name)) BETWEEN 1 AND 64 "
+            "AND length(trim(adapter_version)) BETWEEN 1 AND 32 "
+            "AND length(trim(selector_version)) BETWEEN 1 AND 64 "
+            "AND length(trim(runner_release)) BETWEEN 1 AND 64",
+            name="ck_control_plane_review_grants_metadata",
+        ),
+        CheckConstraint(
+            f"{_sha256_check_sql('job_url_hash')} "
+            f"AND {_sha256_check_sql('form_plan_fingerprint')} "
+            f"AND {_sha256_check_sql('cv_hash')}",
+            name="ck_control_plane_review_grants_digests",
+        ),
+        CheckConstraint(
+            "expires_at > issued_at",
+            name="ck_control_plane_review_grants_lifetime",
+        ),
+        CheckConstraint(
+            "(consumed_at IS NULL AND consumed_command_ref IS NULL) OR "
+            "(consumed_at IS NOT NULL AND consumed_command_ref IS NOT NULL "
+            "AND length(trim(consumed_command_ref)) BETWEEN 1 AND 64)",
+            name="ck_control_plane_review_grants_consumption",
+        ),
+        CheckConstraint(
+            "projection_state IN ('pending', 'claimed', 'projected') AND projection_attempts >= 0",
+            name="ck_control_plane_review_grants_projection_state",
+        ),
+        CheckConstraint(
+            "(projection_state = 'pending' "
+            "AND projection_claimed_at IS NULL "
+            "AND projection_claimed_by IS NULL "
+            "AND projection_claim_token IS NULL "
+            "AND projected_at IS NULL) "
+            "OR (projection_state = 'claimed' "
+            "AND projection_claimed_at IS NOT NULL "
+            "AND projection_claimed_by IS NOT NULL "
+            "AND projection_claim_token IS NOT NULL "
+            "AND projected_at IS NULL) "
+            "OR (projection_state = 'projected' "
+            "AND projection_claimed_at IS NULL "
+            "AND projection_claimed_by IS NULL "
+            "AND projection_claim_token IS NULL "
+            "AND projected_at IS NOT NULL)",
+            name="ck_control_plane_review_grants_projection_metadata",
+        ),
+        UniqueConstraint(
+            "grant_ref",
+            name="uq_control_plane_review_grants_grant_ref",
+        ),
+        Index(
+            "ix_control_plane_review_grants_application",
+            "application_id",
+            "issued_at",
+        ),
+        Index(
+            "ix_control_plane_review_grants_expiry",
+            "expires_at",
+        ),
+        Index(
+            "ix_control_plane_review_grants_projection",
+            "projection_state",
+            "projection_available_at",
+        ),
+    )
+
+
+class ControlPlaneCommandReceipt(Base):
+    """One durable receipt for one authenticated remote command delivery."""
+
+    __tablename__ = "control_plane_command_receipts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    remote_command_ref = Column(String(64), nullable=False)
+    remote_attempt_ref = Column(String(64), nullable=False)
+    review_grant_id = Column(
+        Integer,
+        ForeignKey("control_plane_review_grants.id"),
+        nullable=False,
+    )
+    delivery_nonce_hash = Column(String(64), nullable=False)
+    envelope_digest = Column(String(64), nullable=False)
+    client_idempotency_key = Column(String(128), nullable=False)
+    accepted_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+
+    review_grant = relationship("ControlPlaneReviewGrant", back_populates="receipt")
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(remote_command_ref) BETWEEN 16 AND 64 "
+            "AND length(remote_attempt_ref) BETWEEN 32 AND 64 "
+            "AND length(client_idempotency_key) BETWEEN 16 AND 128",
+            name="ck_control_plane_command_receipts_metadata",
+        ),
+        CheckConstraint(
+            f"{_sha256_check_sql('delivery_nonce_hash')} "
+            f"AND {_sha256_check_sql('envelope_digest')}",
+            name="ck_control_plane_command_receipts_digests",
+        ),
+        UniqueConstraint(
+            "remote_command_ref",
+            name="uq_control_plane_command_receipts_command_ref",
+        ),
+        UniqueConstraint(
+            "remote_attempt_ref",
+            name="uq_control_plane_command_receipts_attempt_ref",
+        ),
+        UniqueConstraint(
+            "review_grant_id",
+            name="uq_control_plane_command_receipts_review_grant",
+        ),
+        UniqueConstraint(
+            "delivery_nonce_hash",
+            name="uq_control_plane_command_receipts_delivery_nonce",
+        ),
+        UniqueConstraint(
+            "client_idempotency_key",
+            name="uq_control_plane_command_receipts_idempotency",
+        ),
+    )
+
+
+class ControlPlaneEventOutbox(Base):
+    """Durable redacted event waiting for signed outbound delivery."""
+
+    __tablename__ = "control_plane_event_outbox"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_ref = Column(String(64), nullable=False)
+    remote_command_ref = Column(String(64), nullable=False)
+    sequence = Column(Integer, nullable=False)
+    cycle = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    event_type = Column(String(64), nullable=False)
+    payload_json = Column(Text, nullable=False)
+    payload_digest = Column(String(64), nullable=False)
+    state = Column(String(16), nullable=False, default="pending", server_default="pending")
+    available_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+    claimed_at = Column(DateTime, nullable=True)
+    claimed_by = Column(String(64), nullable=True)
+    claim_token = Column(String(64), nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    delivery_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    last_error_code = Column(String(64), nullable=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(event_ref) BETWEEN 32 AND 64 "
+            "AND length(remote_command_ref) BETWEEN 16 AND 64 "
+            "AND sequence > 0 AND cycle >= 0 "
+            "AND length(trim(event_type)) BETWEEN 1 AND 64 "
+            "AND length(payload_json) BETWEEN 2 AND 4096 "
+            "AND delivery_count >= 0",
+            name="ck_control_plane_event_outbox_metadata",
+        ),
+        CheckConstraint(
+            _sha256_check_sql("payload_digest"),
+            name="ck_control_plane_event_outbox_digest",
+        ),
+        CheckConstraint(
+            "state IN ('pending', 'claimed', 'sent')",
+            name="ck_control_plane_event_outbox_state",
+        ),
+        CheckConstraint(
+            "(state = 'pending' AND claimed_at IS NULL "
+            "AND claimed_by IS NULL AND claim_token IS NULL AND sent_at IS NULL) "
+            "OR (state = 'claimed' AND claimed_at IS NOT NULL "
+            "AND claimed_by IS NOT NULL AND claim_token IS NOT NULL "
+            "AND sent_at IS NULL) "
+            "OR (state = 'sent' AND claimed_at IS NULL "
+            "AND claimed_by IS NULL AND claim_token IS NULL "
+            "AND sent_at IS NOT NULL)",
+            name="ck_control_plane_event_outbox_state_metadata",
+        ),
+        UniqueConstraint(
+            "event_ref",
+            name="uq_control_plane_event_outbox_event_ref",
+        ),
+        UniqueConstraint(
+            "remote_command_ref",
+            "sequence",
+            name="uq_control_plane_event_outbox_command_sequence",
+        ),
+        Index(
+            "ix_control_plane_event_outbox_state_available",
+            "state",
+            "available_at",
+        ),
     )
 
 

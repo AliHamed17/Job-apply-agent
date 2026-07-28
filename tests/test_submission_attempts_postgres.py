@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from profile.models import UserProfile
 from profile.writer import save_profile
-from threading import Barrier, Event
+from threading import Barrier, Event, current_thread
 from uuid import uuid4
 
 import pytest
@@ -19,6 +19,11 @@ from sqlalchemy.orm import sessionmaker
 
 from api.routes.applications import ReconcileRequest, reconcile_submission_attempt
 from core.config import Settings
+from core.control_plane_review_permits import (
+    ControlPlaneReviewGrantError,
+    mint_control_plane_review_grant,
+    validate_control_plane_review_grant,
+)
 from core.runtime_identity import get_runtime_identity
 from core.submission_domain import (
     PreparedFinalActionV1,
@@ -378,6 +383,106 @@ def test_concurrent_distinct_clicks_allow_one_active_attempt():
         )
         db.close()
     finally:
+        _cleanup(factory, seeded["application_id"], seeded["job_id"])
+
+
+def test_control_plane_grant_renewal_and_admission_use_one_lock_order(
+    monkeypatch,
+):
+    import core.control_plane_review_permits as review_permits
+
+    factory = _factory()
+    seeded = _seed_reviewed(factory)
+    identity = get_runtime_identity()
+    db = factory()
+    plan = db.query(FormPlan).filter(FormPlan.plan_id == seeded["plan_id"]).one()
+    original = mint_control_plane_review_grant(
+        db,
+        application_id=seeded["application_id"],
+        form_plan_id=plan.id,
+        runner_release=identity.release_id,
+        now=seeded["now"],
+    )
+    db.commit()
+    db.close()
+
+    mint_has_application_lock = Event()
+    validate_reached_application_lock = Event()
+    allow_mint_to_continue = Event()
+    original_lock_application = review_permits._lock_application
+
+    def observed_lock_application(db_session, application_id):
+        thread_name = current_thread().name
+        if thread_name.startswith("validate-grant"):
+            validate_reached_application_lock.set()
+        application = original_lock_application(db_session, application_id)
+        if thread_name.startswith("mint-grant"):
+            mint_has_application_lock.set()
+            assert allow_mint_to_continue.wait(timeout=10)
+        return application
+
+    monkeypatch.setattr(
+        review_permits,
+        "_lock_application",
+        observed_lock_application,
+    )
+
+    def mint_replacement() -> str:
+        session = factory()
+        try:
+            current_plan = (
+                session.query(FormPlan).filter(FormPlan.plan_id == seeded["plan_id"]).one()
+            )
+            mint_control_plane_review_grant(
+                session,
+                application_id=seeded["application_id"],
+                form_plan_id=current_plan.id,
+                runner_release=identity.release_id,
+                now=seeded["now"] + timedelta(seconds=1),
+            )
+            session.commit()
+            return "minted"
+        finally:
+            session.close()
+
+    def validate_original() -> str:
+        session = factory()
+        try:
+            validate_control_plane_review_grant(
+                session,
+                review_grant_ref=original.review_grant_ref,
+                remote_application_ref=original.remote_application_ref,
+                runner_release=identity.release_id,
+                now=seeded["now"] + timedelta(seconds=1),
+            )
+            session.commit()
+            return "validated"
+        except ControlPlaneReviewGrantError as exc:
+            session.rollback()
+            return exc.reason_code
+        finally:
+            session.close()
+
+    try:
+        with (
+            ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="mint-grant",
+            ) as mint_pool,
+            ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="validate-grant",
+            ) as validate_pool,
+        ):
+            mint_future = mint_pool.submit(mint_replacement)
+            assert mint_has_application_lock.wait(timeout=10)
+            validate_future = validate_pool.submit(validate_original)
+            assert validate_reached_application_lock.wait(timeout=10)
+            allow_mint_to_continue.set()
+            assert mint_future.result(timeout=10) == "minted"
+            assert validate_future.result(timeout=10) == "REVIEW_GRANT_REVOKED"
+    finally:
+        allow_mint_to_continue.set()
         _cleanup(factory, seeded["application_id"], seeded["job_id"])
 
 

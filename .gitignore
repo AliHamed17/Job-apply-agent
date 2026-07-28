@@ -56,6 +56,7 @@ db/migrations/versions/*.pyc
 # Uploaded files
 uploads/
 runtime-data/
+profile-data/
 
 # Bridge
 bridge/.wwebjs_auth/
@@ -71,6 +72,16 @@ resume.pdf
 .portal_profiles/
 employer_workflows.yaml
 
+# Browser/session exports and local control-plane device state are private.
+.browser_profiles/
+.browser_state/
+browser-data/
+browser-state/
+sessions/
+session-data/
+device-state/
+*.storage-state.json
+
 # Personal role-specific CVs (never commit)
 user_profile.yaml
 cvs/
@@ -84,3 +95,44 @@ linkedin-smoke-qualification.json
 
 # Local Vercel project linkage and deployment metadata.
 .vercel/
+
+# The isolated public control plane must never commit runtime secrets, local
+# databases, device signing keys, or copied candidate material.
+control_plane/.env
+control_plane/.env.*
+!control_plane/.env.example
+control_plane/.vercel/
+control_plane/.runtime/
+control_plane/data/
+control_plane/runtime-data/
+control_plane/uploads/
+control_plane/profile-data/
+control_plane/cvs/
+control_plane/sessions/
+control_plane/browser-data/
+control_plane/browser-state/
+control_plane/**/cvs/
+control_plane/**/profiles/
+control_plane/**/sessions/
+control_plane/**/session-data/
+control_plane/**/browser-data/
+control_plane/**/browser-state/
+control_plane/*.db
+control_plane/*.sqlite
+control_plane/*.sqlite3
+control_plane/**/*.db
+control_plane/**/*.sqlite
+control_plane/**/*.sqlite3
+control_plane/*private*
+control_plane/*secret*
+control_plane/**/*credential*
+control_plane/**/*private*
+control_plane/**/*secret*
+control_plane/**/*token*
+control_plane/**/.keys/
+control_plane/**/device-state/
+control_plane/*device*.key
+control_plane/**/*device*.key
+control_plane/**/*.pem
+control_plane/**/*.p12
+control_plane/**/*.pfx
