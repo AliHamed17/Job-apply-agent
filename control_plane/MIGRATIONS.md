@@ -23,5 +23,12 @@ Rollback of the initial release removes only the dedicated control-plane tables:
 python -m alembic downgrade base
 ```
 
+To roll back only the revocation-tombstone extension while preserving the
+initial control-plane schema:
+
+```powershell
+python -m alembic downgrade 0001_control_plane
+```
+
 Back up the dedicated database before every migration. Never point this Alembic
 configuration at the private Job Apply Agent database.

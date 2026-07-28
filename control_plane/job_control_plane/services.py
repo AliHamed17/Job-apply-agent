@@ -41,6 +41,7 @@ from .protocol import (
     EnvelopePurpose,
     HeartbeatEnvelope,
     ReviewGrantEnvelope,
+    ReviewGrantRevocationEnvelope,
     RunnerEventEnvelope,
     SignedEnvelope,
     StrictProtocolModel,
@@ -247,7 +248,6 @@ def receive_review_grant(
         raise ControlPlaneError("REVIEW_GRANT_STALE")
 
     identifier = str(payload.grant_id)
-    existing = db.get(ReviewGrant, identifier)
     expected_binding = (
         device.id,
         str(payload.application_ref),
@@ -255,7 +255,10 @@ def receive_review_grant(
         payload.adapter.value,
         payload.adapter_version,
         payload.form_fingerprint_digest,
+        reviewed_at,
+        as_utc(envelope.expires_at),
     )
+    existing = db.scalar(select(ReviewGrant).where(ReviewGrant.id == identifier).with_for_update())
     if existing is not None:
         actual_binding = (
             existing.device_id,
@@ -264,11 +267,14 @@ def receive_review_grant(
             existing.adapter,
             existing.adapter_version,
             existing.form_fingerprint_digest,
+            as_utc(existing.reviewed_at),
+            as_utc(existing.expires_at),
         )
         if actual_binding != expected_binding:
             raise ControlPlaneError("REVIEW_GRANT_CONFLICT")
         return Receipt(identifier=identifier, duplicate=True)
 
+    envelope_digest = sha256_bytes(canonical_envelope_bytes(envelope))
     try:
         with db.begin_nested():
             db.add(
@@ -280,16 +286,142 @@ def receive_review_grant(
                     adapter=payload.adapter.value,
                     adapter_version=payload.adapter_version,
                     form_fingerprint_digest=payload.form_fingerprint_digest,
-                    envelope_digest=sha256_bytes(canonical_envelope_bytes(envelope)),
+                    envelope_digest=envelope_digest,
                     reviewed_at=reviewed_at,
                     expires_at=envelope.expires_at,
                     created_at=checked_at,
                 )
             )
             db.flush()
-    except IntegrityError as exc:
-        raise ControlPlaneError("REVIEW_GRANT_CONFLICT") from exc
+    except IntegrityError:
+        existing = db.scalar(
+            select(ReviewGrant).where(ReviewGrant.id == identifier).with_for_update()
+        )
+        if existing is None:
+            raise ControlPlaneError("REVIEW_GRANT_CONFLICT") from None
+        actual_binding = (
+            existing.device_id,
+            existing.application_ref,
+            existing.application_revision,
+            existing.adapter,
+            existing.adapter_version,
+            existing.form_fingerprint_digest,
+            as_utc(existing.reviewed_at),
+            as_utc(existing.expires_at),
+        )
+        if actual_binding != expected_binding:
+            raise ControlPlaneError("REVIEW_GRANT_CONFLICT") from None
+        return Receipt(identifier=identifier, duplicate=True)
     return Receipt(identifier=identifier, duplicate=False)
+
+
+def receive_review_grant_revocation(
+    db: Session,
+    settings: Settings,
+    envelope: ReviewGrantRevocationEnvelope,
+    *,
+    now: datetime | None = None,
+) -> Receipt:
+    """Apply a signed tombstone that cannot be undone by delayed projection."""
+
+    checked_at = now or utc_now()
+    device = verify_runner_envelope(
+        db,
+        settings,
+        envelope,
+        expected_purpose=EnvelopePurpose.RUNNER_REVIEW_GRANT_REVOCATION,
+        now=checked_at,
+    )
+    payload = envelope.payload
+    reviewed_at = as_utc(payload.reviewed_at)
+    grant_expires_at = as_utc(payload.grant_expires_at)
+    revoked_at = as_utc(payload.revoked_at)
+    if revoked_at > as_utc(envelope.issued_at) + timedelta(seconds=30):
+        raise ControlPlaneError("REVIEW_GRANT_REVOCATION_TIME_INVALID")
+
+    identifier = str(payload.grant_id)
+    expected_binding = (
+        device.id,
+        str(payload.application_ref),
+        payload.application_revision,
+        payload.adapter.value,
+        payload.adapter_version,
+        payload.form_fingerprint_digest,
+        reviewed_at,
+        grant_expires_at,
+    )
+    envelope_digest = sha256_bytes(canonical_envelope_bytes(envelope))
+    existing = db.scalar(select(ReviewGrant).where(ReviewGrant.id == identifier).with_for_update())
+    if existing is None:
+        try:
+            with db.begin_nested():
+                db.add(
+                    ReviewGrant(
+                        id=identifier,
+                        device_id=device.id,
+                        application_ref=str(payload.application_ref),
+                        application_revision=payload.application_revision,
+                        adapter=payload.adapter.value,
+                        adapter_version=payload.adapter_version,
+                        form_fingerprint_digest=payload.form_fingerprint_digest,
+                        envelope_digest=envelope_digest,
+                        reviewed_at=reviewed_at,
+                        expires_at=grant_expires_at,
+                        created_at=checked_at,
+                        revoked_at=revoked_at,
+                        revocation_envelope_digest=envelope_digest,
+                    )
+                )
+                db.flush()
+        except IntegrityError:
+            existing = db.scalar(
+                select(ReviewGrant).where(ReviewGrant.id == identifier).with_for_update()
+            )
+            if existing is None:
+                raise ControlPlaneError("REVIEW_GRANT_REVOCATION_CONFLICT") from None
+        else:
+            return Receipt(identifier=identifier, duplicate=False)
+
+    actual_binding = (
+        existing.device_id,
+        existing.application_ref,
+        existing.application_revision,
+        existing.adapter,
+        existing.adapter_version,
+        existing.form_fingerprint_digest,
+        as_utc(existing.reviewed_at),
+        as_utc(existing.expires_at),
+    )
+    if actual_binding != expected_binding:
+        raise ControlPlaneError("REVIEW_GRANT_REVOCATION_CONFLICT")
+    if existing.revoked_at is not None:
+        if as_utc(existing.revoked_at) != revoked_at:
+            raise ControlPlaneError("REVIEW_GRANT_REVOCATION_CONFLICT")
+        _cancel_unadmitted_revoked_command(existing, checked_at=checked_at)
+        return Receipt(identifier=identifier, duplicate=True)
+    existing.revoked_at = revoked_at
+    existing.revocation_envelope_digest = envelope_digest
+    _cancel_unadmitted_revoked_command(existing, checked_at=checked_at)
+    return Receipt(identifier=identifier, duplicate=False)
+
+
+def _cancel_unadmitted_revoked_command(
+    grant: ReviewGrant,
+    *,
+    checked_at: datetime,
+) -> None:
+    """Prevent an unacknowledged stale command from leaving the cloud queue."""
+
+    command = grant.command
+    if (
+        command is None
+        or command.acknowledged_at is not None
+        or command.status not in {"queued", "claimed"}
+    ):
+        return
+    command.status = "rejected"
+    command.claim_lease_expires_at = None
+    command.finished_at = checked_at
 
 
 def create_command(
@@ -344,6 +476,8 @@ def create_command(
     )
     if replay is not None:
         return replay
+    if grant.revoked_at is not None:
+        raise ControlPlaneError("REVIEW_GRANT_REVOKED")
     if (
         grant.application_ref != str(application_ref)
         or grant.application_revision != application_revision
@@ -504,6 +638,12 @@ def acknowledge_command(
         if command.ack_status != ack:
             raise ControlPlaneError("COMMAND_ACK_CONFLICT")
         return Receipt(identifier=command.id, duplicate=True)
+    if command.status == "rejected" and command.grant.revoked_at is not None:
+        if envelope.payload.ack_status is not CommandAckStatus.REJECTED:
+            raise ControlPlaneError("COMMAND_ACK_CONFLICT")
+        command.ack_status = ack
+        command.acknowledged_at = checked_at
+        return Receipt(identifier=command.id, duplicate=False)
     if command.status != "claimed":
         raise ControlPlaneError("COMMAND_NOT_CLAIMED")
     if not _command_was_claimed_before_expiry(command):
@@ -669,6 +809,7 @@ __all__ = [
     "poll_command",
     "receive_heartbeat",
     "receive_review_grant",
+    "receive_review_grant_revocation",
     "receive_runner_event",
     "sha256_bytes",
     "utc_now",

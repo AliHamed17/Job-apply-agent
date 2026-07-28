@@ -39,6 +39,7 @@ class StrictProtocolModel(BaseModel):
 class EnvelopePurpose(StrEnum):
     RUNNER_HEARTBEAT = "runner.heartbeat.v1"
     RUNNER_REVIEW_GRANT = "runner.review_grant.v1"
+    RUNNER_REVIEW_GRANT_REVOCATION = "runner.review_grant_revocation.v1"
     RUNNER_COMMAND_POLL = "runner.command_poll.v1"
     RUNNER_COMMAND_ACK = "runner.command_ack.v1"
     RUNNER_EVENT = "runner.event.v1"
@@ -140,6 +141,24 @@ class ReviewGrantPayload(StrictProtocolModel):
     reviewed_at: AwareDatetime
 
 
+class ReviewGrantRevocationPayload(StrictProtocolModel):
+    grant_id: UUID
+    application_ref: UUID
+    application_revision: Annotated[int, Field(strict=True, ge=1, le=2_147_483_647)]
+    adapter: AdapterCode
+    adapter_version: SemanticVersion
+    form_fingerprint_digest: Sha256Digest
+    reviewed_at: AwareDatetime
+    grant_expires_at: AwareDatetime
+    revoked_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_authority_window(self) -> ReviewGrantRevocationPayload:
+        if not self.reviewed_at <= self.revoked_at < self.grant_expires_at:
+            raise ValueError("revocation must fall within the original grant lifetime")
+        return self
+
+
 class CommandPollPayload(StrictProtocolModel):
     boot_id: UUID
     max_commands: Literal[1] = 1
@@ -214,6 +233,12 @@ class ReviewGrantEnvelope(SignedEnvelope[ReviewGrantPayload]):
     purpose: Literal[EnvelopePurpose.RUNNER_REVIEW_GRANT] = EnvelopePurpose.RUNNER_REVIEW_GRANT
 
 
+class ReviewGrantRevocationEnvelope(SignedEnvelope[ReviewGrantRevocationPayload]):
+    purpose: Literal[EnvelopePurpose.RUNNER_REVIEW_GRANT_REVOCATION] = (
+        EnvelopePurpose.RUNNER_REVIEW_GRANT_REVOCATION
+    )
+
+
 class CommandPollEnvelope(SignedEnvelope[CommandPollPayload]):
     purpose: Literal[EnvelopePurpose.RUNNER_COMMAND_POLL] = EnvelopePurpose.RUNNER_COMMAND_POLL
 
@@ -277,6 +302,8 @@ __all__ = [
     "ReasonCode",
     "ReviewGrantEnvelope",
     "ReviewGrantPayload",
+    "ReviewGrantRevocationEnvelope",
+    "ReviewGrantRevocationPayload",
     "RunnerEventEnvelope",
     "RunnerEventPayload",
     "RunnerStatus",

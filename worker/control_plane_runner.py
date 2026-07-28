@@ -21,11 +21,16 @@ from core.config import Settings, get_settings
 from core.control_plane_review_permits import (
     ControlPlaneReviewGrantError,
     ReviewGrantProjection,
+    ReviewGrantRevocationProjection,
     claim_review_grant_projection,
+    claim_review_grant_revocation,
     consume_control_plane_review_grant,
     load_claimed_review_grant_projection,
+    load_claimed_review_grant_revocation,
     mark_review_grant_projected,
+    mark_review_grant_revocation_delivered,
     release_review_grant_projection,
+    release_review_grant_revocation,
     validate_control_plane_review_grant,
 )
 from core.operations import readiness_report
@@ -55,6 +60,7 @@ from worker.control_plane_event_outbox import (
 HEARTBEAT_INTERVAL_SECONDS = 10
 RUNNER_OFFLINE_AFTER_SECONDS = 30
 MAX_COMMAND_LIFETIME_SECONDS = 300
+MAX_REVOCATIONS_PER_CYCLE = 25
 _SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -75,6 +81,22 @@ def _aware(value: datetime) -> datetime:
 
 def _naive(value: datetime) -> datetime:
     return _aware(value).replace(tzinfo=None)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _resolve_clock(
+    *,
+    now: datetime | None,
+    clock: Callable[[], datetime] | None,
+) -> Callable[[], datetime]:
+    if now is not None and clock is not None:
+        raise ControlPlaneRunnerError("CONTROL_CLOCK_INVALID")
+    if now is not None:
+        return lambda: now
+    return clock or _utc_now
 
 
 def _uuid(value: object, reason: str) -> str:
@@ -224,11 +246,14 @@ def accept_control_plane_command(
     descriptor_resolver: DescriptorResolver = adapter_for_url,
     session_checker: SessionChecker | None = None,
     now: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> AcceptedControlCommand:
-    """Atomically consume local review authority and run existing admission."""
+    """Atomically consume local authority using a fixed test time or live clock."""
 
-    timestamp = _aware(now or datetime.now(UTC))
-    if command.issued_at > timestamp or command.expires_at <= timestamp:
+    read_clock = _resolve_clock(now=now, clock=clock)
+    timestamp = _aware(read_clock())
+    protocol_clock_skew = _crypto_module().MAX_CLOCK_SKEW
+    if command.issued_at > timestamp + protocol_clock_skew or command.expires_at <= timestamp:
         raise ControlPlaneRunnerError("CONTROL_COMMAND_EXPIRED")
     replay = _find_command_replay(db, command)
     if replay is not None:
@@ -240,7 +265,7 @@ def accept_control_plane_command(
     # Readiness/model checks can be slow. Refresh the wall clock before
     # consuming any remote authority so a near-expiry command cannot cross its
     # deadline while those checks run.
-    timestamp = _aware(now or datetime.now(UTC))
+    timestamp = _aware(read_clock())
     if command.expires_at <= timestamp:
         raise ControlPlaneRunnerError("CONTROL_COMMAND_EXPIRED")
     try:
@@ -287,6 +312,10 @@ def accept_control_plane_command(
         _aware(command.expires_at),
         _aware(grant.expires_at),
     )
+    # Grant validation and database locking may themselves take time. The
+    # irreversible authority consumption below uses one last exact deadline
+    # check rather than the earlier validation timestamp.
+    timestamp = _aware(read_clock())
     if authority_expires_at <= timestamp:
         raise ControlPlaneRunnerError("CONTROL_COMMAND_EXPIRED")
 
@@ -527,6 +556,7 @@ class ControlPlaneRunner:
         client: ControlPlaneClient | None = None,
         key_loader: Callable[[Path], bytes] = _read_private_path,
         settings: Settings | None = None,
+        clock: Callable[[], datetime] = _utc_now,
     ):
         self.config = config
         self.client = client or ControlPlaneClient(
@@ -534,6 +564,7 @@ class ControlPlaneRunner:
         )
         self._owns_client = client is None
         self._settings = settings or get_settings()
+        self._clock = clock
         self._protocol = _protocol_module()
         self._crypto = _crypto_module()
         if config.control_plane_audience != self._protocol.CONTROL_AUDIENCE:
@@ -573,6 +604,9 @@ class ControlPlaneRunner:
             self._protocol.EnvelopePurpose.RUNNER_HEARTBEAT: (self._protocol.HeartbeatEnvelope),
             self._protocol.EnvelopePurpose.RUNNER_REVIEW_GRANT: (
                 self._protocol.ReviewGrantEnvelope
+            ),
+            self._protocol.EnvelopePurpose.RUNNER_REVIEW_GRANT_REVOCATION: (
+                self._protocol.ReviewGrantRevocationEnvelope
             ),
             self._protocol.EnvelopePurpose.RUNNER_COMMAND_POLL: (
                 self._protocol.CommandPollEnvelope
@@ -660,7 +694,7 @@ class ControlPlaneRunner:
     async def _heartbeat(self, now: datetime) -> None:
         identity = get_runtime_identity()
         readiness = readiness_report(self._settings)
-        status = "ready" if readiness.get("ready") is True else "degraded"
+        status = "ready" if readiness.get("status") == "ready" else "degraded"
         payload = {
             "boot_id": self._boot_id,
             "release_digest": identity.release_id,
@@ -740,6 +774,77 @@ class ControlPlaneRunner:
             db.close()
         return True
 
+    async def publish_review_grant_revocation(
+        self,
+        revocation: ReviewGrantRevocationProjection,
+    ) -> None:
+        """Publish a signed redacted tombstone over the outbound-only client."""
+
+        now = datetime.now(UTC)
+        envelope = self._signed_envelope(
+            purpose=self._protocol.EnvelopePurpose.RUNNER_REVIEW_GRANT_REVOCATION,
+            payload=revocation.to_wire(),
+            now=now,
+            expires_at=min(
+                _aware(revocation.grant_expires_at),
+                now + timedelta(seconds=60),
+            ),
+        )
+        await self.client.revoke_review_grant(envelope)
+
+    async def _publish_one_review_grant_revocation(self) -> bool:
+        db = get_session_factory()()
+        try:
+            claim = claim_review_grant_revocation(
+                db,
+                runner_id=self.config.device_id,
+            )
+        finally:
+            db.close()
+        if claim is None:
+            return False
+        grant_id, claim_token = claim
+        db = get_session_factory()()
+        try:
+            revocation = load_claimed_review_grant_revocation(
+                db,
+                grant_id=grant_id,
+                claim_token=claim_token,
+            )
+        except Exception:
+            db.rollback()
+            release_review_grant_revocation(
+                db,
+                grant_id=grant_id,
+                claim_token=claim_token,
+            )
+            raise
+        finally:
+            db.close()
+        try:
+            await self.publish_review_grant_revocation(revocation)
+        except Exception:
+            db = get_session_factory()()
+            try:
+                release_review_grant_revocation(
+                    db,
+                    grant_id=grant_id,
+                    claim_token=claim_token,
+                )
+            finally:
+                db.close()
+            raise
+        db = get_session_factory()()
+        try:
+            mark_review_grant_revocation_delivered(
+                db,
+                grant_id=grant_id,
+                claim_token=claim_token,
+            )
+        finally:
+            db.close()
+        return True
+
     async def _poll(self, now: datetime) -> Mapping[str, object] | None:
         envelope = self._signed_envelope(
             purpose=self._protocol.EnvelopePurpose.RUNNER_COMMAND_POLL,
@@ -765,7 +870,7 @@ class ControlPlaneRunner:
                 db,
                 command,
                 settings=self._settings,
-                now=datetime.now(UTC),
+                clock=self._clock,
             )
         finally:
             db.close()
@@ -823,12 +928,25 @@ class ControlPlaneRunner:
             >= self.config.heartbeat_interval_seconds
         ):
             await self._heartbeat(now)
+        revocations_sent = 0
+        while (
+            revocations_sent < MAX_REVOCATIONS_PER_CYCLE
+            and await self._publish_one_review_grant_revocation()
+        ):
+            revocations_sent += 1
+        if revocations_sent == MAX_REVOCATIONS_PER_CYCLE:
+            return "revocations_draining"
         await self._publish_one_review_grant()
-        envelope = await self._poll(now)
+        # Grant/revocation publication may involve several network round trips.
+        # Sign the poll with a fresh timestamp so its one-minute envelope cannot
+        # expire merely because earlier outbound maintenance was slow.
+        poll_time = datetime.now(UTC)
+        envelope = await self._poll(poll_time)
         if envelope is None:
             await self._drain_one_event()
             return "idle"
-        command = self._verify_command(envelope, now=now)
+        verification_time = datetime.now(UTC)
+        command = self._verify_command(envelope, now=verification_time)
         try:
             accepted = await asyncio.to_thread(self._admit, command)
         except Exception:

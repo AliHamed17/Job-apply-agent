@@ -1710,10 +1710,22 @@ async def allow_remote_send(
         else ""
     ) or ""
     descriptor = adapter_for_url(job_url)
+    if descriptor is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ADAPTER_NOT_QUALIFIED"},
+        )
     if (
-        descriptor is None
-        or not descriptor.allows_final_execution
-        or not descriptor.qualifies_form_fingerprint(plan.fingerprint)
+        descriptor.platform != plan.adapter_name
+        or descriptor.adapter_version != plan.adapter_version
+        or descriptor.selector_version != plan.selector_version
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ADAPTER_VERSION_CHANGED"},
+        )
+    if not descriptor.allows_final_execution or not descriptor.qualifies_form_fingerprint(
+        plan.fingerprint
     ):
         raise HTTPException(
             status_code=409,

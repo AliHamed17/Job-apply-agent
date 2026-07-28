@@ -21,6 +21,7 @@ from control_plane.job_control_plane import protocol as control_protocol
 from core.config import Settings
 from core.control_plane_review_permits import (
     ReviewGrantProjection,
+    ReviewGrantRevocationProjection,
     mint_control_plane_review_grant,
 )
 from core.runtime_identity import get_runtime_identity
@@ -51,6 +52,7 @@ from worker.control_plane_event_outbox import (
     enqueue_control_plane_attempt_transition,
 )
 from worker.control_plane_runner import (
+    MAX_REVOCATIONS_PER_CYCLE,
     AcceptedControlCommand,
     ControlPlaneRunner,
     ControlPlaneRunnerError,
@@ -297,6 +299,76 @@ def test_slow_readiness_rechecks_remote_command_expiry_before_admission(
     assert db.query(ControlPlaneCommandReceipt).count() == 0
     assert db.query(Submission).count() == 0
     assert db.query(ControlPlaneReviewGrant).one().consumed_at is None
+    db.close()
+
+
+def test_runner_admit_rechecks_expiry_after_slow_readiness(
+    tmp_path,
+    monkeypatch,
+):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    started_at = reviewed.now + timedelta(seconds=1)
+    deadline = started_at + timedelta(seconds=30)
+    command = replace(_command(reviewed), expires_at=deadline)
+    current_time = [started_at]
+
+    def clock():
+        return current_time[0]
+
+    def slow_capabilities(_settings):
+        current_time[0] = deadline
+        return _capabilities()
+
+    monkeypatch.setattr(
+        "worker.control_plane_runner._capabilities",
+        slow_capabilities,
+    )
+    monkeypatch.setattr(
+        "worker.control_plane_runner.get_session_factory",
+        lambda: factory,
+    )
+    runner = object.__new__(ControlPlaneRunner)
+    runner._settings = _settings()
+    runner._clock = clock
+
+    with pytest.raises(ControlPlaneRunnerError, match="CONTROL_COMMAND_EXPIRED"):
+        runner._admit(command)
+
+    db = factory()
+    assert db.query(ControlPlaneCommandReceipt).count() == 0
+    assert db.query(Submission).count() == 0
+    assert db.query(ControlPlaneReviewGrant).one().consumed_at is None
+    db.close()
+
+
+def test_local_admission_accepts_bounded_future_issue_without_extending_expiry(
+    tmp_path,
+):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    admission_time = reviewed.now + timedelta(seconds=1)
+    deadline = admission_time + timedelta(seconds=45)
+    command = replace(
+        _command(reviewed),
+        issued_at=admission_time + timedelta(seconds=5),
+        expires_at=deadline,
+    )
+
+    db = factory()
+    accepted = accept_control_plane_command(
+        db,
+        command,
+        settings=_settings(),
+        capabilities=_capabilities(),
+        descriptor_resolver=lambda _url: _live_descriptor(reviewed.fingerprint),
+        session_checker=lambda *_args: True,
+        now=admission_time,
+    )
+
+    attempt = db.get(Submission, accepted.attempt_id)
+    assert attempt.final_submit_permit is not None
+    assert attempt.final_submit_permit.expires_at == deadline.replace(tzinfo=None)
     db.close()
 
 
@@ -696,6 +768,166 @@ def test_runner_uses_canonical_ed25519_protocol_in_both_directions(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("readiness_status", "expected_status"),
+    [
+        ("ready", "ready"),
+        ("degraded", "degraded"),
+    ],
+)
+async def test_heartbeat_uses_readiness_report_status(
+    monkeypatch,
+    readiness_status,
+    expected_status,
+):
+    runner = object.__new__(ControlPlaneRunner)
+    runner._settings = _settings()
+    runner._boot_id = str(uuid4())
+    runner._last_heartbeat = None
+    runner._protocol = SimpleNamespace(
+        EnvelopePurpose=SimpleNamespace(RUNNER_HEARTBEAT="runner.heartbeat.v1")
+    )
+    captured: list[dict[str, object]] = []
+
+    class Client:
+        async def send_heartbeat(self, envelope):
+            captured.append(dict(envelope))
+
+    def signed_envelope(*, purpose, payload, now):
+        assert purpose == "runner.heartbeat.v1"
+        return {"payload": dict(payload), "issued_at": now}
+
+    runner.client = Client()
+    runner._signed_envelope = signed_envelope
+    monkeypatch.setattr(
+        "worker.control_plane_runner.readiness_report",
+        lambda _settings: {
+            "status": readiness_status,
+            "checks": {"database": {"ok": readiness_status == "ready"}},
+        },
+    )
+    monkeypatch.setattr(
+        "worker.control_plane_runner.get_runtime_identity",
+        lambda: SimpleNamespace(release_id="a" * 64),
+    )
+    now = datetime.now(UTC)
+
+    await runner._heartbeat(now)
+
+    assert captured == [
+        {
+            "payload": {
+                "boot_id": runner._boot_id,
+                "release_digest": "a" * 64,
+                "status": expected_status,
+            },
+            "issued_at": now,
+        }
+    ]
+    assert runner._last_heartbeat == now
+
+
+@pytest.mark.asyncio
+async def test_run_once_refreshes_verification_time_after_slow_network(
+    tmp_path,
+    monkeypatch,
+):
+    device_private = Ed25519PrivateKey.generate()
+    control_private = Ed25519PrivateKey.generate()
+    private_path = (tmp_path / "slow-runner.key").resolve()
+    public_path = (tmp_path / "slow-control.pub").resolve()
+    key_material = {
+        private_path: control_crypto.private_key_to_base64url(device_private).encode(),
+        public_path: control_crypto.public_key_to_base64url(control_private.public_key()).encode(),
+    }
+    control_signing_key_id = str(uuid4())
+    runner = ControlPlaneRunner(
+        RunnerConfig(
+            control_plane_url="https://control.example",
+            device_id=str(uuid4()),
+            control_signing_key_id=control_signing_key_id,
+            control_plane_audience=control_protocol.CONTROL_AUDIENCE,
+            private_key_path=private_path,
+            control_plane_public_key_path=public_path,
+        ),
+        client=object(),
+        key_loader=lambda path: key_material[path],
+        settings=_settings(),
+    )
+    before_network = datetime.now(UTC)
+    after_network = before_network + timedelta(seconds=31)
+    command_id = str(uuid4())
+    unsigned = control_protocol.ControlCommandEnvelope.model_validate(
+        {
+            "protocol_version": control_protocol.PROTOCOL_VERSION,
+            "key_id": control_signing_key_id,
+            "purpose": control_protocol.EnvelopePurpose.CONTROL_COMMAND,
+            "audience": control_protocol.RUNNER_AUDIENCE,
+            "issued_at": after_network,
+            "expires_at": after_network + timedelta(minutes=5),
+            "nonce": str(uuid4()),
+            "payload": {
+                "command_id": command_id,
+                "grant_id": str(uuid4()),
+                "application_ref": str(uuid4()),
+                "application_revision": 1,
+                "adapter": "greenhouse",
+                "adapter_version": "1.0.0",
+                "form_fingerprint_digest": "f" * 64,
+                "action": "send_application",
+            },
+            "signature": "",
+        }
+    )
+    envelope = control_crypto.sign_envelope(unsigned, control_private).model_dump(mode="json")
+
+    class NetworkClock:
+        calls = 0
+
+        @classmethod
+        def now(cls, _timezone):
+            cls.calls += 1
+            return before_network if cls.calls == 1 else after_network
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def poll(polled_at):
+        assert polled_at == after_network
+        return envelope
+
+    accepted = AcceptedControlCommand(
+        remote_command_ref=command_id,
+        remote_attempt_ref=str(uuid4()),
+        application_id=1,
+        attempt_id=2,
+        submission_command_id=3,
+        replayed=False,
+    )
+    acknowledgements: list[tuple[str, str, datetime]] = []
+
+    async def acknowledge(command_ref, *, status, now):
+        acknowledgements.append((command_ref, status, now))
+
+    runner._last_heartbeat = before_network
+    runner._publish_one_review_grant = no_op
+    runner._publish_one_review_grant_revocation = no_op
+    runner._poll = poll
+    runner._admit = lambda command: accepted
+    runner._ack = acknowledge
+    runner._drain_one_event = no_op
+    monkeypatch.setattr("worker.control_plane_runner.datetime", NetworkClock)
+    monkeypatch.setattr(
+        "worker.control_plane_runner.wake_control_plane_submission_command",
+        lambda _accepted: True,
+    )
+
+    assert await runner.run_once() == "accepted"
+    assert NetworkClock.calls >= 4
+    assert acknowledgements == [(command_id, "received", after_network)]
+
+
+@pytest.mark.asyncio
 async def test_review_grant_envelope_uses_exact_local_expiry(tmp_path):
     device_private = Ed25519PrivateKey.generate()
     control_private = Ed25519PrivateKey.generate()
@@ -749,6 +981,122 @@ async def test_review_grant_envelope_uses_exact_local_expiry(tmp_path):
         expected_audience=control_protocol.CONTROL_AUDIENCE,
         now=now,
     )
+
+
+@pytest.mark.asyncio
+async def test_review_grant_revocation_is_exact_signed_and_outbound_only(tmp_path):
+    device_private = Ed25519PrivateKey.generate()
+    control_private = Ed25519PrivateKey.generate()
+    private_path = (tmp_path / "revocation-runner.key").resolve()
+    public_path = (tmp_path / "revocation-control.pub").resolve()
+    captured: list[dict[str, object]] = []
+
+    class Client:
+        async def revoke_review_grant(self, envelope):
+            captured.append(dict(envelope))
+
+    key_material = {
+        private_path: control_crypto.private_key_to_base64url(device_private).encode(),
+        public_path: control_crypto.public_key_to_base64url(control_private.public_key()).encode(),
+    }
+    runner = ControlPlaneRunner(
+        RunnerConfig(
+            control_plane_url="https://control.example",
+            device_id=str(uuid4()),
+            control_signing_key_id=str(uuid4()),
+            control_plane_audience=control_protocol.CONTROL_AUDIENCE,
+            private_key_path=private_path,
+            control_plane_public_key_path=public_path,
+        ),
+        client=Client(),
+        key_loader=lambda path: key_material[path],
+        settings=_settings(),
+    )
+    now = datetime.now(UTC)
+    revocation = ReviewGrantRevocationProjection(
+        remote_application_ref=str(uuid4()),
+        review_grant_ref=str(uuid4()),
+        application_revision=3,
+        adapter_name="greenhouse",
+        adapter_version="1.0.0",
+        form_fingerprint_digest="f" * 64,
+        reviewed_at=now - timedelta(seconds=10),
+        grant_expires_at=now + timedelta(minutes=4),
+        revoked_at=now - timedelta(seconds=1),
+    )
+
+    await runner.publish_review_grant_revocation(revocation)
+
+    assert len(captured) == 1
+    envelope = control_protocol.ReviewGrantRevocationEnvelope.model_validate_json(
+        json.dumps(captured[0])
+    )
+    assert str(envelope.payload.grant_id) == revocation.review_grant_ref
+    assert str(envelope.payload.application_ref) == revocation.remote_application_ref
+    assert envelope.payload.grant_expires_at == revocation.grant_expires_at
+    assert envelope.payload.revoked_at == revocation.revoked_at
+    control_crypto.verify_envelope(
+        envelope,
+        device_private.public_key(),
+        expected_purpose=(control_protocol.EnvelopePurpose.RUNNER_REVIEW_GRANT_REVOCATION),
+        expected_audience=control_protocol.CONTROL_AUDIENCE,
+        now=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_once_drains_revocations_before_grants_and_polling():
+    runner = object.__new__(ControlPlaneRunner)
+    runner._last_heartbeat = datetime.now(UTC)
+    runner.config = SimpleNamespace(heartbeat_interval_seconds=10)
+    order: list[str] = []
+    revocations = iter((True, True, False))
+
+    async def revoke():
+        order.append("revoke")
+        return next(revocations)
+
+    async def grant():
+        order.append("grant")
+        return False
+
+    async def poll(_now):
+        order.append("poll")
+        return None
+
+    async def drain():
+        order.append("events")
+
+    runner._publish_one_review_grant_revocation = revoke
+    runner._publish_one_review_grant = grant
+    runner._poll = poll
+    runner._drain_one_event = drain
+
+    assert await runner.run_once() == "idle"
+    assert order == ["revoke", "revoke", "revoke", "grant", "poll", "events"]
+
+
+@pytest.mark.asyncio
+async def test_run_once_defers_new_authority_when_revocation_batch_is_full():
+    runner = object.__new__(ControlPlaneRunner)
+    runner._last_heartbeat = datetime.now(UTC)
+    runner.config = SimpleNamespace(heartbeat_interval_seconds=10)
+    revocations = 0
+
+    async def revoke():
+        nonlocal revocations
+        revocations += 1
+        return True
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("new authority must wait for the revocation backlog")
+
+    runner._publish_one_review_grant_revocation = revoke
+    runner._publish_one_review_grant = forbidden
+    runner._poll = forbidden
+
+    assert await runner.run_once() == "revocations_draining"
+    assert revocations == MAX_REVOCATIONS_PER_CYCLE
 
 
 @pytest.mark.asyncio

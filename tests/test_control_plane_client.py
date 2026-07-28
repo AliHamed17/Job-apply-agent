@@ -166,6 +166,11 @@ async def test_each_mutation_route_requires_its_exact_receipt_identifier():
                 "grant_id": grant_id,
                 "duplicate": False,
             },
+            "/api/runner/review-grant-revocations": {
+                "accepted": True,
+                "grant_id": grant_id,
+                "duplicate": True,
+            },
             f"/api/runner/commands/{command_id}/ack": {
                 "accepted": True,
                 "command_id": command_id,
@@ -190,6 +195,7 @@ async def test_each_mutation_route_requires_its_exact_receipt_identifier():
     )
     await client.send_heartbeat({"key_id": device_id})
     await client.publish_review_grant({"payload": {"grant_id": grant_id}})
+    await client.revoke_review_grant({"payload": {"grant_id": grant_id}})
     await client.acknowledge_command(command_id, {"payload": {"command_id": command_id}})
     await client.send_event({"payload": {"event_id": event_id}})
     await http.aclose()

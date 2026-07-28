@@ -12,9 +12,13 @@ from sqlalchemy.orm import sessionmaker
 from core.control_plane_review_permits import (
     ControlPlaneReviewGrantError,
     claim_review_grant_projection,
+    claim_review_grant_revocation,
     load_claimed_review_grant_projection,
+    load_claimed_review_grant_revocation,
     mark_review_grant_projected,
+    mark_review_grant_revocation_delivered,
     mint_control_plane_review_grant,
+    release_review_grant_revocation,
     validate_control_plane_review_grant,
 )
 from db.models import Application, Base, ControlPlaneReviewGrant, FormPlan, Job, JobStatus
@@ -183,6 +187,156 @@ def test_new_review_grant_revokes_prior_unconsumed_authority(tmp_path):
             runner_release="a" * 64,
             now=now + timedelta(seconds=2),
         )
+    db.close()
+
+
+def test_superseded_grant_revocation_is_durable_retryable_and_ordered_first(
+    tmp_path,
+):
+    factory, application_id, plan_id, now = _reviewed_application(tmp_path)
+    db = factory()
+    first = mint_control_plane_review_grant(
+        db,
+        application_id=application_id,
+        form_plan_id=plan_id,
+        runner_release="a" * 64,
+        now=now,
+    )
+    second = mint_control_plane_review_grant(
+        db,
+        application_id=application_id,
+        form_plan_id=plan_id,
+        runner_release="a" * 64,
+        now=now + timedelta(seconds=1),
+    )
+    db.commit()
+
+    first_row = (
+        db.query(ControlPlaneReviewGrant)
+        .filter(ControlPlaneReviewGrant.grant_ref == first.review_grant_ref)
+        .one()
+    )
+    assert first_row.revocation_state == "pending"
+    assert first_row.revocation_available_at == now + timedelta(seconds=1)
+    assert (
+        claim_review_grant_projection(
+            db,
+            runner_id=str(uuid4()),
+            now=now + timedelta(seconds=1),
+        )
+        is None
+    )
+
+    claim = claim_review_grant_revocation(
+        db,
+        runner_id=str(uuid4()),
+        now=now + timedelta(seconds=1),
+    )
+    assert claim is not None
+    projection = load_claimed_review_grant_revocation(
+        db,
+        grant_id=claim[0],
+        claim_token=claim[1],
+        now=now + timedelta(seconds=1),
+    )
+    assert projection.review_grant_ref == first.review_grant_ref
+    assert projection.remote_application_ref == first.remote_application_ref
+    assert projection.revoked_at == now + timedelta(seconds=1)
+    assert set(projection.to_wire()) == {
+        "application_ref",
+        "grant_id",
+        "application_revision",
+        "adapter",
+        "adapter_version",
+        "form_fingerprint_digest",
+        "reviewed_at",
+        "grant_expires_at",
+        "revoked_at",
+    }
+    assert (
+        claim_review_grant_revocation(
+            db,
+            runner_id=str(uuid4()),
+            now=now + timedelta(seconds=1),
+        )
+        is None
+    )
+
+    release_review_grant_revocation(
+        db,
+        grant_id=claim[0],
+        claim_token=claim[1],
+        reason_code="CONTROL_PLANE_UNAVAILABLE",
+        now=now + timedelta(seconds=1),
+    )
+    retried = claim_review_grant_revocation(
+        db,
+        runner_id=str(uuid4()),
+        now=now + timedelta(seconds=11),
+    )
+    assert retried is not None
+    mark_review_grant_revocation_delivered(
+        db,
+        grant_id=retried[0],
+        claim_token=retried[1],
+        now=now + timedelta(seconds=11),
+    )
+
+    first_row = db.get(ControlPlaneReviewGrant, first_row.id)
+    assert first_row.revocation_state == "delivered"
+    assert first_row.revocation_attempts == 2
+    assert first_row.revocation_sent_at == now + timedelta(seconds=11)
+    grant_claim = claim_review_grant_projection(
+        db,
+        runner_id=str(uuid4()),
+        now=now + timedelta(seconds=11),
+    )
+    assert grant_claim is not None
+    projected = load_claimed_review_grant_projection(
+        db,
+        grant_id=grant_claim[0],
+        claim_token=grant_claim[1],
+        runner_release="a" * 64,
+        now=now + timedelta(seconds=11),
+    )
+    assert projected.review_grant_ref == second.review_grant_ref
+    db.close()
+
+
+def test_expired_superseded_grant_needs_no_remote_revocation(tmp_path):
+    factory, application_id, plan_id, now = _reviewed_application(tmp_path)
+    db = factory()
+    first = mint_control_plane_review_grant(
+        db,
+        application_id=application_id,
+        form_plan_id=plan_id,
+        runner_release="a" * 64,
+        ttl_seconds=1,
+        now=now,
+    )
+    mint_control_plane_review_grant(
+        db,
+        application_id=application_id,
+        form_plan_id=plan_id,
+        runner_release="a" * 64,
+        now=now + timedelta(seconds=2),
+    )
+    db.commit()
+
+    row = (
+        db.query(ControlPlaneReviewGrant)
+        .filter(ControlPlaneReviewGrant.grant_ref == first.review_grant_ref)
+        .one()
+    )
+    assert row.revocation_state == "expired"
+    assert (
+        claim_review_grant_revocation(
+            db,
+            runner_id=str(uuid4()),
+            now=now + timedelta(seconds=2),
+        )
+        is None
+    )
     db.close()
 
 

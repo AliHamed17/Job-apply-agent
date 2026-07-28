@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -18,6 +19,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+
+def _sha256_check_sql(column_name: str) -> str:
+    remainder = column_name
+    for character in "0123456789abcdef":
+        remainder = f"replace({remainder}, '{character}', '')"
+    return f"(length({column_name}) = 64 AND {remainder} = '')"
 
 
 class RunnerDevice(Base):
@@ -38,7 +46,20 @@ class RunnerDevice(Base):
 
 class ReviewGrant(Base):
     __tablename__ = "control_review_grants"
-    __table_args__ = (Index("ix_control_review_grants_eligibility", "consumed_at", "expires_at"),)
+    __table_args__ = (
+        Index(
+            "ix_control_review_grants_eligibility",
+            "revoked_at",
+            "consumed_at",
+            "expires_at",
+        ),
+        CheckConstraint(
+            "(revoked_at IS NULL AND revocation_envelope_digest IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revocation_envelope_digest IS NOT NULL "
+            f"AND {_sha256_check_sql('revocation_envelope_digest')})",
+            name="ck_control_review_grants_revocation_evidence",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     device_id: Mapped[str] = mapped_column(
@@ -56,6 +77,8 @@ class ReviewGrant(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revocation_envelope_digest: Mapped[str | None] = mapped_column(String(64))
 
     device: Mapped[RunnerDevice] = relationship(back_populates="review_grants")
     command: Mapped[SubmissionCommand | None] = relationship(

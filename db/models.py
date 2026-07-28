@@ -853,6 +853,24 @@ class ControlPlaneReviewGrant(Base):
     )
     projected_at = Column(DateTime, nullable=True)
     last_projection_error_code = Column(String(64), nullable=True)
+    revocation_state = Column(
+        String(16),
+        nullable=False,
+        default="none",
+        server_default="none",
+    )
+    revocation_available_at = Column(DateTime, nullable=True)
+    revocation_claimed_at = Column(DateTime, nullable=True)
+    revocation_claimed_by = Column(String(64), nullable=True)
+    revocation_claim_token = Column(String(64), nullable=True)
+    revocation_attempts = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    revocation_sent_at = Column(DateTime, nullable=True)
+    last_revocation_error_code = Column(String(64), nullable=True)
 
     application = relationship("Application", back_populates="control_plane_review_grants")
     application_ref = relationship(
@@ -915,6 +933,44 @@ class ControlPlaneReviewGrant(Base):
             "AND projected_at IS NOT NULL)",
             name="ck_control_plane_review_grants_projection_metadata",
         ),
+        CheckConstraint(
+            "revocation_state IN ('none', 'pending', 'claimed', 'delivered', 'expired') "
+            "AND revocation_attempts >= 0",
+            name="ck_control_plane_review_grants_revocation_state",
+        ),
+        CheckConstraint(
+            "(revocation_state = 'none' "
+            "AND revocation_available_at IS NULL "
+            "AND revocation_claimed_at IS NULL "
+            "AND revocation_claimed_by IS NULL "
+            "AND revocation_claim_token IS NULL "
+            "AND revocation_sent_at IS NULL) "
+            "OR (revocation_state = 'pending' "
+            "AND revocation_available_at IS NOT NULL "
+            "AND revocation_claimed_at IS NULL "
+            "AND revocation_claimed_by IS NULL "
+            "AND revocation_claim_token IS NULL "
+            "AND revocation_sent_at IS NULL) "
+            "OR (revocation_state = 'claimed' "
+            "AND revocation_available_at IS NOT NULL "
+            "AND revocation_claimed_at IS NOT NULL "
+            "AND revocation_claimed_by IS NOT NULL "
+            "AND revocation_claim_token IS NOT NULL "
+            "AND revocation_sent_at IS NULL) "
+            "OR (revocation_state = 'delivered' "
+            "AND revocation_available_at IS NOT NULL "
+            "AND revocation_claimed_at IS NULL "
+            "AND revocation_claimed_by IS NULL "
+            "AND revocation_claim_token IS NULL "
+            "AND revocation_sent_at IS NOT NULL) "
+            "OR (revocation_state = 'expired' "
+            "AND revocation_available_at IS NOT NULL "
+            "AND revocation_claimed_at IS NULL "
+            "AND revocation_claimed_by IS NULL "
+            "AND revocation_claim_token IS NULL "
+            "AND revocation_sent_at IS NULL)",
+            name="ck_control_plane_review_grants_revocation_metadata",
+        ),
         UniqueConstraint(
             "grant_ref",
             name="uq_control_plane_review_grants_grant_ref",
@@ -932,6 +988,11 @@ class ControlPlaneReviewGrant(Base):
             "ix_control_plane_review_grants_projection",
             "projection_state",
             "projection_available_at",
+        ),
+        Index(
+            "ix_control_plane_review_grants_revocation",
+            "revocation_state",
+            "revocation_available_at",
         ),
     )
 

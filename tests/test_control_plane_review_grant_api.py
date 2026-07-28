@@ -328,3 +328,47 @@ def test_review_grant_fails_closed_when_runtime_or_adapter_is_unqualified(
     finally:
         db.close()
     _assert_no_external_action(factory)
+
+
+@pytest.mark.parametrize(
+    ("identity_field", "stale_value"),
+    [
+        ("platform", "greenhouse-next"),
+        ("adapter_version", "1.0.1"),
+        ("selector_version", "greenhouse-candidate-v10"),
+    ],
+)
+def test_review_grant_rejects_stale_adapter_identity_before_mint(
+    review_grant_api,
+    monkeypatch,
+    identity_field,
+    stale_value,
+):
+    client, factory, reviewed, settings, descriptor = review_grant_api
+    live_descriptor = replace(
+        descriptor,
+        qualification=QualificationTier.LIVE_CANARY_QUALIFIED,
+        qualified_form_scope=(reviewed["fingerprint"],),
+        execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
+        **{identity_field: stale_value},
+    )
+    monkeypatch.setattr(
+        applications_route,
+        "adapter_for_url",
+        lambda _url: live_descriptor,
+    )
+
+    response = client.post(
+        f"/api/applications/{reviewed['application_id']}/control-plane-review-grant",
+        json=_payload(reviewed),
+        headers={"Authorization": f"Bearer {settings.secret_key}"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ADAPTER_VERSION_CHANGED"
+    db = factory()
+    try:
+        assert db.query(ControlPlaneReviewGrant).count() == 0
+    finally:
+        db.close()
+    _assert_no_external_action(factory)

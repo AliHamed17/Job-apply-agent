@@ -80,6 +80,46 @@ class ReviewGrantProjection:
         }
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class ReviewGrantRevocationProjection:
+    """A redacted tombstone that permanently removes hosted grant authority."""
+
+    remote_application_ref: str
+    review_grant_ref: str
+    application_revision: int
+    adapter_name: str
+    adapter_version: str
+    form_fingerprint_digest: str
+    reviewed_at: datetime
+    grant_expires_at: datetime
+    revoked_at: datetime
+
+    def __repr__(self) -> str:
+        return (
+            "ReviewGrantRevocationProjection("
+            f"remote_application_ref={self.remote_application_ref!r}, "
+            f"review_grant_ref={self.review_grant_ref!r}, "
+            f"adapter_name={self.adapter_name!r}, "
+            f"adapter_version={self.adapter_version!r}, "
+            f"revoked_at={self.revoked_at.isoformat()!r})"
+        )
+
+    def to_wire(self) -> dict[str, object]:
+        """Return the complete exact binding accepted by the hosted tombstone."""
+
+        return {
+            "application_ref": self.remote_application_ref,
+            "grant_id": self.review_grant_ref,
+            "application_revision": self.application_revision,
+            "adapter": self.adapter_name,
+            "adapter_version": self.adapter_version,
+            "form_fingerprint_digest": self.form_fingerprint_digest,
+            "reviewed_at": _aware(self.reviewed_at).isoformat(),
+            "grant_expires_at": _aware(self.grant_expires_at).isoformat(),
+            "revoked_at": _aware(self.revoked_at).isoformat(),
+        }
+
+
 def _naive(value: datetime | None) -> datetime:
     timestamp = value or datetime.now(UTC)
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
@@ -109,6 +149,24 @@ def _projection(grant: ControlPlaneReviewGrant) -> ReviewGrantProjection:
         runner_release=grant.runner_release,
         issued_at=grant.issued_at,
         expires_at=grant.expires_at,
+    )
+
+
+def _revocation_projection(
+    grant: ControlPlaneReviewGrant,
+) -> ReviewGrantRevocationProjection:
+    if grant.revoked_at is None:
+        raise ControlPlaneReviewGrantError("REVIEW_GRANT_NOT_REVOKED")
+    return ReviewGrantRevocationProjection(
+        remote_application_ref=grant.application_ref.remote_ref,
+        review_grant_ref=grant.grant_ref,
+        application_revision=grant.application_revision,
+        adapter_name=grant.adapter_name,
+        adapter_version=grant.adapter_version,
+        form_fingerprint_digest=grant.form_plan_fingerprint,
+        reviewed_at=grant.issued_at,
+        grant_expires_at=grant.expires_at,
+        revoked_at=grant.revoked_at,
     )
 
 
@@ -241,6 +299,8 @@ def mint_control_plane_review_grant(
         .all()
     ):
         previous.revoked_at = timestamp
+        previous.revocation_available_at = timestamp
+        previous.revocation_state = "pending" if previous.expires_at > timestamp else "expired"
 
     expires_at = min(
         cast(datetime, plan.expires_at),
@@ -363,6 +423,17 @@ def claim_review_grant_projection(
     bounded_runner_id = str(runner_id or "").strip()
     if not 1 <= len(bounded_runner_id) <= 64:
         raise ControlPlaneReviewGrantError("RUNNER_ID_INVALID")
+    revocation_pending = (
+        db.query(ControlPlaneReviewGrant.id)
+        .filter(
+            ControlPlaneReviewGrant.revocation_state.in_(("pending", "claimed")),
+            ControlPlaneReviewGrant.expires_at > timestamp,
+        )
+        .first()
+    )
+    if revocation_pending is not None:
+        db.commit()
+        return None
     stale_cutoff = timestamp - timedelta(seconds=PROJECTION_CLAIM_TTL_SECONDS)
     stale_query = db.query(ControlPlaneReviewGrant).filter(
         ControlPlaneReviewGrant.projection_state == "claimed",
@@ -505,4 +576,168 @@ def release_review_grant_projection(
     grant.projection_claimed_by = None
     grant.projection_claim_token = None
     grant.last_projection_error_code = bounded_reason
+    db.commit()
+
+
+def claim_review_grant_revocation(
+    db,
+    *,
+    runner_id: str,
+    now: datetime | None = None,
+) -> tuple[int, str] | None:
+    """Claim one due revocation tombstone without holding a network lock."""
+
+    timestamp = _naive(now)
+    bounded_runner_id = str(runner_id or "").strip()
+    if not 1 <= len(bounded_runner_id) <= 64:
+        raise ControlPlaneReviewGrantError("RUNNER_ID_INVALID")
+
+    stale_cutoff = timestamp - timedelta(seconds=PROJECTION_CLAIM_TTL_SECONDS)
+    stale_query = db.query(ControlPlaneReviewGrant).filter(
+        ControlPlaneReviewGrant.revocation_state == "claimed",
+        ControlPlaneReviewGrant.revocation_claimed_at < stale_cutoff,
+        ControlPlaneReviewGrant.revocation_sent_at.is_(None),
+    )
+    if db.bind.dialect.name == "postgresql":
+        stale_query = stale_query.with_for_update(skip_locked=True)
+    for stale in stale_query.limit(25).all():
+        stale.revocation_state = "pending"
+        stale.revocation_claimed_at = None
+        stale.revocation_claimed_by = None
+        stale.revocation_claim_token = None
+        stale.revocation_available_at = timestamp
+        stale.last_revocation_error_code = "REVOCATION_CLAIM_STALE"
+
+    expired_query = db.query(ControlPlaneReviewGrant).filter(
+        ControlPlaneReviewGrant.revocation_state == "pending",
+        ControlPlaneReviewGrant.expires_at <= timestamp,
+    )
+    if db.bind.dialect.name == "postgresql":
+        expired_query = expired_query.with_for_update(skip_locked=True)
+    for expired in expired_query.limit(25).all():
+        expired.revocation_state = "expired"
+        expired.last_revocation_error_code = "REVIEW_GRANT_EXPIRED"
+
+    query = (
+        db.query(ControlPlaneReviewGrant)
+        .filter(
+            ControlPlaneReviewGrant.revocation_state == "pending",
+            ControlPlaneReviewGrant.revocation_available_at <= timestamp,
+            ControlPlaneReviewGrant.expires_at > timestamp,
+            ControlPlaneReviewGrant.revoked_at.is_not(None),
+            ControlPlaneReviewGrant.consumed_at.is_(None),
+        )
+        .order_by(
+            ControlPlaneReviewGrant.revocation_available_at,
+            ControlPlaneReviewGrant.id,
+        )
+    )
+    if db.bind.dialect.name == "postgresql":
+        query = query.with_for_update(skip_locked=True)
+    grant = query.first()
+    if grant is None:
+        db.commit()
+        return None
+
+    claim_token = secrets.token_hex(32)
+    grant.revocation_state = "claimed"
+    grant.revocation_claimed_at = timestamp
+    grant.revocation_claimed_by = bounded_runner_id
+    grant.revocation_claim_token = claim_token
+    grant.revocation_attempts += 1
+    db.commit()
+    return grant.id, claim_token
+
+
+def load_claimed_review_grant_revocation(
+    db,
+    *,
+    grant_id: int,
+    claim_token: str,
+    now: datetime | None = None,
+) -> ReviewGrantRevocationProjection:
+    """Load one still-current exact revocation binding for signing."""
+
+    timestamp = _naive(now)
+    grant = (
+        db.query(ControlPlaneReviewGrant)
+        .filter(
+            ControlPlaneReviewGrant.id == grant_id,
+            ControlPlaneReviewGrant.revocation_state == "claimed",
+            ControlPlaneReviewGrant.revocation_claim_token == claim_token,
+        )
+        .one_or_none()
+    )
+    if grant is None:
+        raise ControlPlaneReviewGrantError("REVOCATION_CLAIM_LOST")
+    if grant.revoked_at is None:
+        raise ControlPlaneReviewGrantError("REVIEW_GRANT_NOT_REVOKED")
+    if grant.consumed_at is not None:
+        raise ControlPlaneReviewGrantError("REVIEW_GRANT_REPLAYED")
+    if grant.expires_at <= timestamp:
+        raise ControlPlaneReviewGrantError("REVIEW_GRANT_EXPIRED")
+    return _revocation_projection(grant)
+
+
+def mark_review_grant_revocation_delivered(
+    db,
+    *,
+    grant_id: int,
+    claim_token: str,
+    now: datetime | None = None,
+) -> None:
+    """Commit successful hosted tombstone delivery exactly once."""
+
+    query = db.query(ControlPlaneReviewGrant).filter(
+        ControlPlaneReviewGrant.id == grant_id,
+        ControlPlaneReviewGrant.revocation_state == "claimed",
+        ControlPlaneReviewGrant.revocation_claim_token == claim_token,
+    )
+    if db.bind.dialect.name == "postgresql":
+        query = query.with_for_update()
+    grant = query.one_or_none()
+    if grant is None:
+        raise ControlPlaneReviewGrantError("REVOCATION_CLAIM_LOST")
+    grant.revocation_state = "delivered"
+    grant.revocation_sent_at = _naive(now)
+    grant.revocation_claimed_at = None
+    grant.revocation_claimed_by = None
+    grant.revocation_claim_token = None
+    grant.last_revocation_error_code = None
+    db.commit()
+
+
+def release_review_grant_revocation(
+    db,
+    *,
+    grant_id: int,
+    claim_token: str,
+    reason_code: str = "CONTROL_PLANE_DELIVERY_FAILED",
+    now: datetime | None = None,
+) -> None:
+    """Release a failed revocation delivery for bounded retry."""
+
+    timestamp = _naive(now)
+    query = db.query(ControlPlaneReviewGrant).filter(
+        ControlPlaneReviewGrant.id == grant_id,
+        ControlPlaneReviewGrant.revocation_state == "claimed",
+        ControlPlaneReviewGrant.revocation_claim_token == claim_token,
+    )
+    if db.bind.dialect.name == "postgresql":
+        query = query.with_for_update()
+    grant = query.one_or_none()
+    if grant is None:
+        raise ControlPlaneReviewGrantError("REVOCATION_CLAIM_LOST")
+    bounded_reason = str(reason_code or "")[:64]
+    if not bounded_reason or not all(
+        character == "_" or character.isupper() or character.isdigit()
+        for character in bounded_reason
+    ):
+        bounded_reason = "CONTROL_PLANE_DELIVERY_FAILED"
+    grant.revocation_state = "expired" if grant.expires_at <= timestamp else "pending"
+    grant.revocation_available_at = timestamp + timedelta(seconds=10)
+    grant.revocation_claimed_at = None
+    grant.revocation_claimed_by = None
+    grant.revocation_claim_token = None
+    grant.last_revocation_error_code = bounded_reason
     db.commit()

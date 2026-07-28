@@ -42,6 +42,7 @@ from .protocol import (
     ControlCommandEnvelope,
     HeartbeatEnvelope,
     ReviewGrantEnvelope,
+    ReviewGrantRevocationEnvelope,
     RunnerEventEnvelope,
 )
 from .services import (
@@ -53,12 +54,13 @@ from .services import (
     poll_command,
     receive_heartbeat,
     receive_review_grant,
+    receive_review_grant_revocation,
     receive_runner_event,
     sha256_bytes,
     utc_now,
 )
 
-CURRENT_SCHEMA_REVISION = "0001_control_plane"
+CURRENT_SCHEMA_REVISION = "0002_review_grant_revocations"
 
 
 class ApiModel(BaseModel):
@@ -331,7 +333,8 @@ def create_app(
                     "adapter_version": row.adapter_version,
                     "form_fingerprint_digest": row.form_fingerprint_digest,
                     "expires_at": row.expires_at,
-                    "eligible": row.consumed_at is None,
+                    "revoked_at": row.revoked_at,
+                    "eligible": row.consumed_at is None and row.revoked_at is None,
                 }
                 for row in rows
             ]
@@ -432,6 +435,22 @@ def create_app(
     )
     def runner_review_grant(body: ReviewGrantEnvelope, db: db_dep) -> dict[str, object]:
         receipt = receive_review_grant(db, runtime, body)
+        return {
+            "accepted": True,
+            "grant_id": receipt.identifier,
+            "duplicate": receipt.duplicate,
+        }
+
+    @app.post(
+        "/api/runner/review-grant-revocations",
+        response_model=ReviewGrantReceipt,
+        include_in_schema=False,
+    )
+    def runner_review_grant_revocation(
+        body: ReviewGrantRevocationEnvelope,
+        db: db_dep,
+    ) -> dict[str, object]:
+        receipt = receive_review_grant_revocation(db, runtime, body)
         return {
             "accepted": True,
             "grant_id": receipt.identifier,
@@ -563,7 +582,9 @@ def _dashboard_html(
             f"<td><code>{html.escape(row.id)}</code></td>"
             f"<td>{html.escape(row.adapter)} {html.escape(row.adapter_version)}</td>"
             f"<td><code>{html.escape(row.application_ref)}</code> r{row.application_revision}</td>"
-            f"<td>{'used' if row.consumed_at else 'eligible'}</td>"
+            "<td>"
+            f"{'revoked' if row.revoked_at else ('used' if row.consumed_at else 'eligible')}"
+            "</td>"
             "<td>"
             + (
                 (
@@ -574,7 +595,7 @@ def _dashboard_html(
                     f"data-fingerprint='{html.escape(row.form_fingerprint_digest)}'>"
                     "Send application</button>"
                 )
-                if row.consumed_at is None
+                if row.consumed_at is None and row.revoked_at is None
                 else ""
             )
             + "</td></tr>"

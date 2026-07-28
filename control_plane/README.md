@@ -20,6 +20,10 @@ private Windows runner.
 - A locally signed review grant can produce at most one command. Commands are
   single-use and expire within five minutes. Preview and non-production
   deployments cannot dispatch.
+- Superseding a local review produces a signed, replay-safe revocation
+  tombstone. Revocations drain before new grant projection or command polling,
+  remain authoritative if messages reorder, and cancel any stale command that
+  has not been acknowledged by the private runner.
 - A lost poll response or acknowledgement receives the exact same signed
   command after a short claim lease. The private runner's durable receipt makes
   that redelivery idempotent; conflicting command content is rejected.

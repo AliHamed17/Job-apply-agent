@@ -253,6 +253,24 @@ class ControlPlaneClient:
             includes_duplicate=True,
         )
 
+    async def revoke_review_grant(self, envelope: Mapping[str, object]) -> None:
+        expected = _envelope_identifier(
+            envelope,
+            field="grant_id",
+            nested_payload=True,
+        )
+        receipt = await self._post(
+            "/api/runner/review-grant-revocations",
+            envelope,
+            allow_empty=False,
+        )
+        _require_mutation_receipt(
+            receipt,
+            identifier_field="grant_id",
+            expected_identifier=expected,
+            includes_duplicate=True,
+        )
+
     async def poll_command(
         self,
         envelope: Mapping[str, object],

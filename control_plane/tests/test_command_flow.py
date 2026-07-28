@@ -5,12 +5,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from job_control_plane.config import Settings
 from job_control_plane.crypto import verify_envelope
-from job_control_plane.models import RunnerDevice, RunnerNonce, SubmissionCommand
+from job_control_plane.models import ReviewGrant, RunnerDevice, RunnerNonce, SubmissionCommand
 from job_control_plane.protocol import (
     RUNNER_AUDIENCE,
     AttemptOutcome,
@@ -28,6 +30,8 @@ from job_control_plane.protocol import (
     ReasonCode,
     ReviewGrantEnvelope,
     ReviewGrantPayload,
+    ReviewGrantRevocationEnvelope,
+    ReviewGrantRevocationPayload,
     RunnerEventEnvelope,
     RunnerEventPayload,
     RunnerStatus,
@@ -72,6 +76,26 @@ def _poll(
     return response.json()
 
 
+def _revocation_payload(
+    grant: ReviewGrantEnvelope,
+    *,
+    revoked_at: datetime | None = None,
+    application_revision: int | None = None,
+) -> ReviewGrantRevocationPayload:
+    payload = grant.payload
+    return ReviewGrantRevocationPayload(
+        grant_id=payload.grant_id,
+        application_ref=payload.application_ref,
+        application_revision=application_revision or payload.application_revision,
+        adapter=payload.adapter,
+        adapter_version=payload.adapter_version,
+        form_fingerprint_digest=payload.form_fingerprint_digest,
+        reviewed_at=payload.reviewed_at,
+        grant_expires_at=grant.expires_at,
+        revoked_at=revoked_at or datetime.now(UTC),
+    )
+
+
 def test_runner_replay_and_review_grant_idempotency(
     client: TestClient,
     sign_runner: Callable[..., Any],
@@ -114,6 +138,240 @@ def test_runner_replay_and_review_grant_idempotency(
     )
     assert conflict_response.status_code == 409
     assert conflict_response.json() == {"code": "REVIEW_GRANT_CONFLICT"}
+
+
+def test_signed_revocation_is_idempotent_and_removes_send_authority(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    sign_runner: Callable[..., Any],
+    review_grant: ReviewGrantEnvelope,
+) -> None:
+    revoked_at = datetime.now(UTC)
+    payload = _revocation_payload(review_grant, revoked_at=revoked_at)
+    envelope = sign_runner(
+        ReviewGrantRevocationEnvelope,
+        payload,
+        issued_at=revoked_at,
+    )
+    response = client.post(
+        "/api/runner/review-grant-revocations",
+        json=envelope.model_dump(mode="json"),
+    )
+    assert response.status_code == 200
+    assert response.json()["duplicate"] is False
+
+    retry = sign_runner(
+        ReviewGrantRevocationEnvelope,
+        payload,
+        issued_at=revoked_at + timedelta(seconds=1),
+    )
+    replay = client.post(
+        "/api/runner/review-grant-revocations",
+        json=retry.model_dump(mode="json"),
+    )
+    assert replay.status_code == 200
+    assert replay.json()["duplicate"] is True
+
+    denied = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=_send_body(review_grant),
+    )
+    assert denied.status_code == 409
+    assert denied.json() == {"code": "REVIEW_GRANT_REVOKED"}
+
+    grants = client.get("/api/review-grants").json()["grants"]
+    row = next(item for item in grants if item["grant_id"] == str(payload.grant_id))
+    assert row["eligible"] is False
+    assert row["revoked_at"] is not None
+    assert "revoked" in client.get("/").text
+    with client.app.state.sessions() as db:
+        stored = db.get(ReviewGrant, str(payload.grant_id))
+        assert stored is not None
+        assert stored.revocation_envelope_digest is not None
+
+
+def test_revocation_tombstone_wins_over_delayed_grant_projection(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    sign_runner: Callable[..., Any],
+) -> None:
+    now = datetime.now(UTC)
+    grant_payload = ReviewGrantPayload(
+        grant_id=uuid4(),
+        application_ref=uuid4(),
+        application_revision=8,
+        adapter="greenhouse",
+        adapter_version="1.0.0",
+        form_fingerprint_digest="d" * 64,
+        reviewed_at=now,
+    )
+    delayed_grant = sign_runner(
+        ReviewGrantEnvelope,
+        grant_payload,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+    revocation = sign_runner(
+        ReviewGrantRevocationEnvelope,
+        _revocation_payload(
+            delayed_grant,
+            revoked_at=now + timedelta(seconds=1),
+        ),
+        issued_at=now + timedelta(seconds=1),
+    )
+
+    tombstoned = client.post(
+        "/api/runner/review-grant-revocations",
+        json=revocation.model_dump(mode="json"),
+    )
+    assert tombstoned.status_code == 200
+    assert tombstoned.json()["duplicate"] is False
+
+    delayed = client.post(
+        "/api/runner/review-grants",
+        json=delayed_grant.model_dump(mode="json"),
+    )
+    assert delayed.status_code == 200
+    assert delayed.json()["duplicate"] is True
+
+    denied = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=_send_body(delayed_grant),
+    )
+    assert denied.status_code == 409
+    assert denied.json() == {"code": "REVIEW_GRANT_REVOKED"}
+
+
+def test_revocation_requires_the_exact_original_grant_binding(
+    client: TestClient,
+    sign_runner: Callable[..., Any],
+    review_grant: ReviewGrantEnvelope,
+) -> None:
+    now = datetime.now(UTC)
+    conflict = sign_runner(
+        ReviewGrantRevocationEnvelope,
+        _revocation_payload(
+            review_grant,
+            revoked_at=now,
+            application_revision=review_grant.payload.application_revision + 1,
+        ),
+        issued_at=now,
+    )
+    response = client.post(
+        "/api/runner/review-grant-revocations",
+        json=conflict.model_dump(mode="json"),
+    )
+    assert response.status_code == 409
+    assert response.json() == {"code": "REVIEW_GRANT_REVOCATION_CONFLICT"}
+
+
+def test_revocation_cancels_a_stale_command_before_runner_delivery(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    heartbeat: HeartbeatEnvelope,
+    sign_runner: Callable[..., Any],
+    review_grant: ReviewGrantEnvelope,
+) -> None:
+    body = _send_body(review_grant)
+    sent = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=body,
+    )
+    assert sent.status_code == 202
+    command_id = sent.json()["command_id"]
+    now = datetime.now(UTC)
+    revocation = sign_runner(
+        ReviewGrantRevocationEnvelope,
+        _revocation_payload(review_grant, revoked_at=now),
+        issued_at=now,
+    )
+    assert (
+        client.post(
+            "/api/runner/review-grant-revocations",
+            json=revocation.model_dump(mode="json"),
+        ).status_code
+        == 200
+    )
+
+    assert _poll(client, sign_runner, heartbeat)["commands"] == []
+    status = client.get(f"/api/commands/{command_id}").json()
+    assert status["status"] == "rejected"
+    assert status["finished_at"] is not None
+
+    idempotent = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=body,
+    )
+    assert idempotent.status_code == 202
+    assert idempotent.json()["duplicate"] is True
+    assert idempotent.json()["status"] == "rejected"
+
+
+def test_claimed_command_accepts_only_a_late_rejected_ack_after_revocation(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    heartbeat: HeartbeatEnvelope,
+    sign_runner: Callable[..., Any],
+    review_grant: ReviewGrantEnvelope,
+) -> None:
+    sent = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=_send_body(review_grant),
+    )
+    command_id = UUID(sent.json()["command_id"])
+    assert len(_poll(client, sign_runner, heartbeat)["commands"]) == 1
+
+    now = datetime.now(UTC)
+    revocation = sign_runner(
+        ReviewGrantRevocationEnvelope,
+        _revocation_payload(review_grant, revoked_at=now),
+        issued_at=now,
+    )
+    assert (
+        client.post(
+            "/api/runner/review-grant-revocations",
+            json=revocation.model_dump(mode="json"),
+        ).status_code
+        == 200
+    )
+    rejected_ack = sign_runner(
+        CommandAckEnvelope,
+        CommandAckPayload(
+            command_id=command_id,
+            ack_status=CommandAckStatus.REJECTED,
+        ),
+    )
+    accepted = client.post(
+        f"/api/runner/commands/{command_id}/ack",
+        json=rejected_ack.model_dump(mode="json"),
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["duplicate"] is False
+    assert client.get(f"/api/commands/{command_id}").json()["ack_status"] == "rejected"
+
+
+def test_revocation_requires_a_paired_lowercase_sha256_audit_digest(
+    client: TestClient,
+    review_grant: ReviewGrantEnvelope,
+) -> None:
+    factory = client.app.state.sessions
+    with factory() as db:
+        row = db.get(ReviewGrant, str(review_grant.payload.grant_id))
+        assert row is not None
+        row.revoked_at = datetime.now(UTC)
+        row.revocation_envelope_digest = "A" * 64
+        with pytest.raises(IntegrityError):
+            db.flush()
+        db.rollback()
 
 
 def test_nonce_retention_prunes_expired_rows_without_weakening_live_replay(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -11,7 +12,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 from job_control_plane.app import create_app
 from job_control_plane.config import Settings
@@ -47,7 +48,7 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
 
     command.upgrade(config, "head")
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
-    assert current_revision(engine) == "0001_control_plane"
+    assert current_revision(engine) == "0002_review_grant_revocations"
     table_names = set(inspect(engine).get_table_names())
     assert {
         "control_runner_devices",
@@ -58,6 +59,10 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
         "control_operator_sessions",
         "control_operator_audit",
     }.issubset(table_names)
+    review_grant_columns = {
+        column["name"] for column in inspect(engine).get_columns("control_review_grants")
+    }
+    assert {"revoked_at", "revocation_envelope_digest"} <= review_grant_columns
 
     migrated_settings = replace(settings, database_url=database_url)
     app = create_app(migrated_settings, engine=engine)
@@ -86,6 +91,89 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
     command.downgrade(config, "base")
     downgraded = create_engine(database_url)
     assert not any(name.startswith("control_") for name in inspect(downgraded).get_table_names())
+    downgraded.dispose()
+
+
+def test_revocation_downgrade_preserves_noneligibility(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    database_path = tmp_path / "revocation-downgrade.sqlite"
+    database_url = f"sqlite:///{database_path}"
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("CONTROL_DATABASE_URL", database_url)
+    config = Config(str(root / "alembic.ini"))
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    now = datetime.now(UTC)
+    device_id = "00000000-0000-4000-8000-000000000001"
+    grant_id = "00000000-0000-4000-8000-000000000002"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO control_runner_devices ("
+                "id, public_key_b64, active, created_at"
+                ") VALUES (:id, :public_key, :active, :created_at)"
+            ),
+            {
+                "id": device_id,
+                "public_key": "a" * 43,
+                "active": True,
+                "created_at": now,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO control_review_grants ("
+                "id, device_id, application_ref, application_revision, "
+                "adapter, adapter_version, form_fingerprint_digest, envelope_digest, "
+                "reviewed_at, expires_at, created_at, consumed_at, "
+                "revoked_at, revocation_envelope_digest"
+                ") VALUES ("
+                ":id, :device_id, :application_ref, 1, "
+                "'greenhouse', '1.0.0', :fingerprint, :envelope_digest, "
+                ":reviewed_at, :expires_at, :created_at, NULL, "
+                ":revoked_at, :revocation_digest"
+                ")"
+            ),
+            {
+                "id": grant_id,
+                "device_id": device_id,
+                "application_ref": "00000000-0000-4000-8000-000000000003",
+                "fingerprint": "b" * 64,
+                "envelope_digest": "c" * 64,
+                "reviewed_at": now,
+                "expires_at": now + timedelta(minutes=5),
+                "created_at": now,
+                "revoked_at": now + timedelta(seconds=1),
+                "revocation_digest": "d" * 64,
+            },
+        )
+    engine.dispose()
+
+    command.downgrade(config, "0001_control_plane")
+    downgraded = create_engine(database_url, connect_args={"check_same_thread": False})
+    assert current_revision(downgraded) == "0001_control_plane"
+    columns = {
+        column["name"] for column in inspect(downgraded).get_columns("control_review_grants")
+    }
+    assert "revoked_at" not in columns
+    with downgraded.connect() as connection:
+        row = connection.execute(
+            text("SELECT consumed_at FROM control_review_grants WHERE id = :grant_id"),
+            {"grant_id": grant_id},
+        ).one()
+        eligible_count = connection.scalar(
+            text(
+                "SELECT count(*) FROM control_review_grants "
+                "WHERE id = :grant_id AND consumed_at IS NULL AND expires_at > :now"
+            ),
+            {"grant_id": grant_id, "now": now},
+        )
+    assert row.consumed_at is not None
+    assert eligible_count == 0
     downgraded.dispose()
 
 
