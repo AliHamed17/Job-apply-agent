@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .auth import (
+    InvalidLoginLimiter,
     clear_session_cookies,
     create_operator_session,
     load_operator_session,
@@ -24,10 +25,12 @@ from .auth import (
     require_origin,
     secret_digest,
     set_session_cookies,
+    touch_operator_session,
     verify_operator_token,
 )
 from .config import Settings
 from .db import (
+    EXPECTED_SCHEMA_REVISION,
     Base,
     build_engine,
     build_session_factory,
@@ -56,12 +59,12 @@ from .services import (
     receive_review_grant,
     receive_review_grant_revocation,
     receive_runner_event,
-    register_invalid_operator_login,
+    require_current_schema,
     sha256_bytes,
     utc_now,
 )
 
-CURRENT_SCHEMA_REVISION = "0003_login_throttle"
+CURRENT_SCHEMA_REVISION = EXPECTED_SCHEMA_REVISION
 
 
 class ApiModel(BaseModel):
@@ -156,6 +159,8 @@ def create_app(
     app.state.settings = runtime
     app.state.engine = database
     app.state.sessions = sessions
+    invalid_login_limiter = InvalidLoginLimiter()
+    app.state.invalid_login_limiter = invalid_login_limiter
 
     allowed_hosts = [
         host
@@ -168,7 +173,10 @@ def create_app(
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and content_length.isdigit() and int(content_length) > 65_536:
+        request_too_large = bool(
+            content_length and content_length.isdigit() and int(content_length) > 65_536
+        )
+        if request_too_large:
             response: Response = JSONResponse(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 content={"code": "REQUEST_TOO_LARGE"},
@@ -208,7 +216,10 @@ def create_app(
     db_dep = Annotated[Session, Depends(get_db)]
 
     def operator_session(request: Request, db: db_dep) -> OperatorSession:
-        return load_operator_session(request, db, runtime)
+        operator = load_operator_session(request, db, runtime)
+        require_current_schema(db)
+        touch_operator_session(operator)
+        return operator
 
     operator_dep = Annotated[OperatorSession, Depends(operator_session)]
 
@@ -232,23 +243,13 @@ def create_app(
     @app.post("/auth/login", response_model=LoginResponse, include_in_schema=False)
     def login(request: Request, body: LoginRequest, db: db_dep) -> Response:
         require_origin(request, runtime)
-        request_digest = secret_digest(runtime.operator_token, "operator-login")
         token_valid = verify_operator_token(runtime, body.token)
         if not token_valid:
-            denial = register_invalid_operator_login(db)
-            if denial.audit_denial:
-                audit(
-                    db,
-                    action="login",
-                    result="denied",
-                    request_digest=request_digest,
-                )
-            # The throttle update and optional sampled audit must survive the
-            # HTTPException rollback in the dependency boundary.
-            db.commit()
-            if denial.throttled:
+            if invalid_login_limiter.record_denial():
                 raise HTTPException(status_code=429, detail="LOGIN_RATE_LIMITED")
             raise HTTPException(status_code=401, detail="TOKEN_INVALID")
+        require_current_schema(db)
+        request_digest = secret_digest(runtime.operator_token, "operator-login")
         row, session_token, csrf_token = create_operator_session(db, runtime)
         audit(
             db,
@@ -294,10 +295,7 @@ def create_app(
     def readiness(db: db_dep, _operator: operator_dep) -> Response:
         now = utc_now()
         device = db.get(RunnerDevice, str(runtime.runner_device_id))
-        migration = current_revision(database)
-        migration_current = migration == CURRENT_SCHEMA_REVISION or (
-            runtime.app_env == "test" and migration is None
-        )
+        migration_current = current_revision(database) == CURRENT_SCHEMA_REVISION
         runner_online = bool(
             device
             and device.active
@@ -514,9 +512,11 @@ def create_app(
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def dashboard(request: Request, db: db_dep) -> HTMLResponse:
         try:
-            load_operator_session(request, db, runtime)
+            operator = load_operator_session(request, db, runtime)
         except HTTPException:
             return HTMLResponse(_login_html())
+        require_current_schema(db)
+        touch_operator_session(operator)
         grants = db.scalars(
             select(ReviewGrant).order_by(ReviewGrant.created_at.desc()).limit(50)
         ).all()

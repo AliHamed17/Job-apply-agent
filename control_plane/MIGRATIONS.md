@@ -30,8 +30,15 @@ initial control-plane schema:
 python -m alembic downgrade 0001_control_plane
 ```
 
-To remove only the singleton login-throttle extension while preserving review
-grant revocation tombstones:
+To restore the legacy bounded singleton login-throttle table while preserving
+the operator-audit retention index and existing audit rows:
+
+```powershell
+python -m alembic downgrade 0003_login_throttle
+```
+
+To remove the published operator-audit retention index and login-throttle
+extension while preserving review grant revocation tombstones and audit rows:
 
 ```powershell
 python -m alembic downgrade 0002_review_grant_revocations

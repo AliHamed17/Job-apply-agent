@@ -12,11 +12,16 @@ private Windows runner.
   The session cookie is `HttpOnly` and `SameSite=Strict`; production also uses
   `Secure`. Every operator mutation requires the exact configured Origin and a
   session-bound CSRF token.
-- Invalid operator tokens update one database-locked global bucket only after
-  constant-time token verification. The bounded five-minute window cannot be
-  expanded with attacker-controlled identifiers, denial audits are sampled
-  once per window, and valid tokens are never rejected by the denial throttle.
-  Operator audit history is retained for 30 days with a 5,000-row hard cap.
+- Invalid operator tokens enter one fixed-size, process-local bucket allowing
+  eight attempts per five-minute window after constant-time token verification.
+  Invalid attempts
+  never check out a database connection and never create audit rows; valid
+  tokens bypass the denial limiter.
+- Session cookies carry a purpose-separated HMAC proof. Missing, malformed, and
+  random cookies are rejected before database access. A valid session is loaded
+  read-only, the exact migration head is verified, and only then is last-seen
+  state updated. Operator audit history is retained for 30 days with a
+  serialized 5,000-row hard cap.
 - Runner routes accept canonical Ed25519-signed envelopes. Purpose, audience,
   key identity, issued/expiry timestamps, five-minute maximum lifetime, and a
   one-use nonce are checked. Control-plane commands use a separate signing key.

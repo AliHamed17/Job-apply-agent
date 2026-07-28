@@ -13,7 +13,6 @@ from sqlalchemy import create_engine, func, inspect, select
 from job_control_plane.config import Settings
 from job_control_plane.db import Base, build_session_factory
 from job_control_plane.models import (
-    LoginThrottle,
     OperatorAudit,
     ReviewGrant,
     SubmissionCommand,
@@ -29,14 +28,12 @@ from job_control_plane.protocol import (
     RunnerStatus,
 )
 from job_control_plane.services import (
-    LOGIN_DENIAL_LIMIT,
     ControlPlaneError,
     audit,
     create_command,
     poll_command,
     receive_heartbeat,
     receive_review_grant,
-    register_invalid_operator_login,
 )
 
 
@@ -255,33 +252,52 @@ def test_postgres_skip_locked_delivers_one_command_to_one_poller(
         assert db.scalar(select(func.count()).select_from(ReviewGrant)) == 1
 
 
-def test_postgres_concurrent_invalid_logins_share_one_bounded_bucket(
+def test_postgres_concurrent_audit_writers_preserve_exact_hard_cap(
     postgres_runtime,
 ) -> None:
     _runtime, factory = postgres_runtime
-    attempts = LOGIN_DENIAL_LIMIT + 4
-    barrier = Barrier(attempts)
+    now = datetime.now(UTC)
+    initial_rows = 4_995
+    writer_count = 12
+    with factory.begin() as db:
+        db.execute(
+            OperatorAudit.__table__.insert(),
+            [
+                {
+                    "action": "seed",
+                    "target_type": None,
+                    "target_id": None,
+                    "result": "accepted",
+                    "request_digest": f"{index:064x}",
+                    "created_at": now - timedelta(minutes=1),
+                }
+                for index in range(initial_rows)
+            ],
+        )
 
-    def deny_login(_index: int) -> bool:
+    barrier = Barrier(writer_count)
+    new_digests = {f"{initial_rows + index:064x}" for index in range(writer_count)}
+
+    def write_audit(index: int) -> None:
         with factory() as db:
             barrier.wait()
-            decision = register_invalid_operator_login(db)
-            if decision.audit_denial:
-                audit(
-                    db,
-                    action="login",
-                    result="denied",
-                    request_digest="a" * 64,
-                )
+            audit(
+                db,
+                action="concurrent",
+                result="accepted",
+                request_digest=f"{initial_rows + index:064x}",
+                now=now,
+            )
             db.commit()
-            return decision.throttled
 
-    with ThreadPoolExecutor(max_workers=attempts) as executor:
-        throttled = list(executor.map(deny_login, range(attempts)))
+    with ThreadPoolExecutor(max_workers=writer_count) as executor:
+        list(executor.map(write_audit, range(writer_count)))
 
-    assert sum(throttled) == attempts - LOGIN_DENIAL_LIMIT + 1
     with factory() as db:
-        buckets = list(db.scalars(select(LoginThrottle)))
-        assert len(buckets) == 1
-        assert buckets[0].denial_count == LOGIN_DENIAL_LIMIT
-        assert db.scalar(select(func.count()).select_from(OperatorAudit)) == 1
+        assert db.scalar(select(func.count()).select_from(OperatorAudit)) == 5_000
+        retained_new_digests = set(
+            db.scalars(
+                select(OperatorAudit.request_digest).where(OperatorAudit.action == "concurrent")
+            )
+        )
+    assert retained_new_digests == new_digests

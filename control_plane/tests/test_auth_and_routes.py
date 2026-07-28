@@ -4,16 +4,19 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from job_control_plane import services
 from job_control_plane.app import create_app
+from job_control_plane.auth import (
+    INVALID_LOGIN_LIMIT,
+    INVALID_LOGIN_WINDOW_SECONDS,
+    SESSION_COOKIE,
+    InvalidLoginLimiter,
+)
 from job_control_plane.config import Settings
-from job_control_plane.models import LoginThrottle, OperatorAudit, OperatorSession
+from job_control_plane.models import OperatorAudit, OperatorSession
 from job_control_plane.services import (
-    LOGIN_DENIAL_LIMIT,
-    LOGIN_DENIAL_WINDOW,
-    LOGIN_THROTTLE_ID,
     OPERATOR_AUDIT_RETENTION,
     audit,
 )
@@ -73,6 +76,10 @@ def test_login_requires_exact_origin_and_sets_hardened_session(
     session_cookie = next(value for value in cookies if "jaa_control_session=" in value)
     assert "HttpOnly" in session_cookie
     assert "SameSite=strict" in session_cookie
+    opaque_value = session_cookie.split(";", 1)[0].split("=", 1)[1]
+    token, proof = opaque_value.split(".")
+    assert len(token) == 43
+    assert len(proof) == 64
     assert settings.operator_token not in response.text
 
     dashboard = client.get("/")
@@ -86,12 +93,12 @@ def test_login_requires_exact_origin_and_sets_hardened_session(
     assert "Application not employer-confirmed" in dashboard.text
 
 
-def test_invalid_login_uses_one_bounded_bucket_and_one_audit_per_window(
+def test_invalid_login_uses_a_fixed_local_bucket_without_audit_rows(
     client: TestClient,
     settings: Settings,
 ) -> None:
     headers = {"origin": settings.public_origin}
-    for _ in range(LOGIN_DENIAL_LIMIT - 1):
+    for _ in range(INVALID_LOGIN_LIMIT):
         response = client.post(
             "/auth/login",
             headers=headers,
@@ -117,10 +124,6 @@ def test_invalid_login_uses_one_bounded_bucket_and_one_audit_per_window(
 
     factory = client.app.state.sessions
     with factory() as db:
-        buckets = list(db.scalars(select(LoginThrottle)))
-        assert len(buckets) == 1
-        assert buckets[0].id == LOGIN_THROTTLE_ID
-        assert buckets[0].denial_count == LOGIN_DENIAL_LIMIT
         denied_audits = list(
             db.scalars(
                 select(OperatorAudit).where(
@@ -129,21 +132,16 @@ def test_invalid_login_uses_one_bounded_bucket_and_one_audit_per_window(
                 )
             )
         )
-        assert len(denied_audits) == 1
-        assert denied_audits[0].request_digest not in {
-            settings.operator_token,
-            "invalid-" + ("x" * 32),
-            "invalid-" + ("y" * 32),
-            "invalid-" + ("z" * 32),
-        }
+        assert denied_audits == []
+        assert db.scalar(select(OperatorSession)) is None
 
 
-def test_valid_operator_token_bypasses_saturated_invalid_login_throttle(
+def test_valid_operator_token_bypasses_saturated_invalid_login_limiter(
     client: TestClient,
     settings: Settings,
 ) -> None:
     headers = {"origin": settings.public_origin}
-    for _ in range(LOGIN_DENIAL_LIMIT + 2):
+    for _ in range(INVALID_LOGIN_LIMIT + 2):
         client.post(
             "/auth/login",
             headers=headers,
@@ -157,6 +155,56 @@ def test_valid_operator_token_bypasses_saturated_invalid_login_throttle(
     )
     assert valid.status_code == 200
     assert valid.json()["authenticated"] is True
+
+
+def test_invalid_tokens_and_cookies_never_checkout_a_database_connection(
+    client: TestClient,
+    settings: Settings,
+) -> None:
+    engine = client.app.state.engine
+    checkouts = 0
+
+    def count_checkout(*_args) -> None:
+        nonlocal checkouts
+        checkouts += 1
+
+    event.listen(engine, "checkout", count_checkout)
+    try:
+        headers = {"origin": settings.public_origin}
+        for _ in range(INVALID_LOGIN_LIMIT + 4):
+            response = client.post(
+                "/auth/login",
+                headers=headers,
+                json={"token": "invalid-" + ("x" * 32)},
+            )
+            assert response.status_code in {401, 429}
+
+        root_without_cookie = client.get("/")
+        protected_without_cookie = client.get("/api/commands")
+        assert root_without_cookie.status_code == 200
+        assert "Enter the operator token" in root_without_cookie.text
+        assert protected_without_cookie.status_code == 401
+
+        for cookie in ("malformed", f"{'A' * 43}.{'0' * 64}"):
+            client.cookies.set(SESSION_COOKIE, cookie)
+            root = client.get("/")
+            protected = client.get("/api/commands")
+            assert root.status_code == 200
+            assert "Enter the operator token" in root.text
+            assert protected.status_code == 401
+            assert protected.json()["code"] in {"SESSION_REQUIRED", "SESSION_INVALID"}
+        client.cookies.delete(SESSION_COOKIE)
+        assert checkouts == 0
+
+        valid = client.post(
+            "/auth/login",
+            headers=headers,
+            json={"token": settings.operator_token},
+        )
+        assert valid.status_code == 200
+        assert checkouts > 0
+    finally:
+        event.remove(engine, "checkout", count_checkout)
 
 
 def test_operator_audit_retention_and_hard_cap_are_enforced(
@@ -203,44 +251,18 @@ def test_operator_audit_retention_and_hard_cap_are_enforced(
         assert [row.request_digest for row in retained] == ["f" * 64]
 
 
-def test_invalid_login_starts_a_new_sample_after_the_fixed_window(
-    client: TestClient,
-    settings: Settings,
-) -> None:
-    headers = {"origin": settings.public_origin}
-    first = client.post(
-        "/auth/login",
-        headers=headers,
-        json={"token": "invalid-" + ("x" * 32)},
+def test_invalid_login_limiter_reopens_after_the_fixed_window() -> None:
+    clock = [100.0]
+    limiter = InvalidLoginLimiter(
+        limit=2,
+        window_seconds=INVALID_LOGIN_WINDOW_SECONDS,
+        clock=lambda: clock[0],
     )
-    assert first.status_code == 401
-
-    factory = client.app.state.sessions
-    with factory.begin() as db:
-        bucket = db.get(LoginThrottle, LOGIN_THROTTLE_ID)
-        assert bucket is not None
-        bucket.window_started_at = datetime.now(UTC) - LOGIN_DENIAL_WINDOW
-
-    second = client.post(
-        "/auth/login",
-        headers=headers,
-        json={"token": "invalid-" + ("y" * 32)},
-    )
-    assert second.status_code == 401
-    with factory() as db:
-        assert (
-            len(
-                list(
-                    db.scalars(
-                        select(OperatorAudit).where(
-                            OperatorAudit.action == "login",
-                            OperatorAudit.result == "denied",
-                        )
-                    )
-                )
-            )
-            == 2
-        )
+    assert limiter.record_denial() is False
+    assert limiter.record_denial() is False
+    assert limiter.record_denial() is True
+    clock[0] += INVALID_LOGIN_WINDOW_SECONDS
+    assert limiter.record_denial() is False
 
 
 def test_exact_staged_deployment_host_allows_liveness_but_not_operator_access(

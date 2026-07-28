@@ -5,8 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
+from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from threading import Lock
+from time import monotonic
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request, Response, status
@@ -19,6 +24,40 @@ from .models import OperatorSession
 SESSION_COOKIE = "jaa_control_session"
 CSRF_COOKIE = "jaa_control_csrf"
 CSRF_HEADER = "x-csrf-token"
+INVALID_LOGIN_LIMIT = 8
+INVALID_LOGIN_WINDOW_SECONDS = 300.0
+_SESSION_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_SESSION_PROOF_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+class InvalidLoginLimiter:
+    """One fixed-size, process-local denial bucket with no request keys."""
+
+    def __init__(
+        self,
+        *,
+        limit: int = INVALID_LOGIN_LIMIT,
+        window_seconds: float = INVALID_LOGIN_WINDOW_SECONDS,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        if limit < 1 or window_seconds <= 0:
+            raise ValueError("invalid login limiter bounds")
+        self._limit = limit
+        self._window_seconds = window_seconds
+        self._clock = clock
+        self._denials: deque[float] = deque(maxlen=limit)
+        self._lock = Lock()
+
+    def record_denial(self) -> bool:
+        with self._lock:
+            now = self._clock()
+            cutoff = now - self._window_seconds
+            while self._denials and self._denials[0] <= cutoff:
+                self._denials.popleft()
+            if len(self._denials) >= self._limit:
+                return True
+            self._denials.append(now)
+            return False
 
 
 def _token() -> str:
@@ -34,6 +73,31 @@ def verify_operator_token(settings: Settings, candidate: str) -> bool:
         secret_digest(settings.operator_token, candidate),
         secret_digest(settings.operator_token, settings.operator_token),
     )
+
+
+def _session_record_digest(settings: Settings, token: str) -> str:
+    return secret_digest(settings.session_secret, f"session-record:{token}")
+
+
+def _session_cookie_value(settings: Settings, token: str) -> str:
+    proof = secret_digest(settings.session_secret, f"session-cookie:{token}")
+    return f"{token}.{proof}"
+
+
+def _verified_session_digest(request: Request, settings: Settings) -> str:
+    cookie = request.cookies.get(SESSION_COOKIE, "")
+    parts = cookie.split(".")
+    if (
+        len(parts) != 2
+        or _SESSION_TOKEN_PATTERN.fullmatch(parts[0]) is None
+        or _SESSION_PROOF_PATTERN.fullmatch(parts[1]) is None
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SESSION_REQUIRED")
+    token, supplied_proof = parts
+    expected_proof = secret_digest(settings.session_secret, f"session-cookie:{token}")
+    if not hmac.compare_digest(supplied_proof, expected_proof):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SESSION_INVALID")
+    return _session_record_digest(settings, token)
 
 
 def _authority(value: str, *, scheme: str | None = None) -> tuple[str, int] | None:
@@ -69,7 +133,7 @@ def create_operator_session(
     session_token = _token()
     csrf_token = _token()
     row = OperatorSession(
-        session_token_digest=secret_digest(settings.session_secret, session_token),
+        session_token_digest=_session_record_digest(settings, session_token),
         csrf_token_digest=secret_digest(settings.csrf_secret, csrf_token),
         created_at=created_at,
         expires_at=created_at + timedelta(seconds=settings.session_ttl_seconds),
@@ -95,7 +159,7 @@ def set_session_cookies(
     }
     response.set_cookie(
         SESSION_COOKIE,
-        session_token,
+        _session_cookie_value(settings, session_token),
         httponly=True,
         **common,
     )
@@ -131,16 +195,20 @@ def load_operator_session(
     *,
     now: datetime | None = None,
 ) -> OperatorSession:
-    token = request.cookies.get(SESSION_COOKIE, "")
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SESSION_REQUIRED")
-    digest = secret_digest(settings.session_secret, token)
+    digest = _verified_session_digest(request, settings)
     row = db.scalar(select(OperatorSession).where(OperatorSession.session_token_digest == digest))
     checked_at = (now or datetime.now(UTC)).astimezone(UTC)
     if row is None or row.revoked_at is not None or _as_utc(row.expires_at) <= checked_at:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SESSION_INVALID")
-    row.last_seen_at = checked_at
     return row
+
+
+def touch_operator_session(
+    session: OperatorSession,
+    *,
+    now: datetime | None = None,
+) -> None:
+    session.last_seen_at = (now or datetime.now(UTC)).astimezone(UTC)
 
 
 def require_csrf(
@@ -167,6 +235,9 @@ def _as_utc(value: datetime) -> datetime:
 __all__ = [
     "CSRF_COOKIE",
     "CSRF_HEADER",
+    "INVALID_LOGIN_LIMIT",
+    "INVALID_LOGIN_WINDOW_SECONDS",
+    "InvalidLoginLimiter",
     "SESSION_COOKIE",
     "clear_session_cookies",
     "create_operator_session",
@@ -175,5 +246,6 @@ __all__ = [
     "require_origin",
     "secret_digest",
     "set_session_cookies",
+    "touch_operator_session",
     "verify_operator_token",
 ]

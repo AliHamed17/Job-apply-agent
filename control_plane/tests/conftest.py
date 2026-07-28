@@ -9,6 +9,8 @@ from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -73,13 +75,15 @@ def settings(
 
 
 @pytest.fixture
-def client(settings: Settings) -> Generator[TestClient, None, None]:
+def client(settings: Settings, monkeypatch) -> Generator[TestClient, None, None]:
+    monkeypatch.setenv("CONTROL_DATABASE_URL", settings.database_url)
+    command.upgrade(Config(str(CONTROL_PLANE_ROOT / "alembic.ini")), "head")
     engine = create_engine(
         settings.database_url,
         connect_args={"check_same_thread": False},
         pool_pre_ping=True,
     )
-    app = create_app(settings, engine=engine, initialize_schema=True)
+    app = create_app(settings, engine=engine)
     with TestClient(app, base_url=settings.public_origin) as test_client:
         yield test_client
     engine.dispose()
