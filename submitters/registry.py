@@ -19,6 +19,10 @@ from submitters.greenhouse_playwright import playwright_greenhouse_browser_facto
 from submitters.greenhouse_v1 import register_greenhouse_browser_v1
 from submitters.lever_playwright import playwright_lever_browser_factory
 from submitters.lever_v1 import register_lever_browser_v1
+from submitters.smartrecruiters_playwright import (
+    playwright_smartrecruiters_browser_factory,
+)
+from submitters.smartrecruiters_v1 import register_smartrecruiters_browser_v1
 from submitters.workday_playwright import playwright_workday_browser_factory
 from submitters.workday_v2 import register_workday_browser_v2
 
@@ -49,6 +53,10 @@ def get_two_phase_registry() -> SubmitterRegistry:
             register_ashby_browser_v1(
                 two_phase_registry,
                 browser_factory=playwright_ashby_browser_factory,
+            )
+            register_smartrecruiters_browser_v1(
+                two_phase_registry,
+                browser_factory=playwright_smartrecruiters_browser_factory,
             )
             _INITIALIZED = True
     return two_phase_registry

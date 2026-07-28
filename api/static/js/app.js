@@ -1693,6 +1693,7 @@ function formAnswerControl(field, decision, index, reviewable, partialPlan) {
 function renderFormPlanPanel(appId, plan) {
     const panel = $('modal-form-plan');
     const fields = Array.isArray(plan.fields) ? plan.fields : [];
+    const disclosures = Array.isArray(plan.disclosures) ? plan.disclosures : [];
     const decisions = Array.isArray(plan.decisions) ? plan.decisions : [];
     const decisionByField = new Map(decisions.map(item => [item.field_id, item]));
     const resolved = fields.filter(
@@ -1735,6 +1736,20 @@ function renderFormPlanPanel(appId, plan) {
             </div>
         </div>`;
     }).join('');
+    const disclosureRows = disclosures.map(disclosure => `
+        <div class="qa-item" data-form-disclosure>
+            <div class="qa-q">${esc(
+                String(disclosure.kind || 'information').replaceAll('_', ' ')
+            )}</div>
+            <div class="qa-a">${esc(disclosure.summary || 'Disclosure unavailable')}</div>
+            <div class="qa-a text-dim">
+                ${esc(disclosure.source || 'inline')} · evidence
+                ${esc(redactedDigest(disclosure.content_sha256))}
+                ${disclosure.acknowledgement_field_id
+                    ? ' · Bound to an operator-reviewed consent control'
+                    : ''}
+            </div>
+        </div>`).join('');
 
     panel.innerHTML = `
         <div class="qa-item">
@@ -1753,6 +1768,11 @@ function renderFormPlanPanel(appId, plan) {
             <div class="qa-q">Provenance</div>
             <div class="qa-a">${esc(provenance.join(' · ') || 'No resolved answers')}</div>
         </div>
+        <div class="qa-item">
+            <div class="qa-q">Employer disclosures</div>
+            <div class="qa-a">${disclosures.length} ordered notice${disclosures.length === 1 ? '' : 's'} recorded for review</div>
+        </div>
+        ${disclosureRows || '<div class="qa-item" data-form-disclosure><div class="qa-a text-dim">No employer disclosures were recorded.</div></div>'}
         <div class="qa-item" data-attachment-evidence>
             <div class="qa-q">Selected CV (redacted)</div>
             <div class="qa-a">${esc(plan.selected_cv_ref || 'unavailable')} · SHA-256 ${esc(redactedDigest(plan.selected_cv_hash))}</div>

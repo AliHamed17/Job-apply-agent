@@ -15,6 +15,7 @@ import string
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
+from hashlib import sha256
 from typing import Annotated, Literal, TypeAlias
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -48,6 +49,7 @@ from llm.qualification_registry import is_qualified_local_model_identity
 _MAX_FORM_PLAN_LIFETIME = timedelta(minutes=30)
 _MAX_ANSWER_TEXT_LENGTH = 2_000
 _MAX_FORM_FIELDS = 200
+_MAX_FORM_DISCLOSURES = 32
 _MAX_FORM_OPTIONS = 200
 _MAX_ACCEPTED_FILE_TYPES = 32
 _MAX_FORM_BLOCKERS = 32
@@ -192,6 +194,25 @@ class SensitiveCategory(StrEnum):
     ATTESTATION = "attestation"
 
 
+class DisclosureKind(StrEnum):
+    """Bounded candidate-facing notices observed separately from controls."""
+
+    PRIVACY_POLICY = "privacy_policy"
+    NO_PRIVACY_POLICY_NOTICE = "no_privacy_policy_notice"
+    AI_DISCLOSURE = "ai_disclosure"
+    IMPRINT = "imprint"
+    DIVERSITY = "diversity"
+    INFORMATION = "information"
+
+
+class DisclosureSource(StrEnum):
+    """How a disclosure was presented without persisting its raw target URL."""
+
+    INLINE = "inline"
+    LINK = "link"
+    SYNTHETIC = "synthetic"
+
+
 class AnswerDisposition(StrEnum):
     RESOLVED = "resolved"
     ABSTAINED = "abstained"
@@ -268,6 +289,39 @@ class FormFieldConstraintsV1(_FrozenDomainModel):
             and self.min_value > self.max_value
         ):
             raise ValueError("min_value cannot exceed max_value")
+        return self
+
+
+class FormDisclosureV1(_FrozenDomainModel):
+    """One ordered, bounded disclosure included in operator review.
+
+    ``summary`` is public candidate-form text, never an answer or candidate
+    value. ``reference_sha256`` binds an inline element, public link target, or
+    deterministic no-policy sentinel without persisting a raw URL.
+    """
+
+    disclosure_id: BoundedText
+    kind: DisclosureKind
+    source: DisclosureSource
+    position: int = Field(ge=0)
+    summary: LongBoundedText
+    content_sha256: Sha256Digest
+    reference_sha256: Sha256Digest
+    acknowledgement_field_id: BoundedText | None = None
+
+    @model_validator(mode="after")
+    def validate_disclosure(self) -> FormDisclosureV1:
+        expected = sha256(self.summary.encode("utf-8")).hexdigest()
+        if self.content_sha256 != expected:
+            raise ValueError("disclosure content digest must bind the bounded summary")
+        if self.kind is DisclosureKind.NO_PRIVACY_POLICY_NOTICE:
+            if (
+                self.source is not DisclosureSource.SYNTHETIC
+                or self.acknowledgement_field_id is not None
+            ):
+                raise ValueError("no-policy notice must be synthetic and non-interactive")
+        elif self.source is DisclosureSource.SYNTHETIC:
+            raise ValueError("only the no-policy notice may be synthetic")
         return self
 
 
@@ -1440,6 +1494,10 @@ class FormPlanV1(_FrozenDomainModel):
     created_at: AwareDatetime
     expires_at: AwareDatetime
     fields: tuple[FormFieldV1, ...] = Field(max_length=_MAX_FORM_FIELDS)
+    disclosures: tuple[FormDisclosureV1, ...] = Field(
+        default=(),
+        max_length=_MAX_FORM_DISCLOSURES,
+    )
     decisions: tuple[AnswerDecisionV1, ...] = Field(max_length=_MAX_FORM_FIELDS)
     blockers: tuple[ReasonCode, ...] = Field(
         default=(),
@@ -1493,6 +1551,29 @@ class FormPlanV1(_FrozenDomainModel):
         field_by_id = {field.field_id: field for field in self.fields}
         if len(field_by_id) != len(self.fields):
             raise ValueError("form field IDs must be unique")
+        disclosure_by_id = {disclosure.disclosure_id: disclosure for disclosure in self.disclosures}
+        if len(disclosure_by_id) != len(self.disclosures):
+            raise ValueError("form disclosure IDs must be unique")
+        disclosure_positions = [disclosure.position for disclosure in self.disclosures]
+        if len(disclosure_positions) != len(set(disclosure_positions)):
+            raise ValueError("form disclosure positions must be unique")
+        disclosure_kinds = {disclosure.kind for disclosure in self.disclosures}
+        if {
+            DisclosureKind.PRIVACY_POLICY,
+            DisclosureKind.NO_PRIVACY_POLICY_NOTICE,
+        }.issubset(disclosure_kinds):
+            raise ValueError("privacy policy and no-policy notice are mutually exclusive")
+        for disclosure in self.disclosures:
+            if disclosure.acknowledgement_field_id is None:
+                continue
+            acknowledgement = field_by_id.get(disclosure.acknowledgement_field_id)
+            if acknowledgement is None or acknowledgement.field_type not in {
+                FieldType.CONSENT,
+                FieldType.ATTESTATION,
+            }:
+                raise ValueError(
+                    "disclosure acknowledgement must reference an observed consent control"
+                )
         decision_by_id = {decision.field_id: decision for decision in self.decisions}
         if len(decision_by_id) != len(self.decisions):
             raise ValueError("answer decision field IDs must be unique")

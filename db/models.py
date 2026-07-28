@@ -550,6 +550,7 @@ class FormPlan(Base):
     attachment_verified_at = Column(DateTime, nullable=True)
     profile_version = Column(Integer, nullable=True)
     fields_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    disclosures_json = Column(Text, nullable=False, default="[]", server_default="[]")
     decisions_json = Column(Text, nullable=False, default="[]", server_default="[]")
     blockers_json = Column(Text, nullable=False, default="[]", server_default="[]")
     locale = Column(String(32), nullable=False, default="en", server_default="en")

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import inspect as python_inspect
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from profile.cv_content_cache import (
     CVArtifactBindingError,
@@ -271,6 +272,7 @@ class FormPlanResponse(BaseModel):
     attachment_verified_at: str | None
     profile_version: int | None
     fields: list = Field(default_factory=list)
+    disclosures: list = Field(default_factory=list)
     decisions: list = Field(default_factory=list)
     blockers: list = Field(default_factory=list)
     locale: str = "en"
@@ -564,6 +566,7 @@ def _form_plan_response(plan: FormPlan, app: Application) -> FormPlanResponse:
         ),
         profile_version=plan.profile_version,
         fields=_json_list(plan.fields_json),
+        disclosures=_json_list(getattr(plan, "disclosures_json", "[]")),
         decisions=_json_list(plan.decisions_json),
         blockers=_json_list(plan.blockers_json),
         locale=plan.locale,
@@ -1166,6 +1169,7 @@ async def inspect_application_form(
         "resume_path": resume_path,
         "selected_cv_id": selected_cv_id,
     }
+    inspector_parameters: Mapping[str, python_inspect.Parameter]
     try:
         inspector_parameters = python_inspect.signature(inspector.inspect).parameters
     except (TypeError, ValueError):
@@ -1532,6 +1536,11 @@ async def confirm_application_answer(
         profile_version=cloned_domain.profile_version,
         fields_json=json.dumps(
             [item.model_dump(mode="json") for item in cloned_domain.fields],
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ),
+        disclosures_json=json.dumps(
+            [item.model_dump(mode="json") for item in cloned_domain.disclosures],
             separators=(",", ":"),
             ensure_ascii=True,
         ),

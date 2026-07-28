@@ -1,0 +1,133 @@
+{
+  "adapter": {
+    "adapter_name": "smartrecruiters",
+    "adapter_version": "1.0.0",
+    "execution_contract_version": "two-phase-v2",
+    "selector_version": "smartrecruiters-candidate-v1",
+    "transport": "browser"
+  },
+  "achieved_tier": "fixture_qualified",
+  "fixture_evidence": {
+    "cases": [
+      {
+        "expected_reason_code": "ALREADY_APPLIED",
+        "expected_state": "already_applied",
+        "file": "already_applied.html",
+        "sha256": "e84d3bd92abb0856cc6049b75f5be4f600ea939c7605481422f39af9c7feb697"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "application_form.html",
+        "sha256": "f32c2482b7858609c19e362cf885beba640cc0ee3c954e50d897b38d13e2b2b2"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "job",
+        "file": "candidate_job.html",
+        "sha256": "e7bc511bc292b8aaeffe09a2f78eefa6ba6b77b749774e971dcb8732dce39439"
+      },
+      {
+        "expected_reason_code": "CHALLENGE_DETECTED",
+        "expected_state": "challenge",
+        "file": "captcha.html",
+        "sha256": "e5943f96e3c86b1b52ee9a703abff5dfc64b0dca817ed1f3c91707b682ab4d91"
+      },
+      {
+        "expected_reason_code": "JOB_CLOSED",
+        "expected_state": "closed",
+        "file": "closed_job.html",
+        "sha256": "01f9f687539548a93bfefcbcc0b68a7977d9ef1f246bdd88d6fd45ea6f84cddb"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "conditional_drift.html",
+        "sha256": "dce3437c31423daaaa5a69371f9c193818e0cacd6b5d12f5e3afc26de7504bfc"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "generic_success.html",
+        "sha256": "d92d71e3593fbac3b7eba4f2be1e7be9cdab9922360b3780c672600880cd30fd"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "hidden_confirmation.html",
+        "sha256": "6baa4d8f851764933a78545adfcabc1e12e73ec5c8aed19765eb66adb103b70a"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "invalid_action.html",
+        "sha256": "47622a02aa69e7281c9b4e9b968e0413e41258f19d43cdc7a3a4d90cdc7a35ba"
+      },
+      {
+        "expected_reason_code": "SESSION_EXPIRED",
+        "expected_state": "login",
+        "file": "login.html",
+        "sha256": "3db7e557b6d9f5a52c80258467dc16bea9b0585fd82d60b39a90a13d86075dbc"
+      },
+      {
+        "expected_reason_code": "MFA_REQUIRED",
+        "expected_state": "mfa",
+        "file": "mfa.html",
+        "sha256": "b2c295efeea6975a13470b5924fdf92a8d2dee4930a949add17ffac920a05490"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "no_privacy_policy.html",
+        "sha256": "9ae0fcfe31f5972ad95b5deb7271ed0bbacd83696c528ee544b3cf7114560ca5"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "outer_has_proxy_guard.html",
+        "sha256": "8f599a74ab5cac8cd99bb7564e62dd31e8b8a20810b6112ba0cfa10b210eafad"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "selector_drift.html",
+        "sha256": "e53af99d023342bd455a6d496262ffd81c4b78d60e7fb5afb1547249f55d5239"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "confirmation",
+        "file": "verified_confirmation.html",
+        "sha256": "ea535963b58971d9e8dfe5979f8d3c08e52d6db64bf62fcd02ce2e9e7b77681d"
+      }
+    ],
+    "digest_algorithm": "sha256-manifest-v1",
+    "fixture_count": 15,
+    "fixture_digest": "cecb79d2229e263992b8e22c92879b53ebe5ca94359f343f29983d893cf02b32",
+    "fixture_directory": "tests/fixtures/smartrecruiters_v1"
+  },
+  "interpretation": "Sanitized offline fixture qualification only. It does not qualify a real form, a live canary, or an external final action.",
+  "qualification_gates": {
+    "final_external_action_enabled": false,
+    "fixture_contract": "passed",
+    "live_canary": "pending",
+    "qualified_form_scope": [],
+    "real_url_dry_run": "pending"
+  },
+  "recorded_on": "2026-07-27",
+  "safety_observations": {
+    "external_network_used": false,
+    "final_action_performed": false,
+    "final_request_method": "POST",
+    "final_request_resource_type": "document",
+    "final_request_transport": "native_multipart_candidate_form",
+    "private_data_used": false,
+    "protected_api_enabled": false,
+    "real_application_used": false,
+    "stored_content_scope": [
+      "sanitized fixture identifiers",
+      "bounded states and reason codes",
+      "cryptographic digests"
+    ]
+  },
+  "schema_version": "ats-browser-qualification-report-v1"
+}

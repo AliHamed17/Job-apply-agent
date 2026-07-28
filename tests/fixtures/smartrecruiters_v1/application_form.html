@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en"><body>
+<main data-qa="posting-identity"
+      data-company="FixtureCo"
+      data-public-id="123456789"
+      data-posting-uuid="11111111-2222-4333-8444-555555555555"
+      data-candidate-url="https://jobs.smartrecruiters.com/FixtureCo/123456789-sanitized-role">
+<form data-qa="candidate-application-form"
+      data-company="FixtureCo"
+      data-public-id="123456789"
+      data-posting-uuid="11111111-2222-4333-8444-555555555555"
+      action="https://jobs.smartrecruiters.com/candidate-experience/postings/11111111-2222-4333-8444-555555555555/applications"
+      method="post" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="fixture-token">
+  <input type="hidden" name="locale" value="en">
+  <input type="hidden" name="postingUuid" value="11111111-2222-4333-8444-555555555555">
+  <input type="hidden" name="publicPostingId" value="123456789">
+  <section data-qa="application-field" data-field-id="first_name"
+           data-canonical-name="first_name" data-section="identity">
+    <label for="first_name">First name</label>
+    <input id="first_name" name="candidate.firstName" type="text"
+           minlength="1" maxlength="100" required value="Fixture">
+  </section>
+  <section data-qa="application-field" data-field-id="resume"
+           data-canonical-name="resume" data-section="documents">
+    <label for="resume">Resume</label>
+    <input id="resume" name="candidate.resume" type="file"
+           data-qa="resume-upload" accept=".pdf,application/pdf" required>
+  </section>
+  <section data-qa="application-field" data-field-id="screening_level"
+           data-canonical-name="screening_level" data-section="screening">
+    <label for="screening_level">Fixture experience level</label>
+    <select id="screening_level" name="answers.level" required>
+      <option value="">Choose</option>
+      <option data-option-id="level-one" value="one">One</option>
+      <option data-option-id="level-two" value="two" selected>Two</option>
+    </select>
+  </section>
+  <section data-qa="application-field" data-field-id="work_0"
+           data-canonical-name="company" data-section="experience"
+           data-repeat-group="employment" data-repeat-index="0">
+    <label for="work_0">Employer one</label>
+    <input id="work_0" name="experience[0].company" type="text" value="Example A">
+  </section>
+  <section data-qa="application-field" data-field-id="work_1"
+           data-canonical-name="company" data-section="experience"
+           data-repeat-group="employment" data-repeat-index="1">
+    <label for="work_1">Employer two</label>
+    <input id="work_1" name="experience[1].company" type="text" value="Example B">
+  </section>
+  <section data-qa="application-field" data-field-id="conditional_detail"
+           data-canonical-name="additional_information" data-section="screening"
+           data-conditional-parent="screening_level" data-conditional-value="two">
+    <label for="conditional_detail">Additional fixture detail</label>
+    <textarea id="conditional_detail" name="answers.detail">Reviewed detail</textarea>
+  </section>
+  <section data-qa="application-field" data-field-id="diversity_choice"
+           data-canonical-name="demographic" data-section="diversity">
+    <label for="diversity_choice">Voluntary fixture diversity response</label>
+    <select id="diversity_choice" name="diversity.response">
+      <option data-option-id="decline" value="decline" selected>Prefer not to answer</option>
+      <option data-option-id="fixture" value="fixture">Fixture option</option>
+    </select>
+  </section>
+  <section data-qa="application-field" data-field-id="privacy_consent"
+           data-canonical-name="privacy_consent" data-section="consent"
+           data-control-kind="consent">
+    <label for="privacy_consent">I confirm the privacy notice</label>
+    <input id="privacy_consent" name="consents.privacy" type="checkbox" required checked>
+  </section>
+  <div data-qa="resume-upload-complete" data-upload-id="upload-fixture"
+       data-file-name="resume-sanitized.pdf"
+       data-file-sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"></div>
+  <section data-qa="form-disclosure" data-disclosure-id="privacy"
+           data-disclosure-kind="privacy_policy" data-disclosure-source="link"
+           data-acknowledgement-field-id="privacy_consent">
+    <p data-qa="disclosure-summary">Review the employer privacy policy.</p>
+    <a data-qa="disclosure-link" href="https://jobs.smartrecruiters.com/legal/privacy">Policy</a>
+  </section>
+  <section data-qa="form-disclosure" data-disclosure-id="ai"
+           data-disclosure-kind="ai_disclosure" data-disclosure-source="inline">
+    <p data-qa="disclosure-summary">Automated tools may support application review.</p>
+  </section>
+  <section data-qa="form-disclosure" data-disclosure-id="imprint"
+           data-disclosure-kind="imprint" data-disclosure-source="inline">
+    <p data-qa="disclosure-summary">Fixture employer imprint information.</p>
+  </section>
+  <section data-qa="form-disclosure" data-disclosure-id="diversity-note"
+           data-disclosure-kind="diversity" data-disclosure-source="inline">
+    <p data-qa="disclosure-summary">Diversity responses are voluntary.</p>
+  </section>
+  <section data-qa="form-disclosure" data-disclosure-id="info"
+           data-disclosure-kind="information" data-disclosure-source="inline">
+    <p data-qa="disclosure-summary">Review all answers before sending.</p>
+  </section>
+  <button data-qa="submit-application" type="submit">Send application</button>
+</form>
+</main>
+</body></html>

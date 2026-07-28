@@ -138,6 +138,7 @@ def reconstruct_persisted_form_plan(plan: FormPlan) -> FormPlanV1:
                 "created_at": _aware_utc(plan.created_at),
                 "expires_at": _aware_utc(plan.expires_at),
                 "fields": _json_array(plan.fields_json),
+                "disclosures": _json_array(getattr(plan, "disclosures_json", "[]")),
                 "decisions": _json_array(plan.decisions_json),
                 "blockers": _json_array(plan.blockers_json),
                 "locale": getattr(plan, "locale", "en") or "en",

@@ -125,11 +125,11 @@
     "schema_version": "qualified-local-model-v1"
   },
   "runtime": {
-    "total_seconds": 1494.359
+    "total_seconds": 1659.926
   },
   "schema_version": "v4-local-model-qualification-v4",
   "source_integrity": {
-    "combined_sha256": "2b7dc5aeb072caa00b8836689fb57cf5b1f717fc2458aef63f11bcf3d83f8a6f",
+    "combined_sha256": "4572316b83e1deca6cbfb09f5489c11c452db90821a46f46b42675cd1abdb2f8",
     "files": {
       "config/qualified_local_model.json": {
         "file": "config/qualified_local_model.json",
@@ -161,7 +161,7 @@
       },
       "core/submission_domain.py": {
         "file": "core/submission_domain.py",
-        "sha256": "e140a77d14f76a7f31f29e63fcf640fdb4ae8999335631dae72c564366be39ad"
+        "sha256": "73efcc5141a953f076eaa4c4280cadb90e071cd3f4ca69cfaefde6a439417317"
       },
       "jobs/models.py": {
         "file": "jobs/models.py",
@@ -284,7 +284,7 @@
       "reason_counts": {
         "llm_abstained": 14
       },
-      "runtime_seconds": 133.912,
+      "runtime_seconds": 129.647,
       "successful_generation_cases": 22,
       "successful_generations": 22,
       "threshold": {
@@ -329,7 +329,7 @@
         "UNSUPPORTED_CLAIM": 63
       },
       "resolved_synthesis": 57,
-      "runtime_seconds": 552.681,
+      "runtime_seconds": 604.815,
       "sensitive_automatic_eligible": 0,
       "sensitive_provider_attempts": 0,
       "successful_generation_cases": 80,
@@ -370,16 +370,16 @@
       },
       "generation_failed": 0,
       "precision": 1.0,
-      "precision_denominator": 189,
+      "precision_denominator": 192,
       "provider_attempts": 40,
       "provider_cases": 40,
       "provider_payloads": 40,
       "reason_counts": {},
-      "runtime_seconds": 806.894,
+      "runtime_seconds": 922.416,
       "sensitive_eligible": 0,
       "successful_generation_cases": 40,
       "successful_generations": 40,
-      "supported_claims": 189,
+      "supported_claims": 192,
       "threshold": {
         "actual": {
           "coverage": 1.0,
@@ -391,7 +391,7 @@
           "sensitive_eligible": 0,
           "successful_generation_cases": 40,
           "supported_claim_precision": 1.0,
-          "supported_claims": 189,
+          "supported_claims": 192,
           "unsupported_claims": 0,
           "unsupported_eligible": 0
         },
@@ -422,7 +422,7 @@
         "UNTRUSTED_INPUT_BLOCKED": 6,
         "llm_input_rejected": 6
       },
-      "runtime_seconds": 0.057,
+      "runtime_seconds": 0.092,
       "semantic_prompt_injection_cases": 18,
       "semantic_prompt_injections_blocked": 18,
       "successful_generations": 0,
@@ -498,7 +498,7 @@
         "sensitive_eligible": 0,
         "successful_generation_cases": 40,
         "supported_claim_precision": 1.0,
-        "supported_claims": 189,
+        "supported_claims": 192,
         "unsupported_claims": 0,
         "unsupported_eligible": 0
       },

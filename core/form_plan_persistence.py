@@ -213,6 +213,7 @@ def persist_inspected_form_plan(
         attachment_verified_at=(_naive_utc(plan.created_at) if plan.attachment_verified else None),
         profile_version=plan.profile_version,
         fields_json=_json([item.model_dump(mode="json") for item in plan.fields]),
+        disclosures_json=_json([item.model_dump(mode="json") for item in plan.disclosures]),
         decisions_json=_json([item.model_dump(mode="json") for item in plan.decisions]),
         blockers_json=_json([item.value for item in plan.blockers]),
         locale=plan.locale,

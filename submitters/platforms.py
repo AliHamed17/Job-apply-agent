@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from submitters.ashby_identity import is_ashby_candidate_url
 from submitters.greenhouse_identity import is_greenhouse_candidate_url
+from submitters.smartrecruiters_identity import is_smartrecruiters_candidate_url
 
 TWO_PHASE_EXECUTION_CONTRACT_VERSION = "two-phase-v2"
 
@@ -88,6 +89,7 @@ _GREENHOUSE_CONTROLS = (
     "consent",
     "attestation",
 )
+_SMARTRECRUITERS_CONTROLS = _GREENHOUSE_CONTROLS
 
 # PR1 deliberately qualifies no adapter for live use.  The first five planned
 # ATS families remain available for safe inspection/dry-run work; legacy
@@ -174,14 +176,16 @@ _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     ),
     AdapterDescriptor(
         platform="smartrecruiters",
-        adapter_version="0.1.0",
-        selector_version="legacy-v1",
-        transport="legacy_hybrid",
-        authentication_mode="optional_oauth",
-        supported_controls=_COMMON_CONTROLS,
-        qualification=QualificationTier.DRY_RUN_ONLY,
+        adapter_version="1.0.0",
+        selector_version="smartrecruiters-candidate-v1",
+        transport="browser",
+        authentication_mode="public_candidate_flow",
+        supported_controls=_SMARTRECRUITERS_CONTROLS,
+        qualification=QualificationTier.FIXTURE_QUALIFIED,
         qualified_form_scope=(),
-        domains=("jobs.smartrecruiters.com", "smartrecruiters.com"),
+        domains=("jobs.smartrecruiters.com",),
+        execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
+        allow_subdomains=False,
     ),
     AdapterDescriptor(
         platform="jobvite",
@@ -256,12 +260,14 @@ def detect_platform(url: str) -> str:
         return "greenhouse"
     if is_ashby_candidate_url(candidate_url):
         return "ashby"
+    if is_smartrecruiters_candidate_url(candidate_url):
+        return "smartrecruiters"
     try:
         hostname = (urlparse(candidate_url).hostname or "").lower().rstrip(".")
     except ValueError:
         return "unknown"
     for descriptor in _ADAPTERS:
-        if descriptor.platform in {"greenhouse", "ashby"}:
+        if descriptor.platform in {"greenhouse", "ashby", "smartrecruiters"}:
             continue
         if any(
             _matches_domain(
