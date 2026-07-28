@@ -56,11 +56,12 @@ from .services import (
     receive_review_grant,
     receive_review_grant_revocation,
     receive_runner_event,
+    register_invalid_operator_login,
     sha256_bytes,
     utc_now,
 )
 
-CURRENT_SCHEMA_REVISION = "0002_review_grant_revocations"
+CURRENT_SCHEMA_REVISION = "0003_login_throttle"
 
 
 class ApiModel(BaseModel):
@@ -232,14 +233,21 @@ def create_app(
     def login(request: Request, body: LoginRequest, db: db_dep) -> Response:
         require_origin(request, runtime)
         request_digest = secret_digest(runtime.operator_token, "operator-login")
-        if not verify_operator_token(runtime, body.token):
-            audit(
-                db,
-                action="login",
-                result="denied",
-                request_digest=request_digest,
-            )
+        token_valid = verify_operator_token(runtime, body.token)
+        if not token_valid:
+            denial = register_invalid_operator_login(db)
+            if denial.audit_denial:
+                audit(
+                    db,
+                    action="login",
+                    result="denied",
+                    request_digest=request_digest,
+                )
+            # The throttle update and optional sampled audit must survive the
+            # HTTPException rollback in the dependency boundary.
             db.commit()
+            if denial.throttled:
+                raise HTTPException(status_code=429, detail="LOGIN_RATE_LIMITED")
             raise HTTPException(status_code=401, detail="TOKEN_INVALID")
         row, session_token, csrf_token = create_operator_session(db, runtime)
         audit(

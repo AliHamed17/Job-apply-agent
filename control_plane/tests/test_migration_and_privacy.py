@@ -48,7 +48,7 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
 
     command.upgrade(config, "head")
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
-    assert current_revision(engine) == "0002_review_grant_revocations"
+    assert current_revision(engine) == "0003_login_throttle"
     table_names = set(inspect(engine).get_table_names())
     assert {
         "control_runner_devices",
@@ -58,11 +58,26 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
         "control_runner_events",
         "control_operator_sessions",
         "control_operator_audit",
+        "control_login_throttle",
     }.issubset(table_names)
     review_grant_columns = {
         column["name"] for column in inspect(engine).get_columns("control_review_grants")
     }
     assert {"revoked_at", "revocation_envelope_digest"} <= review_grant_columns
+    throttle_columns = {
+        column["name"] for column in inspect(engine).get_columns("control_login_throttle")
+    }
+    assert {
+        "id",
+        "window_started_at",
+        "denial_count",
+        "denial_audited_at",
+    } == throttle_columns
+    with engine.connect() as connection:
+        throttle = connection.execute(
+            text("SELECT id, denial_count FROM control_login_throttle WHERE id = 'operator_login'")
+        ).one()
+        assert throttle == ("operator_login", 0)
 
     migrated_settings = replace(settings, database_url=database_url)
     app = create_app(migrated_settings, engine=engine)
@@ -87,6 +102,17 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
         )
         assert accepted.status_code == 200  # Nonce BigInteger variant also works.
     engine.dispose()
+
+    command.downgrade(config, "0002_review_grant_revocations")
+    intermediate = create_engine(database_url)
+    assert current_revision(intermediate) == "0002_review_grant_revocations"
+    assert "control_login_throttle" not in inspect(intermediate).get_table_names()
+    with intermediate.connect() as connection:
+        assert (
+            connection.execute(text("SELECT COUNT(*) FROM control_operator_audit")).scalar_one()
+            >= 1
+        )
+    intermediate.dispose()
 
     command.downgrade(config, "base")
     downgraded = create_engine(database_url)

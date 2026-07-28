@@ -9,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,6 +22,7 @@ from .crypto import (
     verify_envelope,
 )
 from .models import (
+    LoginThrottle,
     OperatorAudit,
     ReviewGrant,
     RunnerDevice,
@@ -66,6 +69,19 @@ class CommandCreation:
 class Receipt:
     identifier: str
     duplicate: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LoginDenialDecision:
+    throttled: bool
+    audit_denial: bool
+
+
+LOGIN_THROTTLE_ID = "operator_login"
+LOGIN_DENIAL_LIMIT = 8
+LOGIN_DENIAL_WINDOW = timedelta(minutes=5)
+OPERATOR_AUDIT_RETENTION = timedelta(days=30)
+OPERATOR_AUDIT_HARD_CAP = 5_000
 
 
 def utc_now() -> datetime:
@@ -123,6 +139,7 @@ def audit(
     target_id: str | None = None,
     now: datetime | None = None,
 ) -> None:
+    created_at = as_utc(now or utc_now())
     db.add(
         OperatorAudit(
             action=action,
@@ -130,8 +147,73 @@ def audit(
             target_id=target_id,
             result=result,
             request_digest=request_digest,
-            created_at=now or utc_now(),
+            created_at=created_at,
         )
+    )
+    db.flush()
+    db.execute(
+        delete(OperatorAudit).where(
+            OperatorAudit.created_at < created_at - OPERATOR_AUDIT_RETENTION
+        )
+    )
+    retained_ids = (
+        select(OperatorAudit.id)
+        .order_by(OperatorAudit.created_at.desc(), OperatorAudit.id.desc())
+        .limit(OPERATOR_AUDIT_HARD_CAP)
+    )
+    db.execute(delete(OperatorAudit).where(OperatorAudit.id.not_in(retained_ids)))
+
+
+def register_invalid_operator_login(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> LoginDenialDecision:
+    """Update and lock the one global denial bucket.
+
+    Production migrations seed this row. The conflict-safe insert also makes
+    isolated schemas and concurrent first use deterministic on PostgreSQL and
+    SQLite.
+    """
+
+    checked_at = as_utc(now or utc_now())
+    values = {
+        "id": LOGIN_THROTTLE_ID,
+        "window_started_at": checked_at,
+        "denial_count": 0,
+        "denial_audited_at": None,
+    }
+    dialect_name = db.get_bind().dialect.name
+    if dialect_name == "postgresql":
+        postgresql_statement = postgresql_insert(LoginThrottle).values(**values)
+        db.execute(postgresql_statement.on_conflict_do_nothing(index_elements=[LoginThrottle.id]))
+    elif dialect_name == "sqlite":
+        sqlite_statement = sqlite_insert(LoginThrottle).values(**values)
+        db.execute(sqlite_statement.on_conflict_do_nothing(index_elements=[LoginThrottle.id]))
+    elif db.get(LoginThrottle, LOGIN_THROTTLE_ID) is None:
+        db.add(LoginThrottle(**values))
+        db.flush()
+
+    row = db.scalar(
+        select(LoginThrottle).where(LoginThrottle.id == LOGIN_THROTTLE_ID).with_for_update()
+    )
+    if row is None:
+        raise ControlPlaneError("LOGIN_THROTTLE_UNAVAILABLE", status_code=503)
+
+    window_started_at = as_utc(row.window_started_at)
+    if checked_at < window_started_at or checked_at >= window_started_at + LOGIN_DENIAL_WINDOW:
+        row.window_started_at = checked_at
+        row.denial_count = 0
+        row.denial_audited_at = None
+
+    audit_denial = row.denial_audited_at is None
+    row.denial_count = min(row.denial_count + 1, LOGIN_DENIAL_LIMIT)
+    if audit_denial:
+        row.denial_audited_at = checked_at
+
+    return LoginDenialDecision(
+        throttled=row.denial_count >= LOGIN_DENIAL_LIMIT,
+        audit_denial=audit_denial,
     )
 
 
@@ -800,6 +882,12 @@ def receive_runner_event(
 __all__ = [
     "CommandCreation",
     "ControlPlaneError",
+    "LOGIN_DENIAL_LIMIT",
+    "LOGIN_DENIAL_WINDOW",
+    "LOGIN_THROTTLE_ID",
+    "LoginDenialDecision",
+    "OPERATOR_AUDIT_HARD_CAP",
+    "OPERATOR_AUDIT_RETENTION",
     "Receipt",
     "acknowledge_command",
     "as_utc",
@@ -811,6 +899,7 @@ __all__ = [
     "receive_review_grant",
     "receive_review_grant_revocation",
     "receive_runner_event",
+    "register_invalid_operator_login",
     "sha256_bytes",
     "utc_now",
     "verify_runner_envelope",

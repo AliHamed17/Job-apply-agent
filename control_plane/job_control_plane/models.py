@@ -208,10 +208,43 @@ class OperatorAudit(Base):
     target_id: Mapped[str | None] = mapped_column(String(36))
     result: Mapped[str] = mapped_column(String(16), nullable=False)
     request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+
+
+class LoginThrottle(Base):
+    """The one global invalid-login bucket.
+
+    The fixed primary key and database constraint prevent request-controlled
+    values from creating rows or metric-style cardinality.
+    """
+
+    __tablename__ = "control_login_throttle"
+    __table_args__ = (
+        CheckConstraint(
+            "id = 'operator_login'",
+            name="ck_control_login_throttle_singleton",
+        ),
+        CheckConstraint(
+            "denial_count >= 0 AND denial_count <= 8",
+            name="ck_control_login_throttle_count",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    denial_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    denial_audited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 __all__ = [
+    "LoginThrottle",
     "OperatorAudit",
     "OperatorSession",
     "ReviewGrant",

@@ -12,7 +12,12 @@ from sqlalchemy import create_engine, func, inspect, select
 
 from job_control_plane.config import Settings
 from job_control_plane.db import Base, build_session_factory
-from job_control_plane.models import ReviewGrant, SubmissionCommand
+from job_control_plane.models import (
+    LoginThrottle,
+    OperatorAudit,
+    ReviewGrant,
+    SubmissionCommand,
+)
 from job_control_plane.protocol import (
     AdapterCode,
     CommandPollEnvelope,
@@ -24,11 +29,14 @@ from job_control_plane.protocol import (
     RunnerStatus,
 )
 from job_control_plane.services import (
+    LOGIN_DENIAL_LIMIT,
     ControlPlaneError,
+    audit,
     create_command,
     poll_command,
     receive_heartbeat,
     receive_review_grant,
+    register_invalid_operator_login,
 )
 
 
@@ -245,3 +253,35 @@ def test_postgres_skip_locked_delivers_one_command_to_one_poller(
         assert row.status == "claimed"
         assert row.delivery_count == 1
         assert db.scalar(select(func.count()).select_from(ReviewGrant)) == 1
+
+
+def test_postgres_concurrent_invalid_logins_share_one_bounded_bucket(
+    postgres_runtime,
+) -> None:
+    _runtime, factory = postgres_runtime
+    attempts = LOGIN_DENIAL_LIMIT + 4
+    barrier = Barrier(attempts)
+
+    def deny_login(_index: int) -> bool:
+        with factory() as db:
+            barrier.wait()
+            decision = register_invalid_operator_login(db)
+            if decision.audit_denial:
+                audit(
+                    db,
+                    action="login",
+                    result="denied",
+                    request_digest="a" * 64,
+                )
+            db.commit()
+            return decision.throttled
+
+    with ThreadPoolExecutor(max_workers=attempts) as executor:
+        throttled = list(executor.map(deny_login, range(attempts)))
+
+    assert sum(throttled) == attempts - LOGIN_DENIAL_LIMIT + 1
+    with factory() as db:
+        buckets = list(db.scalars(select(LoginThrottle)))
+        assert len(buckets) == 1
+        assert buckets[0].denial_count == LOGIN_DENIAL_LIMIT
+        assert db.scalar(select(func.count()).select_from(OperatorAudit)) == 1

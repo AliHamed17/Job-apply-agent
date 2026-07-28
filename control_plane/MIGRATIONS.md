@@ -30,5 +30,12 @@ initial control-plane schema:
 python -m alembic downgrade 0001_control_plane
 ```
 
+To remove only the singleton login-throttle extension while preserving review
+grant revocation tombstones:
+
+```powershell
+python -m alembic downgrade 0002_review_grant_revocations
+```
+
 Back up the dedicated database before every migration. Never point this Alembic
 configuration at the private Job Apply Agent database.

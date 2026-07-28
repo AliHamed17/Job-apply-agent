@@ -6,9 +6,17 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from job_control_plane import services
 from job_control_plane.app import create_app
 from job_control_plane.config import Settings
-from job_control_plane.models import OperatorSession
+from job_control_plane.models import LoginThrottle, OperatorAudit, OperatorSession
+from job_control_plane.services import (
+    LOGIN_DENIAL_LIMIT,
+    LOGIN_DENIAL_WINDOW,
+    LOGIN_THROTTLE_ID,
+    OPERATOR_AUDIT_RETENTION,
+    audit,
+)
 
 
 def test_only_liveness_and_login_bootstrap_are_usable_without_session(
@@ -76,6 +84,163 @@ def test_login_requires_exact_origin_and_sets_hardened_session(
     assert "last?.signature_verified === true" in dashboard.text
     assert "'confirmed'" in dashboard.text
     assert "Application not employer-confirmed" in dashboard.text
+
+
+def test_invalid_login_uses_one_bounded_bucket_and_one_audit_per_window(
+    client: TestClient,
+    settings: Settings,
+) -> None:
+    headers = {"origin": settings.public_origin}
+    for _ in range(LOGIN_DENIAL_LIMIT - 1):
+        response = client.post(
+            "/auth/login",
+            headers=headers,
+            json={"token": "invalid-" + ("x" * 32)},
+        )
+        assert response.status_code == 401
+        assert response.json() == {"code": "TOKEN_INVALID"}
+
+    limited = client.post(
+        "/auth/login",
+        headers=headers,
+        json={"token": "invalid-" + ("y" * 32)},
+    )
+    assert limited.status_code == 429
+    assert limited.json() == {"code": "LOGIN_RATE_LIMITED"}
+    repeated = client.post(
+        "/auth/login",
+        headers=headers,
+        json={"token": "invalid-" + ("z" * 32)},
+    )
+    assert repeated.status_code == 429
+    assert repeated.json() == {"code": "LOGIN_RATE_LIMITED"}
+
+    factory = client.app.state.sessions
+    with factory() as db:
+        buckets = list(db.scalars(select(LoginThrottle)))
+        assert len(buckets) == 1
+        assert buckets[0].id == LOGIN_THROTTLE_ID
+        assert buckets[0].denial_count == LOGIN_DENIAL_LIMIT
+        denied_audits = list(
+            db.scalars(
+                select(OperatorAudit).where(
+                    OperatorAudit.action == "login",
+                    OperatorAudit.result == "denied",
+                )
+            )
+        )
+        assert len(denied_audits) == 1
+        assert denied_audits[0].request_digest not in {
+            settings.operator_token,
+            "invalid-" + ("x" * 32),
+            "invalid-" + ("y" * 32),
+            "invalid-" + ("z" * 32),
+        }
+
+
+def test_valid_operator_token_bypasses_saturated_invalid_login_throttle(
+    client: TestClient,
+    settings: Settings,
+) -> None:
+    headers = {"origin": settings.public_origin}
+    for _ in range(LOGIN_DENIAL_LIMIT + 2):
+        client.post(
+            "/auth/login",
+            headers=headers,
+            json={"token": "not-the-token-" + ("q" * 32)},
+        )
+
+    valid = client.post(
+        "/auth/login",
+        headers=headers,
+        json={"token": settings.operator_token},
+    )
+    assert valid.status_code == 200
+    assert valid.json()["authenticated"] is True
+
+
+def test_operator_audit_retention_and_hard_cap_are_enforced(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(services, "OPERATOR_AUDIT_HARD_CAP", 3)
+    started_at = datetime(2026, 1, 1, tzinfo=UTC)
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        for index in range(5):
+            audit(
+                db,
+                action="test",
+                result="accepted",
+                request_digest=f"{index:064x}",
+                now=started_at + timedelta(seconds=index),
+            )
+
+    with factory() as db:
+        retained = list(
+            db.scalars(
+                select(OperatorAudit).order_by(
+                    OperatorAudit.created_at,
+                    OperatorAudit.id,
+                )
+            )
+        )
+        assert [row.request_digest for row in retained] == [
+            f"{index:064x}" for index in range(2, 5)
+        ]
+
+    after_retention = started_at + OPERATOR_AUDIT_RETENTION + timedelta(minutes=1)
+    with factory.begin() as db:
+        audit(
+            db,
+            action="test",
+            result="accepted",
+            request_digest="f" * 64,
+            now=after_retention,
+        )
+    with factory() as db:
+        retained = list(db.scalars(select(OperatorAudit)))
+        assert [row.request_digest for row in retained] == ["f" * 64]
+
+
+def test_invalid_login_starts_a_new_sample_after_the_fixed_window(
+    client: TestClient,
+    settings: Settings,
+) -> None:
+    headers = {"origin": settings.public_origin}
+    first = client.post(
+        "/auth/login",
+        headers=headers,
+        json={"token": "invalid-" + ("x" * 32)},
+    )
+    assert first.status_code == 401
+
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        bucket = db.get(LoginThrottle, LOGIN_THROTTLE_ID)
+        assert bucket is not None
+        bucket.window_started_at = datetime.now(UTC) - LOGIN_DENIAL_WINDOW
+
+    second = client.post(
+        "/auth/login",
+        headers=headers,
+        json={"token": "invalid-" + ("y" * 32)},
+    )
+    assert second.status_code == 401
+    with factory() as db:
+        assert (
+            len(
+                list(
+                    db.scalars(
+                        select(OperatorAudit).where(
+                            OperatorAudit.action == "login",
+                            OperatorAudit.result == "denied",
+                        )
+                    )
+                )
+            )
+            == 2
+        )
 
 
 def test_exact_staged_deployment_host_allows_liveness_but_not_operator_access(
