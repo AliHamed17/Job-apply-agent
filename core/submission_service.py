@@ -65,6 +65,7 @@ class SubmissionCommandRequest:
     application_revision: int
     form_plan_id: str
     client_release: ClientReleaseIdentity
+    authority_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +328,9 @@ def _validate_plan(
     admission_time = _aware_utc(now)
     if admission_time is None:
         raise SubmissionAdmissionError("FORM_PLAN_BLOCKED")
+    authority_expires_at = _aware_utc(request.authority_expires_at)
+    if authority_expires_at is not None and authority_expires_at <= admission_time:
+        raise SubmissionAdmissionError("COMMAND_EXPIRED")
     if domain_plan.is_expired(admission_time):
         raise SubmissionAdmissionError("FORM_PLAN_EXPIRED")
     if domain_plan.created_at > admission_time:
@@ -594,6 +598,7 @@ def _create_one(
         job_url_hash=url_hash(normalized_url),
         ttl_seconds=settings.submit_permit_ttl_seconds,
         now=now,
+        not_after=request.authority_expires_at,
     )
     db.flush()
     command = SubmissionCommand(
@@ -672,6 +677,12 @@ def create_submission_commands(
                     now=timestamp,
                 )
             )
+        wall_clock = datetime.now(UTC)
+        if any(
+            deadline is not None and deadline <= wall_clock
+            for deadline in (_aware_utc(request.authority_expires_at) for request in requests)
+        ):
+            raise SubmissionAdmissionError("COMMAND_EXPIRED")
         db.commit()
     except IntegrityError as exc:
         db.rollback()

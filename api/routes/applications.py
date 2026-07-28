@@ -42,6 +42,10 @@ from core.application_state import (
     reviewable_applications_query,
 )
 from core.config import get_settings
+from core.control_plane_review_permits import (
+    ControlPlaneReviewGrantError,
+    mint_control_plane_review_grant,
+)
 from core.form_plan_persistence import (
     ATTACHMENT_VERIFICATION_SOURCE,
     FormPlanPersistenceError,
@@ -53,6 +57,8 @@ from core.form_planning import (
     option_set_hash,
     reusable_field_contract_fingerprint,
 )
+from core.operations import readiness_report
+from core.runtime_identity import build_runtime_capabilities, get_runtime_identity
 from core.submission_domain import (
     AnswerDecisionV1,
     AnswerDisposition,
@@ -232,6 +238,23 @@ class SubmitAcceptedResponse(BaseModel):
     verified: Literal[False] = False
     status_url: str
     replayed: bool = False
+
+
+class ControlPlaneReviewGrantRequest(BaseModel):
+    acknowledgement: Literal["ALLOW_REMOTE_SEND"]
+    application_revision: PositiveInt
+    form_plan_id: str = Field(min_length=36, max_length=36)
+
+
+class ControlPlaneReviewGrantResponse(BaseModel):
+    application_id: int
+    application_ref: str
+    grant_id: str
+    application_revision: int
+    adapter: str
+    adapter_version: str
+    expires_at: str
+    projection_state: Literal["pending"] = "pending"
 
 
 class BatchSubmitItem(BaseModel):
@@ -1640,6 +1663,112 @@ def _require_live_operator_auth(request: Request) -> None:
 
 
 @router.post(
+    "/applications/{app_id}/control-plane-review-grant",
+    response_model=ControlPlaneReviewGrantResponse,
+    status_code=202,
+)
+async def allow_remote_send(
+    app_id: int,
+    payload: ControlPlaneReviewGrantRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Mint durable local authority for one explicit remote Send action."""
+
+    _require_live_operator_auth(request)
+    settings = get_settings()
+    capabilities = build_runtime_capabilities(settings, readiness_report(settings))
+    submission = capabilities.get("submission")
+    if not isinstance(submission, Mapping) or submission.get("allowed") is not True:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RUNTIME_NOT_READY", "message": "Local runner is not ready."},
+        )
+    application_query = db.query(Application).filter(Application.id == app_id)
+    if db.bind.dialect.name == "postgresql":
+        application_query = application_query.with_for_update()
+    application = application_query.populate_existing().one_or_none()
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.revision != payload.application_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "APPLICATION_REVISION_CHANGED"},
+        )
+    plan_query = db.query(FormPlan).filter(
+        FormPlan.application_id == application.id,
+        FormPlan.plan_id == payload.form_plan_id,
+    )
+    if db.bind.dialect.name == "postgresql":
+        plan_query = plan_query.with_for_update()
+    plan = plan_query.one_or_none()
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Form plan not found")
+    job_url = (
+        (application.job.apply_url or application.job.source_url)
+        if application.job is not None
+        else ""
+    ) or ""
+    descriptor = adapter_for_url(job_url)
+    if descriptor is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ADAPTER_NOT_QUALIFIED"},
+        )
+    if (
+        descriptor.platform != plan.adapter_name
+        or descriptor.adapter_version != plan.adapter_version
+        or descriptor.selector_version != plan.selector_version
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ADAPTER_VERSION_CHANGED"},
+        )
+    if not descriptor.allows_final_execution or not descriptor.qualifies_form_fingerprint(
+        plan.fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ADAPTER_NOT_QUALIFIED"},
+        )
+    try:
+        projection = mint_control_plane_review_grant(
+            db,
+            application_id=application.id,
+            form_plan_id=plan.id,
+            runner_release=get_runtime_identity().release_id,
+        )
+    except ControlPlaneReviewGrantError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.reason_code},
+        ) from exc
+    record_application_event(
+        db,
+        application.id,
+        "control_plane_review_grant_minted",
+        actor="operator",
+        details={
+            "application_revision": projection.application_revision,
+            "platform": projection.adapter_name,
+            "adapter_version": projection.adapter_version,
+            "external_action_queued": False,
+        },
+    )
+    db.commit()
+    return ControlPlaneReviewGrantResponse(
+        application_id=application.id,
+        application_ref=projection.remote_application_ref,
+        grant_id=projection.review_grant_ref,
+        application_revision=projection.application_revision,
+        adapter=projection.adapter_name,
+        adapter_version=projection.adapter_version,
+        expires_at=projection.expires_at.replace(tzinfo=UTC).isoformat(),
+    )
+
+
+@router.post(
     "/applications/{app_id}/submit",
     response_model=SubmitAcceptedResponse,
     status_code=202,
@@ -1891,6 +2020,18 @@ def _reconcile_attempt(
             "state": attempt.status.value,
         },
     )
+    if attempt.command is not None:
+        from worker.control_plane_event_outbox import (
+            enqueue_control_plane_attempt_transition,
+        )
+
+        enqueue_control_plane_attempt_transition(
+            db,
+            attempt=attempt,
+            command=attempt.command,
+            occurred_at=now,
+            use_attempt_reason=False,
+        )
     db.commit()
     return {
         "message": "Submission attempt reconciled",

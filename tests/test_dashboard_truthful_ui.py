@@ -50,6 +50,18 @@ def test_live_send_is_fail_closed_and_runtime_banner_is_persistent() -> None:
     assert "&& !hasActiveSubmissionAttempt(app)" in APP_JS
 
 
+def test_remote_send_permission_is_explicit_bound_and_never_claims_submission() -> None:
+    assert 'id="btn-allow-remote-send"' in INDEX_HTML
+    assert "async function handleAllowRemoteSend(appId)" in APP_JS
+    assert "/api/applications/${appId}/control-plane-review-grant" in APP_JS
+    assert "acknowledgement: 'ALLOW_REMOTE_SEND'" in APP_JS
+    assert "application_revision: app.revision ?? app.application_revision" in APP_JS
+    assert "form_plan_id: app.form_plan_id" in APP_JS
+    assert "This does not submit now." in APP_JS
+    assert "No application was submitted." in APP_JS
+    assert "remoteSendBtn.disabled = blockers.length > 0" in APP_JS
+
+
 def test_attempt_status_is_polled_when_api_supplies_a_status_url() -> None:
     assert "result?.status_url || result?.attempt?.status_url" in APP_JS
     assert "/api/submission-attempts/${attemptId}" in APP_JS

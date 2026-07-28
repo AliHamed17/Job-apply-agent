@@ -112,7 +112,10 @@ jobs:
           core/submission_service.py core/submit_permits.py
           core/application_mutations.py core/application_revision.py
           core/form_plan_persistence.py
-          worker/submission_commands.py api/routes/ats.py
+          core/control_plane_review_permits.py
+          worker/control_plane_client.py worker/control_plane_event_outbox.py
+          worker/control_plane_runner.py worker/submission_commands.py
+          api/routes/ats.py
       - name: Typed local intelligence and form planning
         run: >
           mypy --follow-imports=skip --ignore-missing-imports
@@ -172,7 +175,7 @@ jobs:
           core/form_planning.py core/form_plan_persistence.py
           core/material_audit.py core/operations.py core/runtime_identity.py
           core/sensitive_policy.py core/submission_domain.py core/submission_service.py
-          core/utils.py db/models.py
+          core/control_plane_review_permits.py core/utils.py db/models.py
           submitters/smartrecruiters.py submitters/smartrecruiters_identity.py
           submitters/smartrecruiters_api.py submitters/smartrecruiters_v1.py
           submitters/smartrecruiters_playwright.py
@@ -200,9 +203,71 @@ jobs:
           submitters/ashby.py submitters/ashby_v1.py
           submitters/ashby_playwright.py
           worker/celery_app.py
-          worker/submission_commands.py worker/task_dispatch.py worker/tasks.py
+          worker/control_plane_client.py worker/control_plane_event_outbox.py
+          worker/control_plane_runner.py worker/submission_commands.py
+          worker/task_dispatch.py worker/tasks.py
       - name: Compose validation
         run: cp .env.example .env && docker compose config --quiet
+
+  control-plane-privacy:
+    name: Isolated control plane and privacy boundary (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: control
+          POSTGRES_PASSWORD: control
+          POSTGRES_DB: control_plane_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U control -d control_plane_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CONTROL_DATABASE_URL: >-
+        postgresql://control:control@localhost:5432/control_plane_test?sslmode=disable
+      CONTROL_POSTGRES_TEST_URL: >-
+        postgresql+psycopg://control:control@localhost:5432/control_plane_test?sslmode=disable
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: control_plane/requirements.txt
+      - name: Install isolated control plane
+        working-directory: control_plane
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            bandit httpx==0.28.1 pip-audit pytest pyyaml ruff
+      - name: Verify root deployment privacy boundary
+        run: |
+          python -m ruff check api/vercel.py tests/test_control_plane_bundle_privacy.py
+          python -m ruff format --check api/vercel.py tests/test_control_plane_bundle_privacy.py
+          python -m pytest -q --noconftest tests/test_control_plane_bundle_privacy.py
+      - name: Lint isolated control plane
+        working-directory: control_plane
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+      - name: Test isolated control plane
+        working-directory: control_plane
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+          python -m pytest -q tests
+      - name: Audit isolated control plane
+        working-directory: control_plane
+        run: |
+          python -m pip_audit -r requirements.txt --timeout 60
+          python -m bandit -q -lll -r api job_control_plane
 
   docker-build:
     runs-on: ubuntu-latest

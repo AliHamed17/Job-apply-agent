@@ -36,6 +36,7 @@ dependencies = [
     "beautifulsoup4>=4.12,<5",
     "lxml>=6.1,<7",
     "celery>=5.3,<6",
+    "cryptography>=48,<49",
     "openai>=1.10,<2",
     "anthropic>=0.18,<1",
     "python-multipart>=0.0.6",
@@ -74,7 +75,7 @@ email = [
 
 [tool.setuptools.packages.find]
 include = [
-    "api*", "core*", "db*", "ingestion*", "jobs*",
+    "api*", "control_plane*", "core*", "db*", "ingestion*", "jobs*",
     "llm*", "match*", "profile*", "submitters*", "worker*",
 ]
 

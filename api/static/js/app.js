@@ -1937,6 +1937,7 @@ window.openReviewModal = async appId => {
         $('btn-approve-app'),
         $('btn-reject-app'),
         $('btn-retry-app'),
+        $('btn-allow-remote-send'),
         $('btn-send-app'),
     ].filter(Boolean);
     actionButtons.forEach(button => {
@@ -1944,6 +1945,7 @@ window.openReviewModal = async appId => {
         button.onclick = null;
     });
     $('btn-approve-app').innerHTML = 'Prepare application';
+    $('btn-allow-remote-send').innerHTML = '<i data-lucide="shield-check"></i> Allow remote Send';
     $('btn-send-app').innerHTML = '<i data-lucide="send"></i> Send application';
 
     $('modal-job-title').textContent = app.job_title;
@@ -2131,15 +2133,25 @@ window.openReviewModal = async appId => {
         retryBtn.style.display = canRetry ? 'inline-flex' : 'none';
         retryBtn.disabled = false;
     }
+    const remoteSendBtn = $('btn-allow-remote-send');
     const sendBtn = $('btn-send-app');
     const sendReason = $('modal-send-disabled-reason');
+    const finalActionVisible = (
+        isPrepared
+        && !isEmployerVerified(app)
+        && !hasActiveSubmissionAttempt(app)
+    );
+    const blockers = liveSendBlockers(app);
+    if (remoteSendBtn) {
+        remoteSendBtn.style.display = finalActionVisible ? 'inline-flex' : 'none';
+        remoteSendBtn.disabled = blockers.length > 0;
+        remoteSendBtn.title = blockers.length
+            ? blockers.join(' · ')
+            : 'Create a one-use, five-minute permit for this exact reviewed application';
+        remoteSendBtn.onclick = () => handleAllowRemoteSend(app.id);
+    }
     if (sendBtn) {
-        const blockers = liveSendBlockers(app);
-        sendBtn.style.display = (
-            isPrepared
-            && !isEmployerVerified(app)
-            && !hasActiveSubmissionAttempt(app)
-        ) ? 'inline-flex' : 'none';
+        sendBtn.style.display = finalActionVisible ? 'inline-flex' : 'none';
         sendBtn.disabled = blockers.length > 0;
         sendBtn.title = blockers.join(' · ');
         sendBtn.onclick = () => handleSend(app.id);
@@ -2524,6 +2536,56 @@ async function handleSend(appId) {
         btn.innerHTML = '<i data-lucide="send"></i> Send application';
         lucide.createIcons();
     }
+}
+
+async function handleAllowRemoteSend(appId) {
+    const requestToken = reviewModalState.requestToken;
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
+    const app = state.applications.find(application => application.id === appId);
+    if (!app) return;
+    const blockers = liveSendBlockers(app);
+    if (blockers.length) {
+        showToast(`Remote Send disabled: ${blockers.join(' · ')}`, 'warning');
+        return;
+    }
+    if (!window.confirm(
+        'Allow the protected remote dashboard to request one Send for this exact reviewed application for up to five minutes? This does not submit now.'
+    )) return;
+
+    const btn = $('btn-allow-remote-send');
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> Allowing…';
+    lucide.createIcons();
+    const response = await probeJson(
+        `/api/applications/${appId}/control-plane-review-grant`,
+        'POST',
+        {
+            acknowledgement: 'ALLOW_REMOTE_SEND',
+            application_revision: app.revision ?? app.application_revision,
+            form_plan_id: app.form_plan_id,
+        }
+    );
+    if (!isCurrentReviewModalRequest(appId, requestToken)) return;
+    if (response.ok && response.data) {
+        btn.innerHTML = '<i data-lucide="shield-check"></i> Remote Send allowed';
+        btn.title = `One-use review permit expires ${fmtDate(response.data.expires_at)}`;
+        showToast(
+            'One-use remote Send permission created. No application was submitted.',
+            'info'
+        );
+        lucide.createIcons();
+        return;
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="shield-check"></i> Allow remote Send';
+    showToast(
+        boundedApiError(
+            response.data,
+            `Remote Send permission rejected (HTTP ${response.status})`
+        ),
+        'error'
+    );
+    lucide.createIcons();
 }
 
 async function handleReject(appId) {

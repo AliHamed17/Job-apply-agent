@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from db.models import FinalSubmitPermit, FormPlan, Submission
 
@@ -16,6 +17,12 @@ class PermitValidationError(ValueError):
     def __init__(self, reason_code: str):
         super().__init__(reason_code)
         self.reason_code = reason_code
+
+
+def _naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def hash_permit_nonce(nonce: str) -> str:
@@ -31,11 +38,20 @@ def issue_final_submit_permit(
     job_url_hash: str,
     ttl_seconds: int,
     now: datetime | None = None,
+    not_after: datetime | None = None,
 ) -> tuple[FinalSubmitPermit, str]:
     """Create one permit bound to the exact reviewed application state."""
-    timestamp = now or datetime.now(UTC).replace(tzinfo=None)
+    timestamp = _naive_utc(now or datetime.now(UTC))
     if not form_plan.attachment_verified or not form_plan.attached_cv_hash:
         raise PermitValidationError("ATTACHMENT_UNVERIFIED")
+    expires_at = min(
+        cast(datetime, form_plan.expires_at),
+        timestamp + timedelta(seconds=max(1, ttl_seconds)),
+    )
+    if not_after is not None:
+        expires_at = min(expires_at, _naive_utc(not_after))
+    if expires_at <= timestamp:
+        raise PermitValidationError("SUBMIT_PERMIT_EXPIRED")
     nonce = secrets.token_urlsafe(32)
     permit = FinalSubmitPermit(
         attempt_id=attempt.id,
@@ -48,10 +64,7 @@ def issue_final_submit_permit(
         form_plan_fingerprint=attempt.form_plan_fingerprint or "",
         cv_hash=attempt.attached_cv_hash or "",
         issued_at=timestamp,
-        expires_at=min(
-            form_plan.expires_at,
-            timestamp + timedelta(seconds=max(1, ttl_seconds)),
-        ),
+        expires_at=expires_at,
     )
     db.add(permit)
     return permit, nonce
