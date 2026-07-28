@@ -56,7 +56,8 @@ $repository = Resolve-RequiredDirectory -LiteralPath $RepositoryPath
 $python = Resolve-RequiredFile -LiteralPath $PythonExecutable
 $config = Resolve-RequiredFile -LiteralPath $ConfigPath
 
-if (-not (Test-Path -LiteralPath (Join-Path $repository 'worker\control_plane_runner.py'))) {
+$runnerModule = Join-Path (Join-Path $repository 'worker') 'control_plane_runner.py'
+if (-not (Test-Path -LiteralPath $runnerModule -PathType Leaf)) {
     throw "Repository does not contain the private control-plane runner."
 }
 if (Test-PathWithin -ChildPath $config -ParentPath $repository) {
@@ -89,29 +90,28 @@ if ($null -ne $existing -and -not $Replace) {
     throw "Scheduled task already exists. Re-run with -Replace to replace this exact task."
 }
 
-$quotedConfig = '"' + $config.Replace('"', '""') + '"'
-$action = New-ScheduledTaskAction `
-    -Execute $python `
-    -Argument "-m worker.control_plane_runner run --config $quotedConfig" `
-    -WorkingDirectory $repository
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
-$principal = New-ScheduledTaskPrincipal `
-    -UserId $currentUser `
-    -LogonType Interactive `
-    -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet `
-    -MultipleInstances IgnoreNew `
-    -RestartCount 999 `
-    -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
-    -StartWhenAvailable
-
 $applied = $PSCmdlet.ShouldProcess(
     $TaskName,
     'Install and start private control-plane runner'
 )
 if ($applied) {
+    $quotedConfig = '"' + $config.Replace('"', '""') + '"'
+    $action = New-ScheduledTaskAction `
+        -Execute $python `
+        -Argument "-m worker.control_plane_runner run --config $quotedConfig" `
+        -WorkingDirectory $repository
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId $currentUser `
+        -LogonType Interactive `
+        -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet `
+        -MultipleInstances IgnoreNew `
+        -RestartCount 999 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+        -StartWhenAvailable
     if ($null -ne $existing) {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
