@@ -15,6 +15,8 @@ from threading import Lock
 from submitters.base import SubmitterRegistry, two_phase_registry
 from submitters.greenhouse_playwright import playwright_greenhouse_browser_factory
 from submitters.greenhouse_v1 import register_greenhouse_browser_v1
+from submitters.lever_playwright import playwright_lever_browser_factory
+from submitters.lever_v1 import register_lever_browser_v1
 from submitters.workday_playwright import playwright_workday_browser_factory
 from submitters.workday_v2 import register_workday_browser_v2
 
@@ -37,6 +39,10 @@ def get_two_phase_registry() -> SubmitterRegistry:
             register_greenhouse_browser_v1(
                 two_phase_registry,
                 browser_factory=playwright_greenhouse_browser_factory,
+            )
+            register_lever_browser_v1(
+                two_phase_registry,
+                browser_factory=playwright_lever_browser_factory,
             )
             _INITIALIZED = True
     return two_phase_registry

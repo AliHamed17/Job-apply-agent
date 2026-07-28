@@ -20,6 +20,7 @@ from jobs.parsers.jsonld import parse_jsonld
 from jobs.parsers.lever import parse_lever
 from jobs.parsers.linkedin import parse_linkedin
 from jobs.parsers.workday import is_workday_url, parse_workday
+from submitters.lever_identity import is_lever_public_url
 
 logger = structlog.get_logger(__name__)
 
@@ -177,7 +178,7 @@ def extract_jobs(html: str, url: str) -> ExtractionResult:
         return ExtractionResult(page_type="no_jobs", parser_used="greenhouse")
 
     # 3) Lever
-    if "lever.co" in url_lower:
+    if is_lever_public_url(url):
         lever_jobs = parse_lever(html, url)
         if lever_jobs:
             logger.info("extracted_via_lever", url=url, count=len(lever_jobs))

@@ -94,12 +94,12 @@ def test_detection_and_qualification_share_one_adapter_inventory():
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.DRY_RUN_ONLY
-    } == _PLANNED_FIRST_FIVE - {"workday", "greenhouse"}
+    } == _PLANNED_FIRST_FIVE - {"workday", "greenhouse", "lever"}
     assert {
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.FIXTURE_QUALIFIED
-    } == {"workday", "greenhouse"}
+    } == {"workday", "greenhouse", "lever"}
 
 
 @pytest.mark.asyncio
@@ -126,6 +126,20 @@ async def test_ats_inventory_exposes_fixture_only_browser_adapters_as_send_disab
         "job-boards.greenhouse.io",
         "greenhouse-hosted.com",
     )
+
+
+@pytest.mark.asyncio
+async def test_ats_inventory_exposes_fixture_only_lever_as_send_disabled():
+    inventory = await list_ats_adapters()
+    lever = next(adapter for adapter in inventory if adapter.ats == "lever")
+
+    assert lever.qualification_tier == "fixture_qualified"
+    assert lever.final_execution_enabled is False
+    assert lever.qualified_form_scope == []
+    assert lever.adapter_version == "1.0.0"
+    assert lever.selector_version == "lever-candidate-v2"
+    assert lever.transport == "browser"
+    assert lever.authentication_mode == "public_candidate_flow"
 
 
 @pytest.mark.parametrize(

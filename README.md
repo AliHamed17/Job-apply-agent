@@ -296,7 +296,11 @@ job-agent/
 │   ├── base.py             # Typed two-phase interface + safe registry
 │   ├── workday_v2.py       # Fixture-qualified candidate-browser adapter
 │   ├── greenhouse_v1.py    # Fixture-qualified candidate-browser adapter
-│   └── greenhouse.py       # Deprecated fail-closed compatibility shim
+│   ├── greenhouse.py       # Deprecated fail-closed compatibility shim
+│   ├── lever_v1.py         # Fixture-qualified Lever two-phase domain adapter
+│   ├── lever_playwright.py # Private exact-multipart candidate transport
+│   ├── lever_api.py        # Disabled authorized-API capability
+│   └── lever.py            # Inert legacy compatibility shim
 ├── worker/                 # Async task pipeline
 │   ├── celery_app.py       # Celery configuration
 │   └── tasks.py            # 5-stage pipeline with approval enforcement

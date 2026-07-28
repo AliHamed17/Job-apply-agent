@@ -1,0 +1,207 @@
+{
+  "adapter": {
+    "adapter_name": "lever",
+    "adapter_version": "1.0.0",
+    "execution_contract_version": "two-phase-v2",
+    "selector_version": "lever-candidate-v2",
+    "transport": "browser"
+  },
+  "achieved_tier": "fixture_qualified",
+  "fixture_evidence": {
+    "cases": [
+      {
+        "expected_reason_code": "ALREADY_APPLIED",
+        "expected_state": "already_applied",
+        "file": "already_applied.html",
+        "sha256": "e27439d148187447465a24f4a965d77d3622dd36484a2689f8ee547adb41e598"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "application_basic.html",
+        "sha256": "e911bde7a70e1e07e80806d2c13608538790f48b5f04ba9ae167e615c5a463dc"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "application_consent.html",
+        "sha256": "ae2e26036587e5e64a9de917f1f54f5ff887a28fa318ce689bc5a22097ef49a0"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "application_custom_select.html",
+        "sha256": "f555fb0c90b0587e0c332bfbaace0cb262c78624559b4d2f4b163cc7a1306730"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "application_radio_checkbox.html",
+        "sha256": "51a3934d849d55a538af860563423745974de0d7eaaefe4f3b27af5695ce84f5"
+      },
+      {
+        "expected_reason_code": "CHALLENGE_DETECTED",
+        "expected_state": "challenge",
+        "file": "captcha.html",
+        "sha256": "7718f73de93ea5385378a579d2a188b0741fe13fe76c7cf4c465bfa4126abd12"
+      },
+      {
+        "expected_reason_code": "JOB_CLOSED",
+        "expected_state": "closed",
+        "file": "closed_job.html",
+        "sha256": "438de6052b7867b0c57a42960cb9720f76221ac0f44c8b675eb2544d0ed42f39"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "disabled_submit.html",
+        "sha256": "147c4b316352878679712eb308d579407865faa5647a492347ab42667d43f956"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "duplicate_field.html",
+        "sha256": "6b98023a1a193e87d02f34767d84609bd2397dc2d2e902f30c6435090373df72"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "generic_success.html",
+        "sha256": "539e1695d8c9c98b1bae6acff8bba451fb4a8aa0ac840b13304b43c3b4894611"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "hidden_confirmation.html",
+        "sha256": "a96ab33222d866712e7e6ef9195df11eed6930876a163cabacfdde524112a24e"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "invalid_action.html",
+        "sha256": "a4f3bb16cc660e0b3205f94d7f7fd18d3bf1da89e0d0f650bfe4249525b19a6f"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "job",
+        "file": "job_page.html",
+        "sha256": "2ae86f66e5cb4eb08f7dae33b1e3863ad98371a57e8bbad8e242e6cc5b349572"
+      },
+      {
+        "expected_reason_code": "MFA_REQUIRED",
+        "expected_state": "mfa",
+        "file": "mfa.html",
+        "sha256": "ca12f043d77daf6abc615bff6ffee502186503d9ec2b2d4fd68fb0e36e99240a"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "mismatched_confirmation.html",
+        "sha256": "528d4f7f5090ed8ce30d195165cc6152f1de7b9d1d63b001324ab854b6ca51a0"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "multiple_resume.html",
+        "sha256": "3b834e89e32d358e257ee1cedf7190bbe3108192fade93f40e1150631e1d43cd"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "outer_aria_disabled.html",
+        "sha256": "834ae2706d9fd644cd227426054eadbad5b56ebf70f49d815147786b6033c311"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "outer_content_visibility.html",
+        "sha256": "7a86bc7a98fee5f9f36317f48d11ec4308dd3511cf533dbfe35ad2e9d0cb5193"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "outer_has_proxy_guard.html",
+        "sha256": "29d1ab74b871ae71598788d876a823b2a3abc392bcc46cd3a5ea11a68cfb6cdd"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "outer_inert.html",
+        "sha256": "bb79b0d63c723d8162fb55a7f9bc4b024c7710646086f4484fbdf0d5a4274b71"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "outer_pointer_events.html",
+        "sha256": "74b2e7616df4a293ed427d41a532fdf2f091bad22ed882e9fec046011be4970a"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "outer_zero_area.html",
+        "sha256": "d7f15ced866efc7038cabce43a811a39efe5890718f6e7819ad1eed92d9afe4f"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "prompt_injection.html",
+        "sha256": "ef196a92eed4453abcc5e129eed583109229096d33cd569eae8f60612d89832e"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "file": "selector_drift.html",
+        "sha256": "72c79859d80f0d0da5dbaad1547c4dd6329a5e07e86067c964d5665112807848"
+      },
+      {
+        "expected_reason_code": "SESSION_EXPIRED",
+        "expected_state": "login",
+        "file": "session_expired.html",
+        "sha256": "5dbf68addae93aa9590ebef1a83db919f0204d0377207dafb6049276f9894a08"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "unreviewed_hidden_control.html",
+        "sha256": "84b9785d460a126e17a9d70373f0320e9dd70f69b332b2f8bce97ae47ca1f0e4"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "confirmation",
+        "file": "verified_confirmation.html",
+        "sha256": "4fc0092c913e94caf56fe3d5e8cbd370cf780fab5ce93aa024c7e59ccc35a302"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "file": "wrong_method.html",
+        "sha256": "bf5af3021504af949b2ddf96cae7c8475860c381fdcdcc69bcf55b36d5f4b8e4"
+      }
+    ],
+    "digest_algorithm": "sha256-manifest-v1",
+    "fixture_count": 28,
+    "fixture_digest": "24a32ca624d34c99d3c3d275c5ea8a6e1351f88c6ad99a7bcc77cd354e01f215",
+    "fixture_directory": "tests/fixtures/lever_v1"
+  },
+  "interpretation": "Sanitized offline fixture qualification only. It does not qualify a real form, a live canary, or an external final action.",
+  "qualification_gates": {
+    "final_external_action_enabled": false,
+    "fixture_contract": "passed",
+    "live_canary": "pending",
+    "qualified_form_scope": [],
+    "real_url_dry_run": "pending"
+  },
+  "recorded_on": "2026-07-27",
+  "safety_observations": {
+    "external_network_used": false,
+    "final_action_performed": false,
+    "private_data_used": false,
+    "real_application_used": false,
+    "stored_content_scope": [
+      "sanitized fixture identifiers",
+      "bounded states and reason codes",
+      "cryptographic digests"
+    ]
+  },
+  "schema_version": "ats-browser-qualification-report-v1"
+}
