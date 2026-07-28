@@ -1,0 +1,137 @@
+{
+  "adapter": {
+    "adapter_name": "ashby",
+    "adapter_version": "1.0.0",
+    "execution_contract_version": "two-phase-v2",
+    "selector_version": "ashby-candidate-v1",
+    "transport": "browser"
+  },
+  "achieved_tier": "fixture_qualified",
+  "fixture_evidence": {
+    "cases": [
+      {
+        "expected_reason_code": "ALREADY_APPLIED",
+        "expected_state": "already_applied",
+        "expected_validation_reason_code": null,
+        "file": "already_applied.html",
+        "sha256": "7278362ee7e3aecac7072932efd4cbcbb3f1fb6f9c9b67ebb105e94384f434b5"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "expected_validation_reason_code": null,
+        "file": "application_base.html",
+        "sha256": "55febb2753a53839fac1e6238c51945cc4ecfb6e35d54242f89ed47e31166d66"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "expected_validation_reason_code": null,
+        "file": "application_conditional.html",
+        "sha256": "71e6214c7b931436dea7e2c0ba9343dba91792b2ab2b048799ac326c451478e2"
+      },
+      {
+        "expected_reason_code": "CHALLENGE_DETECTED",
+        "expected_state": "challenge",
+        "expected_validation_reason_code": null,
+        "file": "captcha.html",
+        "sha256": "4d99fd9372675aa899803fe9cafa20c8a76361075dfe87c0923fe9d4cd616a7f"
+      },
+      {
+        "expected_reason_code": "JOB_CLOSED",
+        "expected_state": "closed",
+        "expected_validation_reason_code": null,
+        "file": "closed_job.html",
+        "sha256": "91103a081094bb845633ee0c491176f1ad86e3c981c42c4d39a612f83f5c0041"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "confirmation",
+        "expected_validation_reason_code": null,
+        "file": "confirmation.html",
+        "sha256": "ba2c6f610d4d4383c01a2ad2ece90484987fd46be0e517fb9949b8bcf6ebf19a"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "job",
+        "expected_validation_reason_code": null,
+        "file": "job.html",
+        "sha256": "375bf37bafa2993595d17edb3975bbd841558af27c44725c1a7ec9d78a7e992d"
+      },
+      {
+        "expected_reason_code": "SESSION_EXPIRED",
+        "expected_state": "login",
+        "expected_validation_reason_code": null,
+        "file": "login.html",
+        "sha256": "fb0737023868239775340c076f8841315f3ca89df696f94e88c05d7d1273d0e2"
+      },
+      {
+        "expected_reason_code": "MFA_REQUIRED",
+        "expected_state": "mfa",
+        "expected_validation_reason_code": null,
+        "file": "mfa.html",
+        "sha256": "320107eb7dd5886d0a4854c3655b97a620edd50fc7bca06571b5828e17fb8c77"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "expected_validation_reason_code": null,
+        "file": "proxy_actionability.html",
+        "sha256": "65dd4d7faad3e5cd03e2b59460ed57fb4dbf718509e3a50284c3a92f91fd8c8a"
+      },
+      {
+        "expected_reason_code": "SELECTOR_DRIFT",
+        "expected_state": "selector_drift",
+        "expected_validation_reason_code": null,
+        "file": "selector_drift.html",
+        "sha256": "000e8f9ce5cae2b239c2da40ac285734e6f49eb016fdeea85006044643dd0414"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "expected_validation_reason_code": "ATTACHMENT_UNVERIFIED",
+        "file": "upload_pending.html",
+        "sha256": "2c2bccf21607b99e6504bd9b9bf5775ea96c2b50c24020f29e69fd84d26965f7"
+      },
+      {
+        "expected_reason_code": null,
+        "expected_state": "form",
+        "expected_validation_reason_code": "REQUIRED_FIELD_UNKNOWN",
+        "file": "validation_error.html",
+        "sha256": "e127eceb6f945c8fe92b86e18189d8686cb1ed1fdb7da6e66fa76a79fa6e1c56"
+      }
+    ],
+    "digest_algorithm": "sha256-manifest-v1",
+    "fixture_count": 13,
+    "fixture_digest": "4f4ad23bc7f646929a7029abf30520c607069149735a6f40c02b9f461e532dc6",
+    "fixture_directory": "tests/fixtures/ashby_v1"
+  },
+  "interpretation": "Sanitized offline fixture qualification only. It does not qualify a real form, live canary, or external final action.",
+  "qualification_gates": {
+    "final_external_action_enabled": false,
+    "fixture_contract": "passed",
+    "live_canary": "pending",
+    "qualified_form_scope": [],
+    "real_url_dry_run": "pending"
+  },
+  "recorded_on": "2026-07-27",
+  "safety_observations": {
+    "atomic_status_allowlist": "request_or_two_explicit_pre_request_failures",
+    "evaluate_exception_after_gate": "unknown_non_retryable",
+    "external_network_used": false,
+    "final_action_performed": false,
+    "final_request_resource_type": "document",
+    "malformed_release_status": "unknown_non_retryable",
+    "post_invocation_without_request": "unknown_non_retryable",
+    "private_data_used": false,
+    "real_application_used": false,
+    "stored_content_scope": [
+      "sanitized fixture identifiers",
+      "bounded states and reason codes",
+      "cryptographic digests"
+    ],
+    "submitter_proxy_inserted": false,
+    "transport_contradiction": "gate_signal_forces_invoked_unknown"
+  },
+  "schema_version": "ats-browser-qualification-report-v1"
+}

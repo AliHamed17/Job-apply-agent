@@ -74,11 +74,12 @@ def test_detection_and_qualification_share_one_adapter_inventory():
     assert len({descriptor.platform for descriptor in descriptors}) == len(descriptors)
 
     for descriptor in descriptors:
-        url = (
-            "https://boards.greenhouse.io/qualification/jobs/1"
-            if descriptor.platform == "greenhouse"
-            else f"https://{descriptor.domains[0]}/jobs/qualification-test"
-        )
+        if descriptor.platform == "greenhouse":
+            url = "https://boards.greenhouse.io/qualification/jobs/1"
+        elif descriptor.platform == "ashby":
+            url = "https://jobs.ashbyhq.com/qualification/4f44b0a5-5482-4be6-bc11-3d89040b9fa1"
+        else:
+            url = f"https://{descriptor.domains[0]}/jobs/qualification-test"
         assert detect_platform(url) == descriptor.platform
         assert adapter_for_url(url) is descriptor
         assert adapter_for_platform(descriptor.platform) is descriptor
@@ -94,12 +95,12 @@ def test_detection_and_qualification_share_one_adapter_inventory():
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.DRY_RUN_ONLY
-    } == _PLANNED_FIRST_FIVE - {"workday", "greenhouse", "lever"}
+    } == _PLANNED_FIRST_FIVE - {"workday", "greenhouse", "lever", "ashby"}
     assert {
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.FIXTURE_QUALIFIED
-    } == {"workday", "greenhouse", "lever"}
+    } == {"workday", "greenhouse", "lever", "ashby"}
 
 
 @pytest.mark.asyncio
@@ -140,6 +141,18 @@ async def test_ats_inventory_exposes_fixture_only_lever_as_send_disabled():
     assert lever.selector_version == "lever-candidate-v2"
     assert lever.transport == "browser"
     assert lever.authentication_mode == "public_candidate_flow"
+
+
+@pytest.mark.asyncio
+async def test_ats_inventory_exposes_fixture_only_ashby_as_send_disabled():
+    inventory = await list_ats_adapters()
+    ashby = next(adapter for adapter in inventory if adapter.ats == "ashby")
+
+    assert ashby.qualification_tier == "fixture_qualified"
+    assert ashby.final_execution_enabled is False
+    assert ashby.qualified_form_scope == []
+    assert ashby.adapter_version == "1.0.0"
+    assert ashby.selector_version == "ashby-candidate-v1"
 
 
 @pytest.mark.parametrize(

@@ -300,7 +300,11 @@ job-agent/
 │   ├── lever_v1.py         # Fixture-qualified Lever two-phase domain adapter
 │   ├── lever_playwright.py # Private exact-multipart candidate transport
 │   ├── lever_api.py        # Disabled authorized-API capability
-│   └── lever.py            # Inert legacy compatibility shim
+│   ├── lever.py            # Inert legacy compatibility shim
+│   ├── ashby_v1.py         # Fixture-qualified React-aware domain adapter
+│   ├── ashby_playwright.py # Exact candidate-browser transport
+│   ├── ashby_api.py        # Disabled authorized-API capability
+│   └── ashby.py            # Inert legacy compatibility shim
 ├── worker/                 # Async task pipeline
 │   ├── celery_app.py       # Celery configuration
 │   └── tasks.py            # 5-stage pipeline with approval enforcement

@@ -131,7 +131,7 @@ POST /api/applications/batch-approve
 
 The detector recognizes Workday, Greenhouse, Lever, Ashby, Workable,
 SmartRecruiters, Jobvite, iCIMS, Comeet, LinkedIn, and Indeed. Detection is not
-submission qualification. Workday v2, Greenhouse v1, and Lever v1 have
+submission qualification. Workday v2, Greenhouse v1, Lever v1, and Ashby v1 have
 versioned candidate-browser implementations, but all remain fixture-qualified
 with empty live form scopes. Their real-URL inspection and final action are
 disabled.

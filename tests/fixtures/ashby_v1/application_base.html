@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sanitized Ashby fixture</title></head>
+<body>
+  <main data-ashby-job-posting
+        data-board-token="fixture-board"
+        data-posting-id="4f44b0a5-5482-4be6-bc11-3d89040b9fa1">
+    <form data-ashby-application-form
+          method="post"
+          enctype="multipart/form-data"
+          action="/fixture-board/4f44b0a5-5482-4be6-bc11-3d89040b9fa1/application">
+      <input type="hidden" name="postingId" value="redacted"
+             data-ashby-system-field>
+      <input type="hidden" name="csrfToken" value="sanitized-token"
+             data-ashby-system-field>
+
+      <div data-ashby-field data-field-id="full-name"
+           data-canonical-name="full_name" data-ashby-rendered="true">
+        <label for="full-name-input">Full name</label>
+        <input id="full-name-input" name="candidateName" type="text" required>
+      </div>
+
+      <div data-ashby-field data-field-id="email"
+           data-canonical-name="email" data-ashby-rendered="true">
+        <label for="email-input">Email address</label>
+        <input id="email-input" name="candidateEmail" type="email" required>
+      </div>
+
+      <div data-ashby-field data-field-id="preferred-team"
+           data-ashby-rendered="true">
+        <label for="team-input">Preferred engineering team</label>
+        <select id="team-input" name="preferredTeam" required>
+          <option value="">Choose one</option>
+          <option data-option-id="team-ai" value="ai">AI engineering</option>
+          <option data-option-id="team-platform" value="platform">Platform</option>
+        </select>
+      </div>
+
+      <div data-ashby-field data-field-id="resume"
+           data-canonical-name="resume" data-max-file-bytes="20971520"
+           data-ashby-rendered="true">
+        <label for="resume-input">Resume</label>
+        <input id="resume-input" name="resume" type="file"
+               accept=".pdf,application/pdf" required>
+        <span data-ashby-upload-state="complete"
+              data-upload-receipt="sanitized-receipt">Upload complete</span>
+      </div>
+
+      <div data-ashby-field data-field-id="privacy-consent"
+           data-control-kind="consent"
+           data-sensitive-category="consent"
+           data-ashby-rendered="true">
+        <label for="privacy-input">I consent to the privacy policy</label>
+        <input id="privacy-input" name="privacyConsent"
+               type="checkbox" value="yes" required>
+      </div>
+
+      <section hidden aria-hidden="true"
+               data-ashby-field data-field-id="conditional-detail"
+               data-ashby-rendered="false" data-condition-id="preferred-team-ai">
+        <label for="conditional-input">Relevant technical experience</label>
+        <textarea id="conditional-input" name="conditionalDetail"
+                  required disabled></textarea>
+      </section>
+
+      <button type="submit" name="action" value="submit"
+              data-ashby-submit-application>Submit application</button>
+    </form>
+  </main>
+</body>
+</html>

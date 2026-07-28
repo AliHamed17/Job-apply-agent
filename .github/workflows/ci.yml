@@ -94,6 +94,9 @@ jobs:
           submitters/lever_identity.py submitters/lever_api.py
           submitters/lever.py submitters/lever_v1.py
           submitters/lever_playwright.py
+          submitters/ashby_identity.py submitters/ashby_api.py
+          submitters/ashby.py submitters/ashby_v1.py
+          submitters/ashby_playwright.py
           submitters/registry.py
       - name: Typed v4 submission orchestration
         run: >
@@ -188,6 +191,9 @@ jobs:
           submitters/lever_identity.py submitters/lever_api.py
           submitters/lever.py submitters/lever_v1.py
           submitters/lever_playwright.py
+          submitters/ashby_identity.py submitters/ashby_api.py
+          submitters/ashby.py submitters/ashby_v1.py
+          submitters/ashby_playwright.py
           worker/celery_app.py
           worker/submission_commands.py worker/task_dispatch.py worker/tasks.py
       - name: Compose validation

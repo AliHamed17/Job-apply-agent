@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from threading import Lock
 
+from submitters.ashby_playwright import playwright_ashby_browser_factory
+from submitters.ashby_v1 import register_ashby_browser_v1
 from submitters.base import SubmitterRegistry, two_phase_registry
 from submitters.greenhouse_playwright import playwright_greenhouse_browser_factory
 from submitters.greenhouse_v1 import register_greenhouse_browser_v1
@@ -43,6 +45,10 @@ def get_two_phase_registry() -> SubmitterRegistry:
             register_lever_browser_v1(
                 two_phase_registry,
                 browser_factory=playwright_lever_browser_factory,
+            )
+            register_ashby_browser_v1(
+                two_phase_registry,
+                browser_factory=playwright_ashby_browser_factory,
             )
             _INITIALIZED = True
     return two_phase_registry
