@@ -66,7 +66,10 @@ def test_platform_detection_covers_existing_adapters():
     assert detect_platform(WORKDAY_URL) == "workday"
     assert detect_platform("https://boards.greenhouse.io/acme/jobs/1") == "greenhouse"
     assert detect_platform("https://jobs.lever.co/acme/1") == "lever"
-    assert detect_platform("https://jobs.ashbyhq.com/acme/1") == "ashby"
+    assert (
+        detect_platform("https://jobs.ashbyhq.com/acme/11111111-2222-4333-8444-555555555555")
+        == "ashby"
+    )
     assert detect_platform("https://careers.example.test/jobs/1") == "generic_portal"
     assert (
         detect_platform("https://careers.example.test/jobs/1?next=linkedin.com/jobs")

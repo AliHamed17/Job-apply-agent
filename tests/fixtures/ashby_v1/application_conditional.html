@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sanitized conditional Ashby fixture</title></head>
+<body>
+  <main data-ashby-job-posting
+        data-board-token="fixture-board"
+        data-posting-id="4f44b0a5-5482-4be6-bc11-3d89040b9fa1">
+    <form data-ashby-application-form
+          method="post"
+          enctype="multipart/form-data"
+          action="/fixture-board/4f44b0a5-5482-4be6-bc11-3d89040b9fa1/application">
+      <input type="hidden" name="postingId" value="redacted"
+             data-ashby-system-field>
+      <div data-ashby-field data-field-id="preferred-team"
+           data-ashby-rendered="true">
+        <label for="team-input">Preferred engineering team</label>
+        <select id="team-input" name="preferredTeam" required>
+          <option data-option-id="team-ai" value="ai">AI engineering</option>
+          <option data-option-id="team-platform" value="platform">Platform</option>
+        </select>
+      </div>
+      <section data-ashby-field data-field-id="conditional-detail"
+               data-ashby-rendered="true" data-condition-id="preferred-team-ai">
+        <label for="conditional-input">Relevant technical experience</label>
+        <textarea id="conditional-input" name="conditionalDetail" required></textarea>
+      </section>
+      <div data-ashby-field data-field-id="resume"
+           data-canonical-name="resume" data-max-file-bytes="20971520"
+           data-ashby-rendered="true">
+        <label for="resume-input">Resume</label>
+        <input id="resume-input" name="resume" type="file"
+               accept=".pdf,application/pdf" required>
+        <span data-ashby-upload-state="complete"
+              data-upload-receipt="sanitized-receipt">Upload complete</span>
+      </div>
+      <button type="submit" name="action" value="submit"
+              data-ashby-submit-application>Submit application</button>
+    </form>
+  </main>
+</body>
+</html>

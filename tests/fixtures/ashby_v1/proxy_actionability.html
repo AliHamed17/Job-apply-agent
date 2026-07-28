@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    button:has([data-ashby-submit-proxy]) {
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <main data-ashby-job-posting>
+    <form data-ashby-application-form method="post"
+          enctype="multipart/form-data"
+          action="/fixture-board/4f44b0a5-5482-4be6-bc11-3d89040b9fa1/application">
+      <div data-ashby-field data-field-id="resume"
+           data-canonical-name="resume" data-ashby-rendered="true">
+        <label for="resume-input">Resume</label>
+        <input id="resume-input" name="resume" type="file" required>
+        <span data-ashby-upload-state="complete"
+              data-upload-receipt="sanitized-receipt">Upload complete</span>
+      </div>
+      <button type="submit" name="action" value="submit"
+              data-ashby-submit-application>Submit application</button>
+    </form>
+  </main>
+</body>
+</html>

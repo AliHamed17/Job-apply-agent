@@ -14,6 +14,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from urllib.parse import urlparse
 
+from submitters.ashby_identity import is_ashby_candidate_url
 from submitters.greenhouse_identity import is_greenhouse_candidate_url
 
 TWO_PHASE_EXECUTION_CONTRACT_VERSION = "two-phase-v2"
@@ -135,14 +136,30 @@ _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     ),
     AdapterDescriptor(
         platform="ashby",
-        adapter_version="0.1.0",
-        selector_version="legacy-v1",
-        transport="legacy_hybrid",
+        adapter_version="1.0.0",
+        selector_version="ashby-candidate-v1",
+        transport="browser",
         authentication_mode="public_candidate_flow",
-        supported_controls=_COMMON_CONTROLS,
-        qualification=QualificationTier.DRY_RUN_ONLY,
+        supported_controls=(
+            "text",
+            "textarea",
+            "select",
+            "multi_select",
+            "radio",
+            "checkbox",
+            "date",
+            "number",
+            "email",
+            "phone",
+            "url",
+            "file",
+            "consent",
+            "attestation",
+        ),
+        qualification=QualificationTier.FIXTURE_QUALIFIED,
         qualified_form_scope=(),
-        domains=("jobs.ashbyhq.com", "ashbyhq.com"),
+        domains=("jobs.ashbyhq.com",),
+        execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
     ),
     AdapterDescriptor(
         platform="workable",
@@ -237,12 +254,14 @@ def detect_platform(url: str) -> str:
     candidate_url = (url or "").strip()
     if is_greenhouse_candidate_url(candidate_url):
         return "greenhouse"
+    if is_ashby_candidate_url(candidate_url):
+        return "ashby"
     try:
         hostname = (urlparse(candidate_url).hostname or "").lower().rstrip(".")
     except ValueError:
         return "unknown"
     for descriptor in _ADAPTERS:
-        if descriptor.platform == "greenhouse":
+        if descriptor.platform in {"greenhouse", "ashby"}:
             continue
         if any(
             _matches_domain(

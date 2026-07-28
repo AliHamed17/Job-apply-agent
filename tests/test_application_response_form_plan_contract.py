@@ -30,6 +30,20 @@ _PLATFORM_CASES = (
         "greenhouse-candidate-v9",
         id="greenhouse",
     ),
+    pytest.param(
+        "lever",
+        "https://jobs.lever.co/fixture/11111111-2222-4333-8444-555555555555/apply",
+        "1.0.0",
+        "lever-candidate-v2",
+        id="lever",
+    ),
+    pytest.param(
+        "ashby",
+        "https://jobs.ashbyhq.com/fixture/4f44b0a5-5482-4be6-bc11-3d89040b9fa1/application",
+        "1.0.0",
+        "ashby-candidate-v1",
+        id="ashby",
+    ),
 )
 
 
