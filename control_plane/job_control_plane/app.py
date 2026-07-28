@@ -517,13 +517,14 @@ def create_app(
             return HTMLResponse(_login_html())
         require_current_schema(db)
         touch_operator_session(operator)
+        now = utc_now()
         grants = db.scalars(
             select(ReviewGrant).order_by(ReviewGrant.created_at.desc()).limit(50)
         ).all()
         commands = db.scalars(
             select(SubmissionCommand).order_by(SubmissionCommand.created_at.desc()).limit(50)
         ).all()
-        return HTMLResponse(_dashboard_html(grants=grants, commands=commands))
+        return HTMLResponse(_dashboard_html(grants=grants, commands=commands, now=now))
 
     return app
 
@@ -583,16 +584,24 @@ def _dashboard_html(
     *,
     grants: list[ReviewGrant],
     commands: list[SubmissionCommand],
+    now: datetime,
 ) -> str:
-    grant_rows = "".join(
-        (
+    grant_rows_parts: list[str] = []
+    for row in grants:
+        if row.revoked_at is not None:
+            state = "revoked"
+        elif row.consumed_at is not None:
+            state = "used"
+        elif as_utc(row.expires_at) <= now:
+            state = "expired"
+        else:
+            state = "eligible"
+        grant_rows_parts.append(
             "<tr>"
             f"<td><code>{html.escape(row.id)}</code></td>"
             f"<td>{html.escape(row.adapter)} {html.escape(row.adapter_version)}</td>"
             f"<td><code>{html.escape(row.application_ref)}</code> r{row.application_revision}</td>"
-            "<td>"
-            f"{'revoked' if row.revoked_at else ('used' if row.consumed_at else 'eligible')}"
-            "</td>"
+            f"<td>{state}</td>"
             "<td>"
             + (
                 (
@@ -603,13 +612,12 @@ def _dashboard_html(
                     f"data-fingerprint='{html.escape(row.form_fingerprint_digest)}'>"
                     "Send application</button>"
                 )
-                if row.consumed_at is None and row.revoked_at is None
+                if state == "eligible"
                 else ""
             )
             + "</td></tr>"
         )
-        for row in grants
-    )
+    grant_rows = "".join(grant_rows_parts)
     command_rows = "".join(
         (
             "<tr>"

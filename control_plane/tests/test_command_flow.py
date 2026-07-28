@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
+import job_control_plane.app as app_module
 from job_control_plane.config import Settings
 from job_control_plane.crypto import verify_envelope
 from job_control_plane.models import ReviewGrant, RunnerDevice, RunnerNonce, SubmissionCommand
@@ -190,6 +191,100 @@ def test_signed_revocation_is_idempotent_and_removes_send_authority(
         stored = db.get(ReviewGrant, str(payload.grant_id))
         assert stored is not None
         assert stored.revocation_envelope_digest is not None
+
+
+def test_dashboard_grant_expiry_boundary_controls_state_and_send_action(
+    client: TestClient,
+    authenticated: str,
+    review_grant: ReviewGrantEnvelope,
+    monkeypatch,
+) -> None:
+    assert authenticated
+    checked_at = datetime.now(UTC).replace(microsecond=0)
+    expired_id = str(review_grant.payload.grant_id)
+    boundary_id = str(uuid4())
+    live_id = str(uuid4())
+    used_id = str(uuid4())
+    revoked_id = str(uuid4())
+
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        source = db.get(ReviewGrant, expired_id)
+        assert source is not None
+        source.expires_at = checked_at - timedelta(seconds=1)
+
+        def grant(
+            identifier: str,
+            *,
+            expires_at: datetime,
+            consumed_at: datetime | None = None,
+            revoked_at: datetime | None = None,
+        ) -> ReviewGrant:
+            return ReviewGrant(
+                id=identifier,
+                device_id=source.device_id,
+                application_ref=str(uuid4()),
+                application_revision=source.application_revision,
+                adapter=source.adapter,
+                adapter_version=source.adapter_version,
+                form_fingerprint_digest=source.form_fingerprint_digest,
+                envelope_digest=identifier.replace("-", "").ljust(64, "0"),
+                reviewed_at=checked_at - timedelta(minutes=1),
+                expires_at=expires_at,
+                created_at=checked_at - timedelta(minutes=1),
+                consumed_at=consumed_at,
+                revoked_at=revoked_at,
+                revocation_envelope_digest="f" * 64 if revoked_at is not None else None,
+            )
+
+        db.add_all(
+            [
+                grant(boundary_id, expires_at=checked_at),
+                grant(live_id, expires_at=checked_at + timedelta(microseconds=1)),
+                grant(
+                    used_id,
+                    expires_at=checked_at - timedelta(seconds=1),
+                    consumed_at=checked_at - timedelta(seconds=2),
+                ),
+                grant(
+                    revoked_id,
+                    expires_at=checked_at - timedelta(seconds=1),
+                    revoked_at=checked_at - timedelta(seconds=2),
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(app_module, "utc_now", lambda: checked_at)
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+
+    def rendered_row(identifier: str) -> str:
+        marker = f"<td><code>{identifier}</code></td>"
+        start = dashboard.text.index(marker)
+        return dashboard.text[start : dashboard.text.index("</tr>", start)]
+
+    for identifier in (expired_id, boundary_id):
+        row = rendered_row(identifier)
+        assert "<td>expired</td>" in row
+        assert "Send application" not in row
+
+    live_row = rendered_row(live_id)
+    assert "<td>eligible</td>" in live_row
+    assert "Send application</button>" in live_row
+    assert f"data-grant='{live_id}'" in live_row
+
+    used_row = rendered_row(used_id)
+    assert "<td>used</td>" in used_row
+    assert "Send application" not in used_row
+    revoked_row = rendered_row(revoked_id)
+    assert "<td>revoked</td>" in revoked_row
+    assert "Send application" not in revoked_row
+    assert dashboard.text.count("Send application</button>") == 1
+
+    listed = client.get("/api/review-grants")
+    assert listed.status_code == 200
+    assert {row["grant_id"] for row in listed.json()["grants"]} == {live_id}
+    assert listed.json()["grants"][0]["eligible"] is True
 
 
 def test_revocation_tombstone_wins_over_delayed_grant_projection(
