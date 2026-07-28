@@ -1,6 +1,6 @@
 """Add durable outbound projection state for review-grant revocations.
 
-Revision ID: 014_control_plane_grant_revocations
+Revision ID: 014_control_grant_revocations
 Revises: 013_vercel_local_control_plane
 """
 
@@ -11,7 +11,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "014_control_plane_grant_revocations"
+revision: str = "014_control_grant_revocations"
 down_revision: str | None = "013_vercel_local_control_plane"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

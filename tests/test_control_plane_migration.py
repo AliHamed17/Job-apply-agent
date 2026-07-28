@@ -9,7 +9,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from alembic.autogenerate import compare_metadata
+from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from db.models import Base
@@ -39,6 +41,12 @@ def _alembic(path: Path, *args: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def test_revision_identifiers_fit_the_postgresql_version_table() -> None:
+    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+
+    assert all(len(revision.revision) <= 32 for revision in script.walk_revisions())
 
 
 def test_control_plane_migration_round_trip_and_metadata_match(tmp_path):
