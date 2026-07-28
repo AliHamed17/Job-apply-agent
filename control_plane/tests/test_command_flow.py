@@ -260,6 +260,186 @@ def test_lost_poll_and_ack_redeliver_same_command_safely(
         assert row.status == "acknowledged"
 
 
+def test_delayed_ack_and_events_report_after_command_expiry(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    review_grant: ReviewGrantEnvelope,
+    heartbeat: HeartbeatEnvelope,
+    sign_runner: Callable[..., Any],
+) -> None:
+    sent = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=_send_body(review_grant),
+    )
+    command_id = UUID(sent.json()["command_id"])
+    assert len(_poll(client, sign_runner, heartbeat)["commands"]) == 1
+
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        row = db.get(SubmissionCommand, str(command_id))
+        assert row is not None
+        row.claimed_at = expired_at - timedelta(seconds=1)
+        row.expires_at = expired_at
+
+    ack_payload = CommandAckPayload(
+        command_id=command_id,
+        ack_status=CommandAckStatus.RECEIVED,
+    )
+    ack_url = f"/api/runner/commands/{command_id}/ack"
+    delayed_ack = sign_runner(CommandAckEnvelope, ack_payload)
+    accepted = client.post(ack_url, json=delayed_ack.model_dump(mode="json"))
+    assert accepted.status_code == 200
+    assert accepted.json()["duplicate"] is False
+
+    queued = sign_runner(
+        RunnerEventEnvelope,
+        RunnerEventPayload(
+            event_id=uuid4(),
+            command_id=command_id,
+            sequence=1,
+            stage=AttemptStage.QUEUED,
+            occurred_at=expired_at - timedelta(milliseconds=500),
+        ),
+    )
+    assert client.post("/api/runner/events", json=queued.model_dump(mode="json")).status_code == 200
+
+    finished = sign_runner(
+        RunnerEventEnvelope,
+        RunnerEventPayload(
+            event_id=uuid4(),
+            command_id=command_id,
+            sequence=2,
+            stage=AttemptStage.FINISHED,
+            outcome=AttemptOutcome.CONFIRMED_SUBMITTED,
+            evidence_type=EvidenceType.ATS_VISIBLE_CONFIRMATION,
+            evidence_digest="d" * 64,
+            occurred_at=datetime.now(UTC),
+        ),
+    )
+    assert (
+        client.post("/api/runner/events", json=finished.model_dump(mode="json")).status_code == 200
+    )
+
+    replay = client.post(ack_url, json=delayed_ack.model_dump(mode="json"))
+    assert replay.status_code == 409
+    assert replay.json() == {"code": "RUNNER_REPLAYED"}
+    duplicate_ack = sign_runner(CommandAckEnvelope, ack_payload)
+    duplicate = client.post(ack_url, json=duplicate_ack.model_dump(mode="json"))
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+
+    status_json = client.get(f"/api/commands/{command_id}").json()
+    assert status_json["status"] == "finished"
+    assert status_json["events"][-1]["outcome"] == "confirmed_submitted"
+
+
+def test_first_durable_event_recovers_a_completely_lost_ack_after_expiry(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    review_grant: ReviewGrantEnvelope,
+    heartbeat: HeartbeatEnvelope,
+    sign_runner: Callable[..., Any],
+) -> None:
+    sent = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=_send_body(review_grant),
+    )
+    command_id = UUID(sent.json()["command_id"])
+    assert len(_poll(client, sign_runner, heartbeat)["commands"]) == 1
+
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        row = db.get(SubmissionCommand, str(command_id))
+        assert row is not None
+        row.claimed_at = expired_at - timedelta(seconds=1)
+        row.expires_at = expired_at
+
+    queued = sign_runner(
+        RunnerEventEnvelope,
+        RunnerEventPayload(
+            event_id=uuid4(),
+            command_id=command_id,
+            sequence=1,
+            stage=AttemptStage.QUEUED,
+            occurred_at=expired_at - timedelta(milliseconds=500),
+        ),
+    )
+    recovered = client.post("/api/runner/events", json=queued.model_dump(mode="json"))
+    assert recovered.status_code == 200
+
+    with factory() as db:
+        row = db.get(SubmissionCommand, str(command_id))
+        assert row is not None
+        assert row.ack_status == CommandAckStatus.RECEIVED.value
+        assert row.acknowledged_at is not None
+        assert row.status == "running"
+
+    finished = sign_runner(
+        RunnerEventEnvelope,
+        RunnerEventPayload(
+            event_id=uuid4(),
+            command_id=command_id,
+            sequence=2,
+            stage=AttemptStage.FINISHED,
+            outcome=AttemptOutcome.UNKNOWN,
+            reason_code=ReasonCode.FINAL_ACTION_UNCONFIRMED,
+            occurred_at=datetime.now(UTC),
+        ),
+    )
+    assert (
+        client.post("/api/runner/events", json=finished.model_dump(mode="json")).status_code == 200
+    )
+    status_json = client.get(f"/api/commands/{command_id}").json()
+    assert status_json["status"] == "finished"
+    assert status_json["events"][-1]["outcome"] == "unknown"
+
+
+def test_expiry_does_not_make_an_unclaimed_or_late_claim_acknowledgeable(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    review_grant: ReviewGrantEnvelope,
+    heartbeat: HeartbeatEnvelope,
+    sign_runner: Callable[..., Any],
+) -> None:
+    sent = client.post(
+        "/api/send",
+        headers=_send_headers(settings, authenticated),
+        json=_send_body(review_grant),
+    )
+    command_id = UUID(sent.json()["command_id"])
+    ack_payload = CommandAckPayload(
+        command_id=command_id,
+        ack_status=CommandAckStatus.RECEIVED,
+    )
+    ack_url = f"/api/runner/commands/{command_id}/ack"
+
+    unclaimed_ack = sign_runner(CommandAckEnvelope, ack_payload)
+    denied = client.post(ack_url, json=unclaimed_ack.model_dump(mode="json"))
+    assert denied.status_code == 409
+    assert denied.json() == {"code": "COMMAND_NOT_CLAIMED"}
+
+    assert len(_poll(client, sign_runner, heartbeat)["commands"]) == 1
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        row = db.get(SubmissionCommand, str(command_id))
+        assert row is not None
+        row.expires_at = expired_at
+        row.claimed_at = expired_at + timedelta(milliseconds=1)
+
+    late_claim_ack = sign_runner(CommandAckEnvelope, ack_payload)
+    denied = client.post(ack_url, json=late_claim_ack.model_dump(mode="json"))
+    assert denied.status_code == 409
+    assert denied.json() == {"code": "COMMAND_CLAIM_INVALID"}
+
+
 def test_event_sequence_allows_only_precommit_reset_and_requires_employer_evidence(
     client: TestClient,
     settings: Settings,

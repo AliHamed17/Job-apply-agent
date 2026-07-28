@@ -107,7 +107,11 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
     -StartWhenAvailable
 
-if ($PSCmdlet.ShouldProcess($TaskName, 'Install and start private control-plane runner')) {
+$applied = $PSCmdlet.ShouldProcess(
+    $TaskName,
+    'Install and start private control-plane runner'
+)
+if ($applied) {
     if ($null -ne $existing) {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -120,11 +124,21 @@ if ($PSCmdlet.ShouldProcess($TaskName, 'Install and start private control-plane 
         -Settings $settings `
         -Description 'Outbound-only private Job Apply Agent control-plane runner.' | Out-Null
     Start-ScheduledTask -TaskName $TaskName
+    $installedTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $resultState = [string]$installedTask.State
+    $result = 'Installed'
+}
+else {
+    $resultState = 'Simulated'
+    $result = 'SkippedByShouldProcess'
 }
 
 [pscustomobject]@{
     TaskName = $TaskName
-    State = (Get-ScheduledTask -TaskName $TaskName).State
+    State = $resultState
+    Result = $result
+    Applied = $applied
+    ExistingTask = $null -ne $existing
     Repository = $repository
     Config = $config
 }

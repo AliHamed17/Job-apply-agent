@@ -506,8 +506,8 @@ def acknowledge_command(
         return Receipt(identifier=command.id, duplicate=True)
     if command.status != "claimed":
         raise ControlPlaneError("COMMAND_NOT_CLAIMED")
-    if as_utc(command.expires_at) <= checked_at:
-        raise ControlPlaneError("COMMAND_EXPIRED")
+    if not _command_was_claimed_before_expiry(command):
+        raise ControlPlaneError("COMMAND_CLAIM_INVALID")
     command.ack_status = ack
     command.acknowledged_at = checked_at
     command.claim_lease_expires_at = None
@@ -520,6 +520,14 @@ def acknowledge_command(
 
 
 _STAGE_ORDER = {stage.value: index for index, stage in enumerate(AttemptStage)}
+
+
+def _command_was_claimed_before_expiry(command: SubmissionCommand) -> bool:
+    """Prove the cloud released this command while its authority was live."""
+
+    return bool(
+        command.claimed_at is not None and as_utc(command.claimed_at) < as_utc(command.expires_at)
+    )
 
 
 def receive_runner_event(
@@ -553,9 +561,26 @@ def receive_runner_event(
     )
     if command is None or command.device_id != device.id:
         raise ControlPlaneError("COMMAND_NOT_FOUND", status_code=404)
-    if command.acknowledged_at is None or command.ack_status != CommandAckStatus.RECEIVED.value:
-        raise ControlPlaneError("COMMAND_NOT_ACKNOWLEDGED")
     occurred_at = as_utc(payload.occurred_at)
+    if command.acknowledged_at is None or command.ack_status != CommandAckStatus.RECEIVED.value:
+        recovers_lost_ack = bool(
+            command.status == "claimed"
+            and command.claimed_at is not None
+            and _command_was_claimed_before_expiry(command)
+            and payload.sequence == 1
+            and payload.stage is AttemptStage.QUEUED
+            and occurred_at >= as_utc(command.claimed_at) - timedelta(seconds=30)
+            and occurred_at <= as_utc(command.expires_at)
+        )
+        if not recovers_lost_ack:
+            raise ControlPlaneError("COMMAND_NOT_ACKNOWLEDGED")
+        # The durable local QUEUED event is created in the same transaction as
+        # local admission. Its signed, pre-expiry timestamp is therefore a
+        # stronger recovery receipt than a fresh post-expiry ACK. This changes
+        # reporting state only; it cannot create or re-run local work.
+        command.ack_status = CommandAckStatus.RECEIVED.value
+        command.acknowledged_at = checked_at
+        command.claim_lease_expires_at = None
     if occurred_at > as_utc(envelope.issued_at) + timedelta(seconds=30) or occurred_at < as_utc(
         command.created_at
     ) - timedelta(seconds=30):
