@@ -97,7 +97,9 @@ jobs:
           submitters/ashby_identity.py submitters/ashby_api.py
           submitters/ashby.py submitters/ashby_v1.py
           submitters/ashby_playwright.py
-          submitters/registry.py
+          submitters/smartrecruiters.py submitters/smartrecruiters_identity.py
+          submitters/smartrecruiters_api.py submitters/smartrecruiters_v1.py
+          submitters/smartrecruiters_playwright.py submitters/registry.py
       - name: Typed v4 submission orchestration
         run: >
           mypy --ignore-missing-imports
@@ -171,6 +173,9 @@ jobs:
           core/material_audit.py core/operations.py core/runtime_identity.py
           core/sensitive_policy.py core/submission_domain.py core/submission_service.py
           core/utils.py db/models.py
+          submitters/smartrecruiters.py submitters/smartrecruiters_identity.py
+          submitters/smartrecruiters_api.py submitters/smartrecruiters_v1.py
+          submitters/smartrecruiters_playwright.py
           llm/client.py llm/generation.py llm/prompts.py
           llm/claim_evidence.py llm/contracts.py
           llm/execution_guard.py llm/ollama_runtime.py

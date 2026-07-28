@@ -304,7 +304,11 @@ job-agent/
 │   ├── ashby_v1.py         # Fixture-qualified React-aware domain adapter
 │   ├── ashby_playwright.py # Exact candidate-browser transport
 │   ├── ashby_api.py        # Disabled authorized-API capability
-│   └── ashby.py            # Inert legacy compatibility shim
+│   ├── ashby.py            # Inert legacy compatibility shim
+│   ├── smartrecruiters_v1.py # Fixture-qualified candidate domain adapter
+│   ├── smartrecruiters_playwright.py # Private one-shot browser transport
+│   ├── smartrecruiters_api.py # Disabled authorized OAuth capability
+│   └── smartrecruiters.py  # Inert legacy compatibility shim
 ├── worker/                 # Async task pipeline
 │   ├── celery_app.py       # Celery configuration
 │   └── tasks.py            # 5-stage pipeline with approval enforcement

@@ -358,6 +358,7 @@ def _load_domain_plan(plan: FormPlan) -> FormPlanV1:
         created_at=_aware(plan.created_at),
         expires_at=_aware(plan.expires_at),
         fields=json.loads(plan.fields_json),
+        disclosures=json.loads(getattr(plan, "disclosures_json", "[]")),
         decisions=json.loads(plan.decisions_json),
         blockers=json.loads(plan.blockers_json),
         locale=plan.locale,

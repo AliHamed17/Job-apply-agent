@@ -78,6 +78,8 @@ def test_detection_and_qualification_share_one_adapter_inventory():
             url = "https://boards.greenhouse.io/qualification/jobs/1"
         elif descriptor.platform == "ashby":
             url = "https://jobs.ashbyhq.com/qualification/4f44b0a5-5482-4be6-bc11-3d89040b9fa1"
+        elif descriptor.platform == "smartrecruiters":
+            url = "https://jobs.smartrecruiters.com/qualification/123456789-sanitized-role"
         else:
             url = f"https://{descriptor.domains[0]}/jobs/qualification-test"
         assert detect_platform(url) == descriptor.platform
@@ -95,12 +97,12 @@ def test_detection_and_qualification_share_one_adapter_inventory():
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.DRY_RUN_ONLY
-    } == _PLANNED_FIRST_FIVE - {"workday", "greenhouse", "lever", "ashby"}
+    } == set()
     assert {
         descriptor.platform
         for descriptor in descriptors
         if descriptor.qualification is QualificationTier.FIXTURE_QUALIFIED
-    } == {"workday", "greenhouse", "lever", "ashby"}
+    } == _PLANNED_FIRST_FIVE
 
 
 @pytest.mark.asyncio
@@ -153,6 +155,18 @@ async def test_ats_inventory_exposes_fixture_only_ashby_as_send_disabled():
     assert ashby.qualified_form_scope == []
     assert ashby.adapter_version == "1.0.0"
     assert ashby.selector_version == "ashby-candidate-v1"
+
+
+@pytest.mark.asyncio
+async def test_ats_inventory_exposes_fixture_only_smartrecruiters_as_send_disabled():
+    inventory = await list_ats_adapters()
+    adapter = next(item for item in inventory if item.ats == "smartrecruiters")
+
+    assert adapter.qualification_tier == "fixture_qualified"
+    assert adapter.final_execution_enabled is False
+    assert adapter.qualified_form_scope == []
+    assert adapter.adapter_version == "1.0.0"
+    assert adapter.selector_version == "smartrecruiters-candidate-v1"
 
 
 @pytest.mark.parametrize(

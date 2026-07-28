@@ -263,7 +263,13 @@ def test_current_adapters_have_no_live_final_execution_scope():
         assert descriptor.allows_live_submission is False
         assert descriptor.allows_final_execution is False
         assert descriptor.qualified_form_scope == ()
-        if descriptor.platform in {"workday", "greenhouse", "lever", "ashby"}:
+        if descriptor.platform in {
+            "workday",
+            "greenhouse",
+            "lever",
+            "ashby",
+            "smartrecruiters",
+        }:
             assert descriptor.execution_contract_version == TWO_PHASE_EXECUTION_CONTRACT_VERSION
             assert descriptor.qualification is QualificationTier.FIXTURE_QUALIFIED
         else:

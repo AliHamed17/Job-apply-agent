@@ -44,6 +44,13 @@ _PLATFORM_CASES = (
         "ashby-candidate-v1",
         id="ashby",
     ),
+    pytest.param(
+        "smartrecruiters",
+        "https://jobs.smartrecruiters.com/fixture/123456789-sanitized-role/apply",
+        "1.0.0",
+        "smartrecruiters-candidate-v1",
+        id="smartrecruiters",
+    ),
 )
 
 

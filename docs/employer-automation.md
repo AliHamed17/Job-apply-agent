@@ -7,10 +7,10 @@ generates application material, and places complete applications in the
 dashboard. An operator can approve one application or an exact reviewed batch.
 Only then can a platform adapter perform an external action.
 
-An application is recorded as submitted only when an official API returns a
-successful candidate-creation response or a browser page displays explicit,
-application-specific confirmation. A click, redirect, timeout, generic
-“success” word, or exception is never treated as proof.
+An application is recorded as submitted only when a separately authorized API
+returns a schema-valid, application-specific receipt or a browser page displays
+explicit, application-specific confirmation. An HTTP status, click, redirect,
+timeout, generic “success” word, or exception is never treated as proof.
 
 ## Safety boundaries
 
@@ -40,7 +40,7 @@ application-specific confirmation. A click, redirect, timeout, generic
 
 ## One-time employer sign-in
 
-Authenticated Workday tenants use a dedicated Playwright profile per hostname.
+Candidate-browser adapters use a dedicated Playwright profile per hostname.
 Install the browser dependency and Chromium, then bootstrap the exact employer
 portal once:
 
@@ -131,10 +131,10 @@ POST /api/applications/batch-approve
 
 The detector recognizes Workday, Greenhouse, Lever, Ashby, Workable,
 SmartRecruiters, Jobvite, iCIMS, Comeet, LinkedIn, and Indeed. Detection is not
-submission qualification. Workday v2, Greenhouse v1, Lever v1, and Ashby v1 have
-versioned candidate-browser implementations, but all remain fixture-qualified
-with empty live form scopes. Their real-URL inspection and final action are
-disabled.
+submission qualification. Workday v2, Greenhouse v1, Lever v1, Ashby v1, and
+SmartRecruiters v1 have versioned candidate-browser implementations, but all
+remain fixture-qualified with empty live form scopes. Their real-URL inspection
+and final action are disabled.
 Employer API transports are separate and disabled unless legitimate,
 tenant-bound authorization is explicitly implemented and qualified.
 Candidate-browser and API transports never silently switch between each other.
@@ -147,6 +147,10 @@ Every candidate-browser adapter shares the same rules:
 - possible final action without exact employer confirmation →
   `FINAL_ACTION_UNCONFIRMED` and `unknown`;
 - unsupported portal → reviewable draft.
+
+SmartRecruiters candidate browser v1 is fixture-qualified with an empty live
+scope. Its legacy one-step shim and protected OAuth Application API are both
+disabled. See `docs/smartrecruiters-browser-v1.md`.
 
 Employer pages change. A fixture-qualified adapter proves only its sanitized
 offline contract. It does not claim current tenant support, real-URL
