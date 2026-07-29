@@ -147,12 +147,23 @@ the DPAPI bundle or invoke Vercel. Review the reported `node_js` mode, eight
 variable names, project, scope, environment, and expected CLI version, then
 repeat without `--dry-run`. Before decrypting, the live command invokes the
 exact command shape `[node.exe, absolute\vercel\dist\vc.js, --version]`.
-Before every secret write it rehashes both files, then invokes
-`[node.exe, absolute\vercel\dist\vc.js, env, add, ...]`. It sends each value
-only through the pinned process's standard input with a sanitized environment
-and fixed cwd; secret values never enter argv, environment variables, stdout,
-stderr, or this repository. CLI version output is captured and discarded;
-secret-bearing command output is suppressed directly to the null device.
+It then requests only non-decrypted environment metadata and matches records
+by exact key plus exact built-in target. Before every secret write it rehashes
+both files, then creates a missing target record or patches that exact record
+ID through `vercel api`. It never uses the key-only `env add --force` upsert,
+because that can collapse distinct Preview and Production records. Sensitive
+PATCH bodies omit the immutable key. Request bodies travel only through the
+pinned process's standard input with a sanitized environment and fixed cwd;
+secret values never enter argv, environment variables, stdout, stderr, or
+this repository. Metadata with a decrypted value, a combined target, a
+branch/custom target, duplicate or aliased record IDs, a hidden Production
+record, an incomplete page, or an invalid record ID fails closed before the
+DPAPI bundle is decrypted. CLI version output and non-decrypted metadata are
+bounded and discarded; secret-bearing command output is suppressed directly
+to the null device. After writing the digest, the helper fetches a second
+non-decrypted complete inventory and returns success only when all eight exact
+target records exist, every pre-existing record ID is unchanged, and the
+other environment's identity records are unchanged.
 
 The helper also accepts the official native package. npm exposes package bins
 through shims, so do not use `Get-Command vercel.exe`. Resolve the
