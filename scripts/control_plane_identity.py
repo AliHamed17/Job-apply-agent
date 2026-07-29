@@ -20,6 +20,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from ctypes import wintypes
@@ -56,6 +57,8 @@ _IDENTITY_PUBLISH_RETRY_SECONDS = 0.05
 _TRANSIENT_IDENTITY_PUBLISH_ERRNOS = frozenset({errno.EACCES, errno.EPERM})
 _TRANSIENT_IDENTITY_PUBLISH_WINERRORS = frozenset({5, 32, 33})
 _IDENTITY_ATTESTATION_CONTEXT = b"JobApplyAgent/control-identity-bundle/v2\0"
+_MAX_VERCEL_METADATA_BYTES = 2 * 1024 * 1024
+_VERCEL_ENV_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _IDENTITY_DERIVED_VERCEL_VARIABLES = (
     "CONTROL_OPERATOR_TOKEN",
     "CONTROL_SESSION_SECRET",
@@ -190,9 +193,21 @@ class VercelCliInvocation:
     js_entrypoint_sha256: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class VercelEnvironmentInventory:
+    """Non-decrypted exact-target identity record inventory."""
+
+    targeted_records: tuple[tuple[str, str], ...]
+    other_target_records: tuple[tuple[str, str, str], ...]
+
+
 VercelCommandRunner = Callable[
     [Path, Sequence[str], str, Path, Mapping[str, str]],
     int,
+]
+VercelMetadataReader = Callable[
+    [Path, Sequence[str], Path, Mapping[str, str]],
+    str,
 ]
 VercelVersionReader = Callable[[Path, Path, Mapping[str, str]], str]
 
@@ -1533,6 +1548,221 @@ def _run_vercel_command(
     return int(completed.returncode)
 
 
+def _read_vercel_environment_metadata(
+    executable: Path,
+    arguments: Sequence[str],
+    working_directory: Path,
+    environment: Mapping[str, str],
+) -> str:
+    """Read bounded non-decrypted environment metadata from the pinned CLI."""
+
+    try:
+        process = subprocess.Popen(
+            [str(executable), *arguments],
+            cwd=working_directory,
+            env=dict(environment),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+        )
+    except OSError:
+        raise IdentityProvisioningError("VERCEL_CLI_UNAVAILABLE") from None
+    if process.stdout is None:
+        process.kill()
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_UNAVAILABLE")
+
+    chunks: list[bytes] = []
+    overflow = threading.Event()
+    read_failed = threading.Event()
+
+    def kill_process() -> None:
+        try:
+            if process.poll() is None:
+                process.kill()
+        except OSError:
+            pass
+
+    def drain_stdout() -> None:
+        total = 0
+        try:
+            while True:
+                chunk = process.stdout.read(64 * 1024)
+                if not chunk:
+                    return
+                total += len(chunk)
+                if total > _MAX_VERCEL_METADATA_BYTES:
+                    overflow.set()
+                    kill_process()
+                    return
+                chunks.append(chunk)
+        except (OSError, ValueError):
+            read_failed.set()
+            kill_process()
+
+    reader = threading.Thread(
+        target=drain_stdout,
+        name="vercel-metadata-reader",
+        daemon=True,
+    )
+    reader.start()
+    timed_out = False
+    try:
+        return_code = process.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_process()
+        try:
+            return_code = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            return_code = -1
+    finally:
+        reader.join(timeout=5)
+        process.stdout.close()
+
+    if timed_out or reader.is_alive():
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_TIMEOUT")
+    if overflow.is_set():
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_TOO_LARGE")
+    if read_failed.is_set():
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_UNAVAILABLE")
+    if return_code != 0:
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_UNAVAILABLE")
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError:
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID") from None
+
+
+def _vercel_environment_inventory(
+    raw_metadata: str,
+    *,
+    environment: str,
+) -> VercelEnvironmentInventory:
+    """Parse one complete, non-decrypted exact-target environment inventory."""
+
+    if not isinstance(raw_metadata, str):
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+    if environment not in {"preview", "production"}:
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+    if len(raw_metadata.encode("utf-8")) > _MAX_VERCEL_METADATA_BYTES:
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_TOO_LARGE")
+    try:
+        payload = json.loads(
+            raw_metadata,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=lambda _constant: (_ for _ in ()).throw(ValueError()),
+        )
+    except (UnicodeDecodeError, ValueError, TypeError):
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("envs"), list):
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+
+    has_hidden_count = "hiddenProductionEnvCount" in payload
+    has_pagination = "pagination" in payload
+    if has_hidden_count == has_pagination:
+        raise IdentityProvisioningError("VERCEL_ENV_METADATA_INCOMPLETE")
+    if has_hidden_count:
+        hidden_production_count = payload["hiddenProductionEnvCount"]
+        if type(hidden_production_count) is not int or hidden_production_count < 0:
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        if hidden_production_count:
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INCOMPLETE")
+    else:
+        pagination = payload["pagination"]
+        if not isinstance(pagination, dict) or not {
+            "count",
+            "next",
+            "prev",
+        }.issubset(pagination):
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        count = pagination["count"]
+        if type(count) is not int or count < 0:
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        if (
+            count != len(payload["envs"])
+            or pagination["next"] is not None
+            or pagination["prev"] is not None
+        ):
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INCOMPLETE")
+
+    records: dict[tuple[str, str], str] = {}
+    all_record_ids: set[str] = set()
+    for raw_record in payload["envs"]:
+        if not isinstance(raw_record, dict):
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        identifier = raw_record.get("id")
+        if not isinstance(identifier, str) or _VERCEL_ENV_ID_PATTERN.fullmatch(identifier) is None:
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        if identifier in all_record_ids:
+            raise IdentityProvisioningError("VERCEL_ENV_RECORD_ID_ALIAS")
+        all_record_ids.add(identifier)
+
+        name = raw_record.get("key")
+        if name not in _IDENTITY_DERIVED_VERCEL_VARIABLES:
+            continue
+        if (
+            raw_record.get("decrypted") is not False
+            or raw_record.get("value") not in {None, ""}
+            or raw_record.get("legacyValue") not in {None, ""}
+            or raw_record.get("vsmValue") not in {None, ""}
+        ):
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_UNSAFE")
+        if raw_record.get("type") != "sensitive":
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+
+        raw_target = raw_record.get("target")
+        if isinstance(raw_target, str):
+            targets = (raw_target,)
+        elif isinstance(raw_target, list) and all(isinstance(value, str) for value in raw_target):
+            targets = tuple(raw_target)
+        else:
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        if (
+            len(targets) != 1
+            or targets[0] not in {"preview", "production"}
+            or raw_record.get("gitBranch") not in {None, ""}
+            or raw_record.get("customEnvironmentIds") not in (None, [], ())
+        ):
+            raise IdentityProvisioningError(f"VERCEL_ENV_TARGET_AMBIGUOUS_{name}")
+        target = targets[0]
+        record_key = (name, target)
+        if record_key in records:
+            raise IdentityProvisioningError(f"VERCEL_ENV_TARGET_AMBIGUOUS_{name}")
+        records[record_key] = identifier
+
+    targeted_records = tuple(
+        (name, records[(name, environment)])
+        for name in _IDENTITY_DERIVED_VERCEL_VARIABLES
+        if (name, environment) in records
+    )
+    other_target_records = tuple(
+        (name, target, records[(name, target)])
+        for name in _IDENTITY_DERIVED_VERCEL_VARIABLES
+        for target in ("preview", "production")
+        if target != environment and (name, target) in records
+    )
+    return VercelEnvironmentInventory(
+        targeted_records=targeted_records,
+        other_target_records=other_target_records,
+    )
+
+
+def _targeted_vercel_environment_records(
+    raw_metadata: str,
+    *,
+    environment: str,
+) -> dict[str, str]:
+    """Select exact built-in-environment records without reading secret values."""
+
+    return dict(
+        _vercel_environment_inventory(
+            raw_metadata,
+            environment=environment,
+        ).targeted_records
+    )
+
+
 def configure_vercel_identity(
     *,
     root: Path,
@@ -1550,6 +1780,7 @@ def configure_vercel_identity(
     scope: str,
     dry_run: bool = False,
     runner: VercelCommandRunner = _run_vercel_command,
+    metadata_reader: VercelMetadataReader = _read_vercel_environment_metadata,
     version_reader: VercelVersionReader | None = None,
     unprotector: Callable[[bytes], bytes] = unprotect_with_dpapi,
     platform_name: str | None = None,
@@ -1632,6 +1863,39 @@ def configure_vercel_identity(
     if observed_cli_version != expected_cli_version:
         raise IdentityProvisioningError("VERCEL_CLI_VERSION_MISMATCH")
 
+    metadata_arguments = (
+        *invocation.prefix_arguments,
+        "api",
+        f"/v10/projects/{selected_project}/env?decrypt=false",
+        "--raw",
+        "--cwd",
+        str(working_directory),
+        "--scope",
+        selected_scope,
+        "--no-color",
+    )
+
+    def read_inventory() -> VercelEnvironmentInventory:
+        _revalidate_vercel_cli_invocation(invocation)
+        try:
+            raw_metadata = metadata_reader(
+                invocation.executable,
+                metadata_arguments,
+                working_directory,
+                sanitized_environment,
+            )
+        except IdentityProvisioningError:
+            raise
+        except Exception:
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_UNAVAILABLE") from None
+        return _vercel_environment_inventory(
+            raw_metadata,
+            environment=selected_environment,
+        )
+
+    initial_inventory = read_inventory()
+    existing_records = dict(initial_inventory.targeted_records)
+
     values = _identity_derived_vercel_values(
         selection,
         unprotector=unprotector,
@@ -1639,18 +1903,32 @@ def configure_vercel_identity(
     configured = 0
     for name in variable_names:
         _revalidate_vercel_cli_invocation(invocation)
+        record_id = existing_records.get(name)
+        if record_id is None:
+            endpoint = f"/v10/projects/{selected_project}/env"
+            method = "POST"
+        else:
+            endpoint = f"/v9/projects/{selected_project}/env/{record_id}"
+            method = "PATCH"
+        request = {
+            "value": values[name],
+            "type": "sensitive",
+            "target": [selected_environment],
+        }
+        if method == "POST":
+            request["key"] = name
+        request_body = json.dumps(request, ensure_ascii=True, separators=(",", ":"))
         arguments = (
             *invocation.prefix_arguments,
-            "env",
-            "add",
-            name,
-            selected_environment,
-            "--sensitive",
-            "--force",
+            "api",
+            endpoint,
+            "--method",
+            method,
+            "--input",
+            "-",
+            "--silent",
             "--cwd",
             str(working_directory),
-            "--project",
-            selected_project,
             "--scope",
             selected_scope,
             "--no-color",
@@ -1660,7 +1938,7 @@ def configure_vercel_identity(
                 runner(
                     invocation.executable,
                     arguments,
-                    values[name],
+                    request_body,
                     working_directory,
                     sanitized_environment,
                 )
@@ -1672,6 +1950,18 @@ def configure_vercel_identity(
         if return_code != 0:
             raise IdentityProvisioningError(f"VERCEL_ENV_CONFIGURATION_FAILED_{name}")
         configured += 1
+
+    final_inventory = read_inventory()
+    final_records = dict(final_inventory.targeted_records)
+    if set(final_records) != set(variable_names):
+        raise IdentityProvisioningError("VERCEL_ENV_ATTESTATION_FAILED")
+    if any(
+        final_records.get(name) != identifier
+        for name, identifier in initial_inventory.targeted_records
+    ):
+        raise IdentityProvisioningError("VERCEL_ENV_ATTESTATION_FAILED")
+    if final_inventory.other_target_records != initial_inventory.other_target_records:
+        raise IdentityProvisioningError("VERCEL_ENV_ATTESTATION_FAILED")
     return VercelConfigurationResult(
         dry_run=False,
         cli_mode=invocation.mode,

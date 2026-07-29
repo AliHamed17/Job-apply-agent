@@ -82,7 +82,12 @@ native Vercel executable or separately SHA-256-pinned absolute `node.exe` and
 files are rehashed before every write, and values travel only over stdin with
 a sanitized process environment. The helper writes the bundle digest last, so
 a partial or mixed update makes the next Production/Preview startup fail
-closed. It never configures the database, public origin, or `APP_ENV`. The
+closed. It resolves non-decrypted metadata and creates or patches only the
+exact environment-scoped record; key-only `--force` upserts are prohibited so
+Preview and Production identities cannot collapse into one record. A bounded
+second metadata read must prove all eight target records and preserve the
+other environment before the helper reports success. It never configures the
+database, public origin, or `APP_ENV`. The
 separate `validate-selection` command checks DPAPI-protected schema-v2 target
 metadata and both private/public signing-key bindings without printing private
 material. The separate `copy-operator-token` command uses an owned,

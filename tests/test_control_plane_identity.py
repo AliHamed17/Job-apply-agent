@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -58,8 +59,19 @@ def _unprotector(value: bytes) -> bytes:
     return value.removeprefix(prefix)[::-1]
 
 
+def _empty_vercel_metadata(
+    _executable: Path,
+    _arguments: object,
+    _cwd: Path,
+    _environment: object,
+) -> str:
+    return json.dumps({"envs": [], "hiddenProductionEnvCount": 0})
+
+
 def _test_identity(
     tmp_path: Path,
+    *,
+    vercel_environment: str = "production",
 ) -> tuple[Path, Path, Path, Path, Path, str]:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -80,7 +92,7 @@ def _test_identity(
             repository_root=repository.resolve(),
             control_plane_url="https://control.example",
             runtime_env_path=runtime_env.resolve(),
-            vercel_environment="production",
+            vercel_environment=vercel_environment,
             vercel_project_id=PROJECT_ID,
             vercel_scope_id=SCOPE_ID,
             protector=_protector,
@@ -567,6 +579,14 @@ def test_configure_vercel_dry_run_never_decrypts_or_invokes_cli(tmp_path: Path) 
     def no_version_reader(_executable: Path, _cwd: Path, _environment: object) -> str:
         raise AssertionError("dry-run must not invoke Vercel")
 
+    def no_metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        raise AssertionError("dry-run must not invoke Vercel")
+
     result = configure_vercel_identity(
         root=root,
         repository_root=repository,
@@ -579,6 +599,7 @@ def test_configure_vercel_dry_run_never_decrypts_or_invokes_cli(tmp_path: Path) 
         scope=SCOPE_ID,
         dry_run=True,
         runner=no_runner,
+        metadata_reader=no_metadata_reader,
         version_reader=no_version_reader,
         unprotector=no_decrypt,
         platform_name="nt",
@@ -606,6 +627,7 @@ def test_configure_vercel_streams_only_identity_values_over_stdin(
 ) -> None:
     repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(tmp_path)
     calls: list[tuple[Path, tuple[str, ...], str, Path, object]] = []
+    metadata_calls: list[tuple[Path, tuple[str, ...], Path, object]] = []
     monkeypatch.setenv("NODE_OPTIONS", "--require=untrusted.js")
     monkeypatch.setenv("VERCEL_PROJECT_ID", "prj_wrongtarget123")
     monkeypatch.setenv("PATH", r"C:\untrusted")
@@ -628,6 +650,37 @@ def test_configure_vercel_streams_only_identity_values_over_stdin(
         )
         return 0
 
+    def metadata_reader(
+        executable: Path,
+        arguments: object,
+        cwd: Path,
+        environment: object,
+    ) -> str:
+        metadata_calls.append(
+            (
+                executable,
+                tuple(str(value) for value in arguments),
+                cwd,
+                environment,
+            )
+        )
+        return json.dumps(
+            {
+                "envs": [
+                    {
+                        "id": f"record_{index}",
+                        "key": json.loads(call[2])["key"],
+                        "type": "sensitive",
+                        "target": ["production"],
+                        "decrypted": False,
+                        "value": "",
+                    }
+                    for index, call in enumerate(calls)
+                ],
+                "hiddenProductionEnvCount": 0,
+            }
+        )
+
     result = configure_vercel_identity(
         root=root,
         repository_root=repository,
@@ -639,6 +692,7 @@ def test_configure_vercel_streams_only_identity_values_over_stdin(
         project=PROJECT_ID,
         scope=SCOPE_ID,
         runner=runner,
+        metadata_reader=metadata_reader,
         version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
         unprotector=_unprotector,
         platform_name="nt",
@@ -646,6 +700,18 @@ def test_configure_vercel_streams_only_identity_values_over_stdin(
 
     assert result.configured_count == 8
     assert len(calls) == 8
+    assert len(metadata_calls) == 2
+    metadata_executable, metadata_arguments, metadata_cwd, metadata_environment = metadata_calls[0]
+    assert metadata_executable == cli
+    assert metadata_cwd == vercel_cwd
+    assert metadata_arguments[:2] == (
+        "api",
+        f"/v10/projects/{PROJECT_ID}/env?decrypt=false",
+    )
+    assert "--raw" in metadata_arguments
+    assert metadata_arguments[metadata_arguments.index("--scope") + 1] == SCOPE_ID
+    assert "PATH" not in metadata_environment
+    assert "NODE_OPTIONS" not in metadata_environment
     selected = load_selected_identity(root=root, repository_root=repository)
     protected = load_control_secrets(
         selected.secret_bundle_path,
@@ -660,10 +726,11 @@ def test_configure_vercel_streams_only_identity_values_over_stdin(
         selected.runner_public_key,
         str(selected.device_id),
     }
-    assert {call[2] for call in calls[:-1]} == expected_values
-    assert calls[-1][1][2] == "CONTROL_IDENTITY_BUNDLE_DIGEST"
-    assert calls[-1][2].startswith("v2:")
-    configured = {call[1][2]: call[2] for call in calls}
+    request_bodies = [json.loads(call[2]) for call in calls]
+    assert {body["value"] for body in request_bodies[:-1]} == expected_values
+    assert request_bodies[-1]["key"] == "CONTROL_IDENTITY_BUNDLE_DIGEST"
+    assert request_bodies[-1]["value"].startswith("v2:")
+    configured = {body["key"]: body["value"] for body in request_bodies}
     assert configured["CONTROL_IDENTITY_BUNDLE_DIGEST"] == build_identity_bundle_digest(
         configured,
         version_id=selected.version_id,
@@ -674,17 +741,585 @@ def test_configure_vercel_streams_only_identity_values_over_stdin(
     for executable, arguments, stdin_value, cwd, environment in calls:
         assert executable == cli
         assert cwd == vercel_cwd
-        assert arguments[:2] == ("env", "add")
-        assert arguments[3] == "production"
-        assert "--sensitive" in arguments
-        assert "--force" in arguments
-        assert arguments[arguments.index("--project") + 1] == PROJECT_ID
+        assert arguments[:2] == ("api", f"/v10/projects/{PROJECT_ID}/env")
+        assert arguments[arguments.index("--method") + 1] == "POST"
+        assert arguments[arguments.index("--input") + 1] == "-"
+        assert "--silent" in arguments
+        assert "--force" not in arguments
         assert arguments[arguments.index("--scope") + 1] == SCOPE_ID
         assert arguments[arguments.index("--cwd") + 1] == str(vercel_cwd)
         assert "PATH" not in environment
         assert "NODE_OPTIONS" not in environment
+        body = json.loads(stdin_value)
+        assert body["type"] == "sensitive"
+        assert body["target"] == ["production"]
         assert stdin_value not in "\0".join(arguments)
         assert stdin_value not in repr(result)
+
+
+def test_configure_vercel_creates_preview_records_without_upserting_production(
+    tmp_path: Path,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(
+        tmp_path,
+        vercel_environment="preview",
+    )
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        created = [
+            {
+                "id": f"preview_record_{index}",
+                "key": body["key"],
+                "type": "sensitive",
+                "target": ["preview"],
+                "decrypted": False,
+                "value": "",
+            }
+            for index, (_arguments, body) in enumerate(calls)
+        ]
+        return json.dumps(
+            {
+                "envs": [
+                    {
+                        "id": "production_record",
+                        "key": "CONTROL_OPERATOR_TOKEN",
+                        "type": "sensitive",
+                        "target": ["production"],
+                        "decrypted": False,
+                        "value": "",
+                    }
+                ]
+                + created,
+                "hiddenProductionEnvCount": 0,
+            }
+        )
+
+    def runner(
+        _executable: Path,
+        arguments: object,
+        stdin_value: str,
+        _cwd: Path,
+        _environment: object,
+    ) -> int:
+        calls.append(
+            (
+                tuple(str(value) for value in arguments),
+                json.loads(stdin_value),
+            )
+        )
+        return 0
+
+    result = configure_vercel_identity(
+        root=root,
+        repository_root=repository,
+        vercel_cli=cli,
+        vercel_cli_sha256=cli_digest,
+        vercel_cli_version=CLI_VERSION,
+        vercel_cwd=vercel_cwd,
+        environment="preview",
+        project=PROJECT_ID,
+        scope=SCOPE_ID,
+        runner=runner,
+        metadata_reader=metadata_reader,
+        version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
+        unprotector=_unprotector,
+        platform_name="nt",
+    )
+
+    assert result.configured_count == 8
+    assert len(calls) == 8
+    for arguments, body in calls:
+        assert arguments[:2] == ("api", f"/v10/projects/{PROJECT_ID}/env")
+        assert arguments[arguments.index("--method") + 1] == "POST"
+        assert "upsert" not in "\0".join(arguments)
+        assert "production_record" not in "\0".join(arguments)
+        assert body["target"] == ["preview"]
+
+
+def test_configure_vercel_post_write_attestation_rejects_other_scope_collapse(
+    tmp_path: Path,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(
+        tmp_path,
+        vercel_environment="preview",
+    )
+    names = tuple(identity_module._IDENTITY_DERIVED_VERCEL_VARIABLES)
+    calls: list[dict[str, object]] = []
+    metadata_reads = 0
+
+    def metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        nonlocal metadata_reads
+        metadata_reads += 1
+        target = "production" if metadata_reads == 1 else "preview"
+        records = [
+            {
+                "id": f"{target}_{index}",
+                "key": name,
+                "type": "sensitive",
+                "target": [target],
+                "decrypted": False,
+                "value": "",
+            }
+            for index, name in enumerate(names)
+        ]
+        return json.dumps(
+            {
+                "envs": records,
+                "hiddenProductionEnvCount": 0,
+            }
+        )
+
+    def runner(
+        _executable: Path,
+        _arguments: object,
+        stdin_value: str,
+        _cwd: Path,
+        _environment: object,
+    ) -> int:
+        calls.append(json.loads(stdin_value))
+        return 0
+
+    with pytest.raises(IdentityProvisioningError, match="VERCEL_ENV_ATTESTATION_FAILED"):
+        configure_vercel_identity(
+            root=root,
+            repository_root=repository,
+            vercel_cli=cli,
+            vercel_cli_sha256=cli_digest,
+            vercel_cli_version=CLI_VERSION,
+            vercel_cwd=vercel_cwd,
+            environment="preview",
+            project=PROJECT_ID,
+            scope=SCOPE_ID,
+            runner=runner,
+            metadata_reader=metadata_reader,
+            version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
+            unprotector=_unprotector,
+            platform_name="nt",
+        )
+
+    assert metadata_reads == 2
+    assert len(calls) == 8
+    assert calls[-1]["key"] == "CONTROL_IDENTITY_BUNDLE_DIGEST"
+
+
+def test_configure_vercel_patches_only_exact_environment_record_ids(
+    tmp_path: Path,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(tmp_path)
+    names = (
+        "CONTROL_OPERATOR_TOKEN",
+        "CONTROL_SESSION_SECRET",
+        "CONTROL_CSRF_SECRET",
+        "CONTROL_SIGNING_PRIVATE_KEY_B64",
+        "CONTROL_SIGNING_KEY_ID",
+        "CONTROL_RUNNER_PUBLIC_KEY_B64",
+        "CONTROL_RUNNER_DEVICE_ID",
+        "CONTROL_IDENTITY_BUNDLE_DIGEST",
+    )
+    identifiers = {name: f"record_{index}" for index, name in enumerate(names)}
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        return json.dumps(
+            {
+                "envs": [
+                    {
+                        "id": identifier,
+                        "key": name,
+                        "type": "sensitive",
+                        "target": ["production"],
+                        "decrypted": False,
+                        "value": "",
+                    }
+                    for name, identifier in identifiers.items()
+                ],
+                "hiddenProductionEnvCount": 0,
+            }
+        )
+
+    def runner(
+        _executable: Path,
+        arguments: object,
+        stdin_value: str,
+        _cwd: Path,
+        _environment: object,
+    ) -> int:
+        calls.append(
+            (
+                tuple(str(value) for value in arguments),
+                json.loads(stdin_value),
+            )
+        )
+        return 0
+
+    configure_vercel_identity(
+        root=root,
+        repository_root=repository,
+        vercel_cli=cli,
+        vercel_cli_sha256=cli_digest,
+        vercel_cli_version=CLI_VERSION,
+        vercel_cwd=vercel_cwd,
+        environment="production",
+        project=PROJECT_ID,
+        scope=SCOPE_ID,
+        runner=runner,
+        metadata_reader=metadata_reader,
+        version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
+        unprotector=_unprotector,
+        platform_name="nt",
+    )
+
+    assert len(calls) == 8
+    for name, (arguments, body) in zip(names, calls, strict=True):
+        assert arguments[:2] == (
+            "api",
+            f"/v9/projects/{PROJECT_ID}/env/{identifiers[name]}",
+        )
+        assert arguments[arguments.index("--method") + 1] == "PATCH"
+        assert "key" not in body
+        assert body["target"] == ["production"]
+
+
+@pytest.mark.parametrize("environment", ["preview", "production"])
+def test_configure_vercel_selects_only_the_exact_record_when_both_scopes_exist(
+    tmp_path: Path,
+    environment: str,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(
+        tmp_path,
+        vercel_environment=environment,
+    )
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    records = [
+        {
+            "id": f"{target}_operator",
+            "key": "CONTROL_OPERATOR_TOKEN",
+            "type": "sensitive",
+            "target": [target],
+            "decrypted": False,
+            "value": "",
+        }
+        for target in ("preview", "production")
+    ]
+
+    def runner(
+        _executable: Path,
+        arguments: object,
+        stdin_value: str,
+        _cwd: Path,
+        _environment: object,
+    ) -> int:
+        calls.append(
+            (
+                tuple(str(value) for value in arguments),
+                json.loads(stdin_value),
+            )
+        )
+        return 0
+
+    def metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        created = [
+            {
+                "id": f"{environment}_created_{index}",
+                "key": body["key"],
+                "type": "sensitive",
+                "target": [environment],
+                "decrypted": False,
+                "value": "",
+            }
+            for index, (_arguments, body) in enumerate(calls)
+            if "key" in body
+        ]
+        return json.dumps(
+            {
+                "envs": records + created,
+                "hiddenProductionEnvCount": 0,
+            }
+        )
+
+    configure_vercel_identity(
+        root=root,
+        repository_root=repository,
+        vercel_cli=cli,
+        vercel_cli_sha256=cli_digest,
+        vercel_cli_version=CLI_VERSION,
+        vercel_cwd=vercel_cwd,
+        environment=environment,
+        project=PROJECT_ID,
+        scope=SCOPE_ID,
+        runner=runner,
+        metadata_reader=metadata_reader,
+        version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
+        unprotector=_unprotector,
+        platform_name="nt",
+    )
+
+    operator_arguments, operator_body = calls[0]
+    assert operator_arguments[:2] == (
+        "api",
+        f"/v9/projects/{PROJECT_ID}/env/{environment}_operator",
+    )
+    assert operator_arguments[operator_arguments.index("--method") + 1] == "PATCH"
+    assert "key" not in operator_body
+    assert operator_body["target"] == [environment]
+    assert f"{'production' if environment == 'preview' else 'preview'}_operator" not in (
+        "\0".join(argument for arguments, _body in calls for argument in arguments)
+    )
+
+
+@pytest.mark.parametrize(
+    "record,reason",
+    [
+        (
+            {
+                "id": "combined_target",
+                "key": "CONTROL_OPERATOR_TOKEN",
+                "type": "sensitive",
+                "target": ["preview", "production"],
+                "decrypted": False,
+                "value": "",
+            },
+            "VERCEL_ENV_TARGET_AMBIGUOUS_CONTROL_OPERATOR_TOKEN",
+        ),
+        (
+            {
+                "id": "decrypted_record",
+                "key": "CONTROL_OPERATOR_TOKEN",
+                "type": "sensitive",
+                "target": ["preview"],
+                "decrypted": True,
+                "value": "must-not-be-read",
+            },
+            "VERCEL_ENV_METADATA_UNSAFE",
+        ),
+    ],
+)
+def test_configure_vercel_rejects_ambiguous_or_decrypted_metadata_before_decrypt(
+    tmp_path: Path,
+    record: dict[str, object],
+    reason: str,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(
+        tmp_path,
+        vercel_environment="preview",
+    )
+    decrypted = False
+
+    def no_decrypt(_value: bytes) -> bytes:
+        nonlocal decrypted
+        decrypted = True
+        raise AssertionError
+
+    with pytest.raises(IdentityProvisioningError, match=reason):
+        configure_vercel_identity(
+            root=root,
+            repository_root=repository,
+            vercel_cli=cli,
+            vercel_cli_sha256=cli_digest,
+            vercel_cli_version=CLI_VERSION,
+            vercel_cwd=vercel_cwd,
+            environment="preview",
+            project=PROJECT_ID,
+            scope=SCOPE_ID,
+            runner=lambda *_arguments: 0,
+            metadata_reader=lambda *_arguments: json.dumps(
+                {
+                    "envs": [record],
+                    "hiddenProductionEnvCount": 0,
+                }
+            ),
+            version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
+            unprotector=no_decrypt,
+            platform_name="nt",
+        )
+    assert decrypted is False
+
+
+@pytest.mark.parametrize(
+    "environment,payload,reason",
+    [
+        (
+            "production",
+            {"envs": [], "hiddenProductionEnvCount": 1},
+            "VERCEL_ENV_METADATA_INCOMPLETE",
+        ),
+        (
+            "production",
+            {"envs": [], "hiddenProductionEnvCount": True},
+            "VERCEL_ENV_METADATA_INVALID",
+        ),
+        (
+            "preview",
+            {
+                "envs": [],
+                "pagination": {"count": 0, "next": 123, "prev": None},
+            },
+            "VERCEL_ENV_METADATA_INCOMPLETE",
+        ),
+        (
+            "preview",
+            {
+                "envs": [],
+                "pagination": {"count": 1, "next": None, "prev": None},
+            },
+            "VERCEL_ENV_METADATA_INCOMPLETE",
+        ),
+        (
+            "preview",
+            {"envs": []},
+            "VERCEL_ENV_METADATA_INCOMPLETE",
+        ),
+        (
+            "preview",
+            {
+                "envs": [
+                    {
+                        "id": "same_record",
+                        "key": name,
+                        "type": "sensitive",
+                        "target": ["preview"],
+                        "decrypted": False,
+                        "value": "",
+                    }
+                    for name in ("CONTROL_OPERATOR_TOKEN", "CONTROL_SESSION_SECRET")
+                ],
+                "hiddenProductionEnvCount": 0,
+            },
+            "VERCEL_ENV_RECORD_ID_ALIAS",
+        ),
+        (
+            "preview",
+            {
+                "envs": [
+                    {
+                        "id": "shared_record",
+                        "key": "UNRELATED_VARIABLE",
+                    },
+                    {
+                        "id": "shared_record",
+                        "key": "CONTROL_OPERATOR_TOKEN",
+                        "type": "sensitive",
+                        "target": ["preview"],
+                        "decrypted": False,
+                        "value": "",
+                    },
+                ],
+                "hiddenProductionEnvCount": 0,
+            },
+            "VERCEL_ENV_RECORD_ID_ALIAS",
+        ),
+        (
+            "preview",
+            {
+                "envs": [
+                    {
+                        "id": identifier,
+                        "key": "CONTROL_OPERATOR_TOKEN",
+                        "type": "sensitive",
+                        "target": ["preview"],
+                        "decrypted": False,
+                        "value": "",
+                    }
+                    for identifier in ("duplicate_one", "duplicate_two")
+                ],
+                "hiddenProductionEnvCount": 0,
+            },
+            "VERCEL_ENV_TARGET_AMBIGUOUS_CONTROL_OPERATOR_TOKEN",
+        ),
+    ],
+)
+def test_configure_vercel_rejects_incomplete_or_aliasing_metadata_before_decrypt(
+    tmp_path: Path,
+    environment: str,
+    payload: dict[str, object],
+    reason: str,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(
+        tmp_path,
+        vercel_environment=environment,
+    )
+    decrypted = False
+
+    def no_decrypt(_value: bytes) -> bytes:
+        nonlocal decrypted
+        decrypted = True
+        raise AssertionError
+
+    with pytest.raises(IdentityProvisioningError, match=reason):
+        configure_vercel_identity(
+            root=root,
+            repository_root=repository,
+            vercel_cli=cli,
+            vercel_cli_sha256=cli_digest,
+            vercel_cli_version=CLI_VERSION,
+            vercel_cwd=vercel_cwd,
+            environment=environment,
+            project=PROJECT_ID,
+            scope=SCOPE_ID,
+            runner=lambda *_arguments: 0,
+            metadata_reader=lambda *_arguments: json.dumps(payload),
+            version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
+            unprotector=no_decrypt,
+            platform_name="nt",
+        )
+    assert decrypted is False
+
+
+def test_configure_vercel_rejects_duplicate_metadata_json_keys_before_decrypt(
+    tmp_path: Path,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(
+        tmp_path,
+        vercel_environment="preview",
+    )
+    decrypted = False
+
+    def no_decrypt(_value: bytes) -> bytes:
+        nonlocal decrypted
+        decrypted = True
+        raise AssertionError
+
+    with pytest.raises(IdentityProvisioningError, match="VERCEL_ENV_METADATA_INVALID"):
+        configure_vercel_identity(
+            root=root,
+            repository_root=repository,
+            vercel_cli=cli,
+            vercel_cli_sha256=cli_digest,
+            vercel_cli_version=CLI_VERSION,
+            vercel_cwd=vercel_cwd,
+            environment="preview",
+            project=PROJECT_ID,
+            scope=SCOPE_ID,
+            runner=lambda *_arguments: 0,
+            metadata_reader=lambda *_arguments: (
+                '{"envs":[],"envs":[],"hiddenProductionEnvCount":0}'
+            ),
+            version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
+            unprotector=no_decrypt,
+            platform_name="nt",
+        )
+    assert decrypted is False
 
 
 def test_configure_vercel_node_js_mode_pins_both_files_and_uses_direct_command_shape(
@@ -694,16 +1329,18 @@ def test_configure_vercel_node_js_mode_pins_both_files_and_uses_direct_command_s
     repository, root, _runtime_env, _cli, vercel_cwd, _cli_digest = _test_identity(tmp_path)
     node, node_digest, entrypoint, entrypoint_digest = _test_node_cli(tmp_path)
     calls: list[tuple[Path, tuple[str, ...], Path, object]] = []
+    written_names: list[str] = []
     monkeypatch.setenv("NODE_OPTIONS", "--require=untrusted.js")
     monkeypatch.setenv("PATH", r"C:\untrusted")
 
     def runner(
         executable: Path,
         arguments: object,
-        _stdin_value: str,
+        stdin_value: str,
         cwd: Path,
         environment: object,
     ) -> int:
+        written_names.append(str(json.loads(stdin_value)["key"]))
         calls.append(
             (
                 executable,
@@ -713,6 +1350,29 @@ def test_configure_vercel_node_js_mode_pins_both_files_and_uses_direct_command_s
             )
         )
         return 0
+
+    def metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        return json.dumps(
+            {
+                "envs": [
+                    {
+                        "id": f"record_{index}",
+                        "key": name,
+                        "type": "sensitive",
+                        "target": ["production"],
+                        "decrypted": False,
+                        "value": "",
+                    }
+                    for index, name in enumerate(written_names)
+                ],
+                "hiddenProductionEnvCount": 0,
+            }
+        )
 
     result = configure_vercel_identity(
         root=root,
@@ -727,6 +1387,7 @@ def test_configure_vercel_node_js_mode_pins_both_files_and_uses_direct_command_s
         project=PROJECT_ID,
         scope=SCOPE_ID,
         runner=runner,
+        metadata_reader=metadata_reader,
         version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
         unprotector=_unprotector,
         platform_name="nt",
@@ -738,7 +1399,10 @@ def test_configure_vercel_node_js_mode_pins_both_files_and_uses_direct_command_s
     for executable, arguments, cwd, environment in calls:
         assert executable == node
         assert arguments[0] == str(entrypoint)
-        assert arguments[1:3] == ("env", "add")
+        assert arguments[1:3] == (
+            "api",
+            f"/v10/projects/{PROJECT_ID}/env",
+        )
         assert cwd == vercel_cwd
         assert "PATH" not in environment
         assert "NODE_OPTIONS" not in environment
@@ -825,6 +1489,80 @@ def test_node_js_default_subprocess_shape_is_node_then_absolute_entrypoint(
     assert command_kwargs["stderr"] is subprocess.DEVNULL
 
 
+def test_vercel_metadata_reader_captures_only_bounded_stdout(
+    tmp_path: Path,
+) -> None:
+    executable = (tmp_path / "node.exe").resolve()
+    working_directory = tmp_path.resolve()
+    observed: list[object] = []
+    metadata = json.dumps(
+        {
+            "envs": [],
+            "hiddenProductionEnvCount": 0,
+        }
+    )
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = io.BytesIO(metadata.encode("utf-8"))
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: int | None = None) -> int:
+            assert timeout in {5, 120}
+            return 0
+
+        def kill(self) -> None:
+            raise AssertionError("bounded metadata must not be killed")
+
+    def fake_popen(command: object, **kwargs: object) -> FakeProcess:
+        observed.append((command, kwargs))
+        return FakeProcess()
+
+    arguments = (
+        r"C:\pinned\vercel\dist\vc.js",
+        "api",
+        f"/v10/projects/{PROJECT_ID}/env?decrypt=false",
+        "--raw",
+    )
+    with patch("scripts.control_plane_identity.subprocess.Popen", side_effect=fake_popen):
+        assert (
+            identity_module._read_vercel_environment_metadata(
+                executable,
+                arguments,
+                working_directory,
+                {"CI": "1", "NO_COLOR": "1"},
+            )
+            == metadata
+        )
+
+    command, kwargs = observed[0]
+    assert command == [str(executable), *arguments]
+    assert kwargs["shell"] is False
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.PIPE
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert "text" not in kwargs
+
+
+def test_vercel_metadata_reader_stops_before_buffering_unbounded_stdout(
+    tmp_path: Path,
+) -> None:
+    output_bytes = identity_module._MAX_VERCEL_METADATA_BYTES + 1
+
+    with pytest.raises(IdentityProvisioningError, match="VERCEL_ENV_METADATA_TOO_LARGE"):
+        identity_module._read_vercel_environment_metadata(
+            Path(identity_module.sys.executable).resolve(),
+            (
+                "-c",
+                f"import sys; sys.stdout.buffer.write(b'x' * {output_bytes})",
+            ),
+            tmp_path.resolve(),
+            os.environ,
+        )
+
+
 def test_configure_vercel_node_js_rehashes_entrypoint_before_each_write(
     tmp_path: Path,
 ) -> None:
@@ -861,6 +1599,7 @@ def test_configure_vercel_node_js_rehashes_entrypoint_before_each_write(
             project=PROJECT_ID,
             scope=SCOPE_ID,
             runner=runner,
+            metadata_reader=_empty_vercel_metadata,
             version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
             unprotector=_unprotector,
             platform_name="nt",
@@ -915,7 +1654,8 @@ def test_configure_vercel_failure_is_stable_and_never_contains_value(tmp_path: P
         _environment: object,
     ) -> int:
         seen_values.append(stdin_value)
-        return 9 if "CONTROL_SESSION_SECRET" in tuple(arguments) else 0
+        body = json.loads(stdin_value)
+        return 9 if body["key"] == "CONTROL_SESSION_SECRET" else 0
 
     with pytest.raises(
         IdentityProvisioningError,
@@ -932,6 +1672,7 @@ def test_configure_vercel_failure_is_stable_and_never_contains_value(tmp_path: P
             project=PROJECT_ID,
             scope=SCOPE_ID,
             runner=runner,
+            metadata_reader=_empty_vercel_metadata,
             version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
             unprotector=_unprotector,
             platform_name="nt",
@@ -943,8 +1684,50 @@ def test_configure_vercel_partial_write_never_publishes_digest_and_retry_complet
     tmp_path: Path,
 ) -> None:
     repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(tmp_path)
-    remote: dict[str, str] = {}
-    fail_session = True
+    names = (
+        "CONTROL_OPERATOR_TOKEN",
+        "CONTROL_SESSION_SECRET",
+        "CONTROL_CSRF_SECRET",
+        "CONTROL_SIGNING_PRIVATE_KEY_B64",
+        "CONTROL_SIGNING_KEY_ID",
+        "CONTROL_RUNNER_PUBLIC_KEY_B64",
+        "CONTROL_RUNNER_DEVICE_ID",
+        "CONTROL_IDENTITY_BUNDLE_DIGEST",
+    )
+    remote = {
+        name: {
+            "id": f"record_{index}",
+            "value": f"old:{name}",
+        }
+        for index, name in enumerate(names)
+    }
+    old_digest = "v2:" + ("0" * 64)
+    remote["CONTROL_IDENTITY_BUNDLE_DIGEST"]["value"] = old_digest
+    write_order: list[str] = []
+    fail_session_after_apply = True
+
+    def metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        return json.dumps(
+            {
+                "envs": [
+                    {
+                        "id": record["id"],
+                        "key": name,
+                        "type": "sensitive",
+                        "target": ["production"],
+                        "decrypted": False,
+                        "value": "",
+                    }
+                    for name, record in remote.items()
+                ],
+                "hiddenProductionEnvCount": 0,
+            }
+        )
 
     def runner(
         _executable: Path,
@@ -953,12 +1736,18 @@ def test_configure_vercel_partial_write_never_publishes_digest_and_retry_complet
         _cwd: Path,
         _environment: object,
     ) -> int:
-        nonlocal fail_session
-        name = tuple(arguments)[2]
-        if name == "CONTROL_SESSION_SECRET" and fail_session:
-            fail_session = False
+        nonlocal fail_session_after_apply
+        command = tuple(str(value) for value in arguments)
+        body = json.loads(stdin_value)
+        assert command[command.index("--method") + 1] == "PATCH"
+        assert "key" not in body
+        record_id = command[1].rsplit("/", 1)[-1]
+        name = next(name for name, record in remote.items() if record["id"] == record_id)
+        remote[name]["value"] = body["value"]
+        write_order.append(name)
+        if name == "CONTROL_SESSION_SECRET" and fail_session_after_apply:
+            fail_session_after_apply = False
             return 9
-        remote[str(name)] = stdin_value
         return 0
 
     arguments = {
@@ -972,6 +1761,7 @@ def test_configure_vercel_partial_write_never_publishes_digest_and_retry_complet
         "project": PROJECT_ID,
         "scope": SCOPE_ID,
         "runner": runner,
+        "metadata_reader": metadata_reader,
         "version_reader": lambda _executable, _cwd, _environment: CLI_VERSION,
         "unprotector": _unprotector,
         "platform_name": "nt",
@@ -981,11 +1771,155 @@ def test_configure_vercel_partial_write_never_publishes_digest_and_retry_complet
         match="VERCEL_ENV_CONFIGURATION_FAILED_CONTROL_SESSION_SECRET",
     ):
         configure_vercel_identity(**arguments)
-    assert "CONTROL_IDENTITY_BUNDLE_DIGEST" not in remote
+    assert write_order == ["CONTROL_OPERATOR_TOKEN", "CONTROL_SESSION_SECRET"]
+    assert remote["CONTROL_OPERATOR_TOKEN"]["value"] != "old:CONTROL_OPERATOR_TOKEN"
+    assert remote["CONTROL_SESSION_SECRET"]["value"] != "old:CONTROL_SESSION_SECRET"
+    assert remote["CONTROL_IDENTITY_BUNDLE_DIGEST"]["value"] == old_digest
 
+    write_order.clear()
     result = configure_vercel_identity(**arguments)
     assert result.configured_count == 8
-    assert tuple(remote)[-1] == "CONTROL_IDENTITY_BUNDLE_DIGEST"
+    assert write_order[-1] == "CONTROL_IDENTITY_BUNDLE_DIGEST"
+    assert remote["CONTROL_IDENTITY_BUNDLE_DIGEST"]["value"] != old_digest
+    assert str(remote["CONTROL_IDENTITY_BUNDLE_DIGEST"]["value"]).startswith("v2:")
+
+
+def test_configure_vercel_create_applied_before_error_retries_with_exact_patch(
+    tmp_path: Path,
+) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(
+        tmp_path,
+        vercel_environment="preview",
+    )
+    names = tuple(identity_module._IDENTITY_DERIVED_VERCEL_VARIABLES)
+    production_ids = {name: f"production_record_{index}" for index, name in enumerate(names)}
+    preview: dict[str, dict[str, str]] = {}
+    write_calls: list[tuple[str, str, str, dict[str, object]]] = []
+    fail_operator_after_apply = True
+
+    def metadata_reader(
+        _executable: Path,
+        _arguments: object,
+        _cwd: Path,
+        _environment: object,
+    ) -> str:
+        production_records = [
+            {
+                "id": identifier,
+                "key": name,
+                "type": "sensitive",
+                "target": ["production"],
+                "decrypted": False,
+                "value": "",
+            }
+            for name, identifier in production_ids.items()
+        ]
+        preview_records = [
+            {
+                "id": record["id"],
+                "key": name,
+                "type": "sensitive",
+                "target": ["preview"],
+                "decrypted": False,
+                "value": "",
+            }
+            for name, record in preview.items()
+        ]
+        return json.dumps(
+            {
+                "envs": production_records + preview_records,
+                "hiddenProductionEnvCount": 0,
+            }
+        )
+
+    def runner(
+        _executable: Path,
+        arguments: object,
+        stdin_value: str,
+        _cwd: Path,
+        _environment: object,
+    ) -> int:
+        nonlocal fail_operator_after_apply
+        command = tuple(str(value) for value in arguments)
+        method = command[command.index("--method") + 1]
+        body = json.loads(stdin_value)
+        endpoint = command[1]
+        if method == "POST":
+            name = str(body["key"])
+            assert name not in preview
+            record_id = (
+                "preview_created_operator"
+                if name == "CONTROL_OPERATOR_TOKEN"
+                else f"preview_created_{len(preview)}"
+            )
+            preview[name] = {"id": record_id, "value": str(body["value"])}
+        else:
+            assert method == "PATCH"
+            assert "key" not in body
+            record_id = endpoint.rsplit("/", 1)[-1]
+            name = next(name for name, record in preview.items() if record["id"] == record_id)
+            preview[name]["value"] = str(body["value"])
+        write_calls.append((method, name, endpoint, body))
+        if name == "CONTROL_OPERATOR_TOKEN" and fail_operator_after_apply:
+            fail_operator_after_apply = False
+            return 9
+        return 0
+
+    arguments = {
+        "root": root,
+        "repository_root": repository,
+        "vercel_cli": cli,
+        "vercel_cli_sha256": cli_digest,
+        "vercel_cli_version": CLI_VERSION,
+        "vercel_cwd": vercel_cwd,
+        "environment": "preview",
+        "project": PROJECT_ID,
+        "scope": SCOPE_ID,
+        "runner": runner,
+        "metadata_reader": metadata_reader,
+        "version_reader": lambda _executable, _cwd, _environment: CLI_VERSION,
+        "unprotector": _unprotector,
+        "platform_name": "nt",
+    }
+    with pytest.raises(
+        IdentityProvisioningError,
+        match="VERCEL_ENV_CONFIGURATION_FAILED_CONTROL_OPERATOR_TOKEN",
+    ):
+        configure_vercel_identity(**arguments)
+
+    assert write_calls[0][:3] == (
+        "POST",
+        "CONTROL_OPERATOR_TOKEN",
+        f"/v10/projects/{PROJECT_ID}/env",
+    )
+    assert preview["CONTROL_OPERATOR_TOKEN"]["id"] == "preview_created_operator"
+    assert "CONTROL_IDENTITY_BUNDLE_DIGEST" not in preview
+    assert production_ids == {
+        name: f"production_record_{index}" for index, name in enumerate(names)
+    }
+
+    write_calls.clear()
+    result = configure_vercel_identity(**arguments)
+
+    assert result.configured_count == 8
+    assert write_calls[0][:3] == (
+        "PATCH",
+        "CONTROL_OPERATOR_TOKEN",
+        f"/v9/projects/{PROJECT_ID}/env/preview_created_operator",
+    )
+    assert "key" not in write_calls[0][3]
+    assert (
+        sum(
+            method == "POST" and name == "CONTROL_OPERATOR_TOKEN"
+            for method, name, _endpoint, _body in write_calls
+        )
+        == 0
+    )
+    assert write_calls[-1][1] == "CONTROL_IDENTITY_BUNDLE_DIGEST"
+    assert set(preview) == set(names)
+    assert production_ids == {
+        name: f"production_record_{index}" for index, name in enumerate(names)
+    }
 
 
 def test_configure_vercel_rejects_target_link_digest_and_version_mismatch(
@@ -1123,6 +2057,7 @@ def test_configure_rejects_control_private_public_mismatch(tmp_path: Path) -> No
             project=PROJECT_ID,
             scope=SCOPE_ID,
             runner=lambda *_arguments: 0,
+            metadata_reader=_empty_vercel_metadata,
             version_reader=lambda _executable, _cwd, _environment: CLI_VERSION,
             unprotector=lambda _value: json.dumps(payload).encode("ascii"),
             platform_name="nt",

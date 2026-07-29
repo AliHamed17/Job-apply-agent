@@ -78,7 +78,8 @@ def test_control_plane_docs_keep_identity_secrets_off_argv_and_logs():
     assert "npm `.cmd` shim is intentionally rejected" in normalized_bootstrap
     assert "--vercel-node-sha256" in bootstrap
     assert "--vercel-js-entrypoint-sha256" in bootstrap
-    assert "[node.exe, absolute\\vercel\\dist\\vc.js, env, add, ...]" in bootstrap
+    assert "patches that exact record ID through `vercel api`" in normalized_bootstrap
+    assert "never uses the key-only `env add --force` upsert" in normalized_bootstrap
     assert "do not use `Get-Command vercel.exe`" in normalized_bootstrap
     assert "Join-Path $vercelNativePackageRoot 'bin\\vercel.exe'" in bootstrap
     assert "outside OneDrive or any other synced/reparse directory" in normalized_bootstrap
