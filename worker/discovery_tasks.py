@@ -25,6 +25,7 @@ def discover_jobs_task() -> int:
     from profile.loader import get_profile  # noqa: PLC0415
     from profile.readiness import profile_readiness_issues  # noqa: PLC0415
 
+    from core.operational_metrics import record_discovery_result  # noqa: PLC0415
     from db.models import DiscoveryRun  # noqa: PLC0415
     from db.session import get_session_factory  # noqa: PLC0415
     from discovery.ingest import ingest_discovered_jobs  # noqa: PLC0415
@@ -50,6 +51,7 @@ def discover_jobs_task() -> int:
         run.inserted = count
         run.reason_code = reason_code
         run.finished_at = datetime.now(UTC).replace(tzinfo=None)
+        record_discovery_result(db, run, occurred_at=run.finished_at)
         db.commit()
 
     try:

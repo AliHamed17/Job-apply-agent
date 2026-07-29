@@ -92,6 +92,22 @@ class _Transport:
     async def __aexit__(self, *_args: object) -> None:
         return None
 
+    async def get(self, url: str) -> _Response:
+        if url.endswith("/api/version"):
+            return _Response({"version": _OLLAMA_VERSION})
+        return _Response(
+            {
+                "models": [
+                    {
+                        "name": "qwen2.5:7b",
+                        "digest": _QUALIFIED_DIGEST,
+                        "size": 4_700_000_000,
+                        "details": {"format": "gguf"},
+                    }
+                ]
+            }
+        )
+
     async def post(self, _url: str, *, json: dict[str, Any]) -> _Response:
         self.posts.append(json)
         return _Response()
@@ -233,7 +249,6 @@ async def test_context_contract_fails_before_transport_instead_of_truncating() -
             temperature=0,
             response_format=_BoundedAnswer.model_json_schema(),
             deadline=_deadline(),
-            require_ready_model=False,
         )
 
     assert exc_info.value.reason_code is LLMReasonCode.CONFIGURATION_INVALID
@@ -253,7 +268,6 @@ async def test_ollama_transport_sends_explicit_context_window() -> None:
             temperature=0,
             response_format=None,
             deadline=_deadline(),
-            require_ready_model=False,
         )
 
     assert transport.posts[0]["options"]["num_ctx"] == 16_384

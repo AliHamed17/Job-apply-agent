@@ -30,9 +30,12 @@ except ImportError:  # pragma: no cover - exercised in dependency-light smokes
             "job_agent_retries_total",
             "job_agent_governor_denials_total",
             "job_agent_queue_depth",
+            "job_agent_queue_snapshot_available",
             "job_agent_challenge_trips_total",
             "job_agent_outbound_results_total",
             "job_agent_selector_failures_total",
+            "job_agent_operational_events_total",
+            "job_agent_operational_duration_seconds",
         )
         return "".join(
             f"# HELP {name} Metric unavailable in this minimal environment.\n"
@@ -63,6 +66,7 @@ from api.routes.health_inspector import router as health_inspector_router
 from api.routes.interview_prep import router as interview_prep_router
 from api.routes.interview_simulate import router as interview_simulate_router
 from api.routes.jobs import router as jobs_router
+from api.routes.operations import router as operations_router
 from api.routes.outreach import router as outreach_router
 from api.routes.profile import router as profile_router
 from api.routes.realign import router as realign_router
@@ -77,7 +81,12 @@ from api.routes.whatsapp_ingest import router as whatsapp_ingest_router
 from api.routes.widgets import router as widgets_router
 from core.config import get_settings
 from core.logging import new_correlation_id, setup_logging
-from core.metrics import HTTP_LATENCY, HTTP_REQUESTS
+from core.metrics import (
+    HTTP_LATENCY,
+    HTTP_REQUESTS,
+    normalize_http_method,
+    refresh_authoritative_metrics,
+)
 from core.operations import rate_limit_allowed, readiness_report
 from core.runtime_identity import (
     compute_source_digest,
@@ -263,7 +272,11 @@ async def metrics_middleware(request: Request, call_next):
     route = request.scope.get("route")
     route_label = getattr(route, "path", "unmatched")
     status_class = f"{response.status_code // 100}xx"
-    HTTP_REQUESTS.labels(route_label, request.method, status_class).inc()
+    HTTP_REQUESTS.labels(
+        route_label,
+        normalize_http_method(request.method),
+        status_class,
+    ).inc()
     HTTP_LATENCY.labels(route_label).observe(time.perf_counter() - started)
     return response
 
@@ -275,6 +288,7 @@ app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
 app.include_router(ats_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
+app.include_router(operations_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
 app.include_router(profile_router)
 app.include_router(control_router)
@@ -353,4 +367,10 @@ async def serve_dashboard(request: Request):
 @app.get("/metrics")
 async def metrics():
     """Prometheus exposition with bounded labels and no personal data."""
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    def _snapshot() -> bytes:
+        refresh_authoritative_metrics()
+        return generate_latest()
+
+    payload = await run_in_threadpool(_snapshot)
+    return Response(payload, media_type=CONTENT_TYPE_LATEST)

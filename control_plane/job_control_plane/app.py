@@ -323,14 +323,22 @@ def create_app(
     @app.get("/api/review-grants", include_in_schema=False)
     def list_grants(db: db_dep, _operator: operator_dep) -> dict[str, list[dict[str, object]]]:
         now = utc_now()
+        configured_device = db.get(RunnerDevice, str(runtime.runner_device_id))
         rows = db.scalars(
             select(ReviewGrant)
             .where(ReviewGrant.expires_at > now)
             .order_by(ReviewGrant.created_at.desc())
             .limit(100)
         ).all()
-        return {
-            "grants": [
+        grants: list[dict[str, object]] = []
+        for row in rows:
+            eligibility_state = _review_grant_state(
+                row,
+                configured_device=configured_device,
+                settings=runtime,
+                now=now,
+            )
+            grants.append(
                 {
                     "grant_id": row.id,
                     "application_ref": row.application_ref,
@@ -340,11 +348,11 @@ def create_app(
                     "form_fingerprint_digest": row.form_fingerprint_digest,
                     "expires_at": row.expires_at,
                     "revoked_at": row.revoked_at,
-                    "eligible": row.consumed_at is None and row.revoked_at is None,
+                    "eligibility_state": eligibility_state,
+                    "eligible": eligibility_state == "eligible",
                 }
-                for row in rows
-            ]
-        }
+            )
+        return {"grants": grants}
 
     @app.get("/api/commands", include_in_schema=False)
     def list_commands(db: db_dep, _operator: operator_dep) -> dict[str, list[dict[str, object]]]:
@@ -524,7 +532,23 @@ def create_app(
         commands = db.scalars(
             select(SubmissionCommand).order_by(SubmissionCommand.created_at.desc()).limit(50)
         ).all()
-        return HTMLResponse(_dashboard_html(grants=grants, commands=commands, now=now))
+        configured_device = db.get(RunnerDevice, str(runtime.runner_device_id))
+        grant_states = {
+            row.id: _review_grant_state(
+                row,
+                configured_device=configured_device,
+                settings=runtime,
+                now=now,
+            )
+            for row in grants
+        }
+        return HTMLResponse(
+            _dashboard_html(
+                grants=grants,
+                commands=commands,
+                grant_states=grant_states,
+            )
+        )
 
     return app
 
@@ -580,22 +604,50 @@ def _command_view(row: SubmissionCommand) -> dict[str, object]:
     }
 
 
+def _review_grant_state(
+    grant: ReviewGrant,
+    *,
+    configured_device: RunnerDevice | None,
+    settings: Settings,
+    now: datetime,
+) -> str:
+    """Return the display/send state without mutating restored grant history."""
+
+    if grant.revoked_at is not None:
+        return "revoked"
+    if grant.consumed_at is not None:
+        return "used"
+    if as_utc(grant.expires_at) <= now:
+        return "expired"
+    if not settings.dispatch_allowed:
+        return "dispatch_disabled"
+    if (
+        configured_device is None
+        or configured_device.id != str(settings.runner_device_id)
+        or grant.device_id != configured_device.id
+        or not configured_device.active
+    ):
+        return "runner_disabled"
+    if (
+        configured_device.status != "ready"
+        or not configured_device.boot_id
+        or configured_device.last_seen_at is None
+        or now - as_utc(configured_device.last_seen_at)
+        > timedelta(seconds=settings.runner_offline_seconds)
+    ):
+        return "runner_offline"
+    return "eligible"
+
+
 def _dashboard_html(
     *,
     grants: list[ReviewGrant],
     commands: list[SubmissionCommand],
-    now: datetime,
+    grant_states: dict[str, str],
 ) -> str:
     grant_rows_parts: list[str] = []
     for row in grants:
-        if row.revoked_at is not None:
-            state = "revoked"
-        elif row.consumed_at is not None:
-            state = "used"
-        elif as_utc(row.expires_at) <= now:
-            state = "expired"
-        else:
-            state = "eligible"
+        state = grant_states[row.id]
         grant_rows_parts.append(
             "<tr>"
             f"<td><code>{html.escape(row.id)}</code></td>"

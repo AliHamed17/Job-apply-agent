@@ -1,5 +1,15 @@
 # Full-Auto Job Apply Agent v2 — Design Spec
 
+> **Historical and superseded.** This document records an earlier proposal,
+> not the current operating contract or verified capability. The current system
+> keeps private content and Ollama on the local runner, requires an explicit
+> **Send application** action, and has no unattended final submission. The
+> first-five ATS implementations have 87 sanitized fixtures but zero real-URL
+> dry runs, zero live canaries, zero qualified form scopes, and zero final
+> executors. Do not use the zero-touch, WhatsApp-outbound, or live-submission
+> statements below as implementation or readiness evidence. See
+> [`docs/qualification/README.md`](../../qualification/README.md).
+
 **Date:** 2026-07-20
 **Status:** Approved by user (design review 2026-07-20)
 **Base:** Job-apply-agent (FastAPI + Celery + SQLite pipeline, 76 passing tests)

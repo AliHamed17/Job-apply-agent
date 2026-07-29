@@ -20,6 +20,7 @@ from core.application_revision import (
     mark_application_prepared,
     preparation_is_current,
 )
+from core.operational_metrics import record_attempt_outcome
 from db.models import (
     Application,
     FinalSubmitPermit,
@@ -344,6 +345,12 @@ def transition_locked_application_to_skipped(
         attempt.reason_code = reason_code[:64]
         attempt.finished_at = timestamp
         attempt.submitted_at = None
+        record_attempt_outcome(
+            db,
+            attempt,
+            occurred_at=timestamp,
+            event_kind="operator_cancellation",
+        )
         cancelled_attempt = True
         if locked.active_command is not None:
             locked.active_command.state = "cancelled"

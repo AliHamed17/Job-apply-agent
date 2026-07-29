@@ -1,5 +1,16 @@
 # Full-Auto Job Apply Agent v2 — Implementation Plan
 
+> **Historical and superseded.** This plan is retained for provenance only.
+> It is not a current runbook, acceptance result, or authorization to send an
+> application. The current architecture keeps private content and Ollama on the
+> local runner, requires an explicit **Send application** action, and has no
+> unattended final submission. The first-five ATS implementations have 87
+> sanitized fixtures but zero real-URL dry runs, zero live canaries, zero
+> qualified form scopes, and zero final executors. Do not execute the old
+> zero-touch, WhatsApp-outbound, or live-submission steps without a new reviewed
+> specification. See
+> [`docs/qualification/README.md`](../../qualification/README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the human-in-the-loop Job-apply-agent into a zero-touch full-auto applier that discovers LinkedIn jobs from an uploaded CV, applies via a rate-governed smart Easy Apply flow, ingests WhatsApp job links + text posts, and auto-sends the CV to WhatsApp/email recruiter contacts.

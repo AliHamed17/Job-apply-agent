@@ -460,7 +460,6 @@ class OllamaClient(LLMClient):
             temperature=temperature,
             response_format="json" if json_mode else None,
             deadline=deadline,
-            require_ready_model=False,
         )
 
     async def _generate_schema_payload(
@@ -497,7 +496,6 @@ class OllamaClient(LLMClient):
             temperature=temperature,
             response_format=transport_schema,
             deadline=deadline,
-            require_ready_model=True,
         )
         if len(content) > self.settings.llm_max_prompt_chars:
             raise ValueError("provider output exceeds the configured bound")

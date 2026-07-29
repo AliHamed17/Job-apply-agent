@@ -1,4 +1,4 @@
-version: "3.9"
+name: job-apply-agent
 
 # ── Networks ───────────────────────────────────────────────────────────────
 networks:
@@ -25,6 +25,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-job_agent}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
     networks:
       - agent-net
     healthcheck:
@@ -40,6 +42,8 @@ services:
     command: redis-server --save 60 1 --loglevel warning
     volumes:
       - redis-data:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-56379}:6379"
     networks:
       - agent-net
     healthcheck:
@@ -54,8 +58,13 @@ services:
       context: .
       target: web-api
     restart: unless-stopped
-    env_file: .env
+    env_file: ${JOB_AGENT_ENV_FILE:-.env}
     environment:
+      # The host path selects this env_file for Compose interpolation. It is
+      # not a valid path inside Linux containers; all values are already
+      # injected, so clear only the selector before Python loads settings.
+      JOB_AGENT_ENV_FILE: ""
+      APP_BUILD_SHA: ${APP_BUILD_SHA:-unknown}
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
       # Relocate the profile YAML into the shared ./profile-data volume below
@@ -64,6 +73,11 @@ services:
       # celery-worker too, not just this container's own filesystem layer.
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
       APPLICATION_DATA_DIR: /app/profile-data
+      CV_ROUTING_PATH: /app/profile-data/cv_routing.yaml
+      CV_DIRECTORY: /app/profile-data/cvs
+      EMPLOYER_WORKFLOW_PATH: /app/profile-data/employer_workflows.yaml
+      LINKEDIN_BROWSER_PROFILE_DIR: /app/browser-state/linkedin
+      PORTAL_BROWSER_PROFILE_ROOT: /app/browser-state/portals
       # Ollama remains on the private host. The runtime accepts only loopback
       # and this explicit Docker host gateway, and cloud model tags are rejected.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL_DOCKER:-http://host.docker.internal:11434}
@@ -96,7 +110,8 @@ services:
       # user_profile.yaml here on every CV upload and saves resume.pdf
       # alongside it. Read-only here would make uploads fail instead of
       # updating the profile and rescoring jobs.
-      - ./profile-data:/app/profile-data
+      - ${JOB_AGENT_PROFILE_DATA_DIR:-./profile-data}:/app/profile-data
+      - ${JOB_AGENT_BROWSER_STATE_DIR:-./.browser-state}:/app/browser-state
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
       interval: 15s
@@ -109,12 +124,19 @@ services:
       context: .
       target: celery-worker
     restart: unless-stopped
-    env_file: .env
+    env_file: ${JOB_AGENT_ENV_FILE:-.env}
     environment:
+      JOB_AGENT_ENV_FILE: ""
+      APP_BUILD_SHA: ${APP_BUILD_SHA:-unknown}
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
       APPLICATION_DATA_DIR: /app/profile-data
+      CV_ROUTING_PATH: /app/profile-data/cv_routing.yaml
+      CV_DIRECTORY: /app/profile-data/cvs
+      EMPLOYER_WORKFLOW_PATH: /app/profile-data/employer_workflows.yaml
+      LINKEDIN_BROWSER_PROFILE_DIR: /app/browser-state/linkedin
+      PORTAL_BROWSER_PROFILE_ROOT: /app/browser-state/portals
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL_DOCKER:-http://host.docker.internal:11434}
       OLLAMA_NO_CLOUD: "true"
       OLLAMA_EXPECTED_MODEL_DIGEST: ${OLLAMA_EXPECTED_MODEL_DIGEST:-sha256:845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e}
@@ -132,14 +154,14 @@ services:
     volumes:
       # Read-only: this container never writes the profile/resume, only
       # web-api's upload endpoint does.
-      - ./profile-data:/app/profile-data:ro
+      - ${JOB_AGENT_PROFILE_DATA_DIR:-./profile-data}:/app/profile-data:ro
       # Read-write: the one-time `python -m discovery.login` session (run on
       # the host, saved under LINKEDIN_BROWSER_PROFILE_DIR) must be visible
       # here, since this is the container that actually launches Chromium
       # for LinkedIn discovery/Easy Apply and needs to keep writing to it
       # (cookie refresh etc.) — without this mount every run opens a fresh,
       # logged-out browser.
-      - ./.linkedin_profile:/app/.linkedin_profile
+      - ${JOB_AGENT_BROWSER_STATE_DIR:-./.browser-state}:/app/browser-state
     # Scale workers: docker-compose up --scale celery-worker=3
     deploy:
       replicas: 1
@@ -154,12 +176,19 @@ services:
       context: .
       target: celery-worker
     restart: unless-stopped
-    env_file: .env
+    env_file: ${JOB_AGENT_ENV_FILE:-.env}
     environment:
+      JOB_AGENT_ENV_FILE: ""
+      APP_BUILD_SHA: ${APP_BUILD_SHA:-unknown}
       DATABASE_URL: postgresql://${POSTGRES_USER:-jobagent}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-job_agent}
       REDIS_URL: redis://redis:6379/0
       USER_PROFILE_PATH: /app/profile-data/user_profile.yaml
       APPLICATION_DATA_DIR: /app/profile-data
+      CV_ROUTING_PATH: /app/profile-data/cv_routing.yaml
+      CV_DIRECTORY: /app/profile-data/cvs
+      EMPLOYER_WORKFLOW_PATH: /app/profile-data/employer_workflows.yaml
+      LINKEDIN_BROWSER_PROFILE_DIR: /app/browser-state/linkedin
+      PORTAL_BROWSER_PROFILE_ROOT: /app/browser-state/portals
     command: ["celery", "-A", "worker.celery_app", "beat", "--loglevel=info"]
     depends_on:
       - redis
@@ -169,8 +198,8 @@ services:
       # Read-only: beat only schedules tasks, it never runs them itself, so
       # it never writes the profile or drives a browser — but it's mounted
       # here too for parity with celery-worker.
-      - ./profile-data:/app/profile-data:ro
-      - ./.linkedin_profile:/app/.linkedin_profile:ro
+      - ${JOB_AGENT_PROFILE_DATA_DIR:-./profile-data}:/app/profile-data:ro
+      - ${JOB_AGENT_BROWSER_STATE_DIR:-./.browser-state}:/app/browser-state:ro
 
   # ── Nginx Reverse Proxy ───────────────────────────────
   nginx:
@@ -181,7 +210,7 @@ services:
       - "127.0.0.1:${HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro         # mount your TLS certs here
+      - ${JOB_AGENT_TLS_DIR:-./nginx/ssl}:/etc/nginx/ssl:ro
     depends_on:
       - web-api
     networks:

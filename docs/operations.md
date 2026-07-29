@@ -1,69 +1,103 @@
 # Production operations
 
-This deployment is private and single-user. PostgreSQL, Redis, Prometheus, and
-Grafana remain on the private Compose network or loopback by default. Only nginx
-is intended to accept external traffic.
+This is a private, single-user deployment. PostgreSQL, Redis, Prometheus,
+Grafana, private profile storage, Chromium, CVs, and Ollama stay on the private
+host or private network. Vercel may host only the authenticated redacted
+control plane.
+
+## Current qualification truth
+
+The first-five ATS adapters are fixture-qualified only. The aggregate contains
+87 sanitized fixtures and no real-URL dry run, live canary, qualified form
+scope, or final executor. Production infrastructure does not elevate that
+qualification.
+
+Discovery and preparation may run automatically. Final **Send application**
+remains an explicit operator action and is unavailable while the adapter/form
+scope is not live-canary-qualified.
 
 ## Production safety
 
-Set `APP_ENV=production`. Startup refuses to continue unless:
+Set `APP_ENV=production`. Startup refuses unsafe secrets, unsigned webhook
+configuration, wildcard CORS, unacknowledged non-dry-run settings, non-local
+Ollama, an unqualified local model identity, or a mismatched runtime release.
 
-- `SECRET_KEY` is non-default and at least 32 characters;
-- `WHATSAPP_APP_SECRET` is configured for signed webhooks;
-- CORS contains explicit origins rather than `*`; and
-- any non-dry-run mode has `LIVE_AUTOMATION_ACKNOWLEDGED=true`.
+Keep these defaults until a separate qualification record authorizes an exact
+scope:
 
-Keep `DRAFT_ONLY=true`, `AUTO_APPLY=false`, and `DRY_RUN=true` unless the
-operator has deliberately reviewed and acknowledged the live-mode risk.
+```dotenv
+DRY_RUN=true
+DRAFT_ONLY=true
+PORTAL_FINAL_SUBMIT_ENABLED=false
+AUTO_APPLY=false
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen2.5:7b
+OLLAMA_NO_CLOUD=true
+```
 
-## Health and monitoring
+`AUTO_APPLY` means preparation eligibility only. It never approves or sends an
+employment application.
 
-- `/health/live` only proves that the API process responds.
-- `/health/ready` checks PostgreSQL, the current Alembic revision, Redis,
-  shared profile storage, worker and Beat heartbeats, and Chromium.
-- `/health` remains a liveness compatibility alias.
-- `/metrics` is Prometheus text and is blocked by the public nginx route.
+## Private Windows API health and monitoring
 
-Dashboard operational status is degraded if any readiness dependency is
-missing or stale. Heartbeats are considered stale after
-`DEPENDENCY_HEARTBEAT_TTL_SECONDS`.
+- `/health/live` is unauthenticated and proves only that the API process
+  responds.
+- `/health/ready` is unauthenticated and checks PostgreSQL, current Alembic
+  revision, Redis, shared profile storage, worker and Beat heartbeats,
+  Chromium, and required runtime identity.
+- `/health` remains an unauthenticated liveness compatibility alias.
+- `/metrics` is unauthenticated bounded Prometheus text.
 
-## Backup
+Operational counter updates are written with the same database transaction as
+the domain outcome. PostgreSQL retains bounded labeled detail for at most 90
+days and 100,000 rows, permanent content-free replay receipts containing only
+a SHA-256 event key and timestamp, and aggregate rollups. Prometheus labels are
+normalized to fixed vocabularies before storage and collection.
 
-Stop application workers before a consistent backup.
+These probe endpoints must stay on loopback or an internal network and must not
+be exposed through an internet-facing proxy. Detailed application and
+operational routes require bearer authentication outside the explicit
+development-only, prepare-only placeholder-auth bypass.
 
-1. PostgreSQL: run `pg_dump --format=custom --file=job-agent.dump job_agent`
-   from an authenticated PostgreSQL environment.
-2. Copy `user_profile.yaml`, `cv_routing.yaml`, `cvs/`, and `profile-data/`
-   version metadata into an encrypted backup.
-3. Copy `.linkedin_profile/` only into encrypted storage. It contains an active
-   browser session and must be treated as a secret.
-4. Copy `.portal_profiles/` only into encrypted storage. Each tenant directory
-   contains an active employer session.
-5. Record the Git revision and Alembic revision alongside the backup.
+The isolated Vercel control plane is a separate boundary: only its
+`/health/live` route is unauthenticated. Its readiness, dashboard, grant,
+command, and runner-management routes require the protected control-plane
+session or a valid signed runner envelope.
 
-Never commit these artifacts. Encrypt backups at rest, restrict them to the
-operator, and test restoration quarterly.
+A degraded dependency, stale heartbeat, release mismatch, expired session,
+expired form plan, or disabled adapter keeps **Send application** unavailable.
+Queue acceptance and preparation are neutral states. Only exact employer
+evidence can be green.
 
-## Restore
+## Private inference
 
-1. Deploy the recorded Git revision and create an empty PostgreSQL database.
-2. Restore with `pg_restore --clean --if-exists --dbname=job_agent job-agent.dump`.
-3. Restore `user_profile.yaml`, `cv_routing.yaml`, `cvs/`, `profile-data/`,
-   `.linkedin_profile/`, and `.portal_profiles/` only when needed, with their
-   original access restrictions.
-4. Run `alembic upgrade head`.
-5. Start Redis, API, worker, and Beat; require `/health/ready` to become ready
-   before enabling scheduled work.
+Production uses local `qwen2.5:7b` through a loopback Ollama endpoint, with
+bounded timeouts, one inference lease, schema validation, and no cloud fallback.
+An Ollama outage blocks reversible preparation and never triggers submission.
+No LLM runs during the final external-action stage.
 
-## Retention and deletion
+## Backup, restore, and recovery
 
-- Keep operational metrics for 15 days; metrics must not contain personal data.
-- Keep application and submission audit records while needed for duplicate
-  prevention and user review.
-- Review rejected or abandoned applications every 90 days.
-- When deleting personal data, stop workers, delete the selected database
-  records and associated profile/CV versions, remove browser state if the
-  account is disconnected, and expire every corresponding encrypted backup
-  under the backup provider's retention policy.
-- Preserve only non-personal aggregate counts after deletion.
+- [Control-plane bootstrap](control-plane-bootstrap.md)
+- [Backup and restore](control-plane-backup-restore.md)
+- [Recovery runbooks](recovery-runbooks.md)
+- [Private-data retention and deletion](private-data-retention.md)
+
+A restore is not ready when PostgreSQL starts. Before any worker reconnects,
+run private and cloud quarantine, require an idempotent zero-change second
+pass, rotate every device/signing/session identity, and re-review private
+applications.
+
+## Qualification operations
+
+The evidence source and deterministic first-five matrix live under
+[`docs/qualification`](qualification/README.md). Validate the aggregate without
+changing files:
+
+```powershell
+python scripts/build_adapter_qualification_matrix.py --check
+```
+
+Any selector, protocol, form, attachment, request, or evidence drift resets the
+affected scope to dry-run qualification. CAPTCHA, MFA, session expiry, unknown
+required facts, and unverified attachments stop for manual review.

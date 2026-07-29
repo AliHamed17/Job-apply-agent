@@ -4,6 +4,7 @@ import asyncio
 import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from profile.models import UserProfile
 from typing import Any, Literal
 from unittest.mock import patch
 
@@ -13,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from core.config import Settings
 from core.operations import llm_readiness
+from ingestion.text_post_parser import parse_text_post
+from jobs.models import JobData
 from llm.client import LLMClient, OllamaClient
 from llm.contracts import (
     DataClassification,
@@ -25,6 +28,7 @@ from llm.execution_guard import (
     assert_llm_generation_allowed,
     prohibit_llm_generation,
 )
+from llm.generation import generate_cover_letter
 from llm.ollama_runtime import (
     _CIRCUIT_FAILURE_SCRIPT,
     _CIRCUIT_SUCCESS_SCRIPT,
@@ -328,6 +332,237 @@ async def test_normal_readiness_accepts_exact_digest_with_current_passing_report
 
 
 @pytest.mark.asyncio
+async def test_evaluator_only_runtime_preflights_exact_identity_with_stale_report(
+    monkeypatch,
+) -> None:
+    import scripts.evaluate_v4_local_model_qualification as evaluator
+
+    transport = _HTTP()
+    monkeypatch.setattr("llm.client.get_settings", lambda: _settings())
+
+    async def preflight_only(*_args: object, **_kwargs: object):
+        client = evaluator._InstrumentedOllamaClient()
+        return await client.runtime.readiness()
+
+    monkeypatch.setattr(evaluator, "_evaluate_local_model_bootstrap", preflight_only)
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+    ):
+        readiness = await evaluator.evaluate_local_model()
+
+    assert readiness.ok is True
+    assert readiness.model_identity.digest == f"sha256:{_DIGEST}"
+    assert readiness.ollama_server_version == _OLLAMA_VERSION
+
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+    ):
+        ordinary_readiness = await OllamaRuntime(_settings()).readiness()
+
+    assert ordinary_readiness.ok is False
+    assert ordinary_readiness.reason_code is LLMReasonCode.MODEL_NOT_READY
+
+
+@pytest.mark.asyncio
+async def test_evaluator_runtime_authority_does_not_leak_to_child_or_thread(
+    monkeypatch,
+) -> None:
+    import scripts.evaluate_v4_local_model_qualification as evaluator
+
+    transport = _HTTP()
+    monkeypatch.setattr("llm.client.get_settings", lambda: _settings())
+
+    async def preflight_with_untrusted_children(*_args: object, **_kwargs: object):
+        async def child_probe():
+            return await OllamaRuntime(_settings()).readiness()
+
+        client = evaluator._InstrumentedOllamaClient()
+        evaluator_readiness, child_readiness = await asyncio.gather(
+            client.runtime.readiness(),
+            asyncio.create_task(child_probe()),
+        )
+        thread_readiness = await asyncio.to_thread(
+            lambda: OllamaRuntime(_settings()).readiness_sync()
+        )
+        return evaluator_readiness, child_readiness, thread_readiness
+
+    monkeypatch.setattr(
+        evaluator,
+        "_evaluate_local_model_bootstrap",
+        preflight_with_untrusted_children,
+    )
+
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch("llm.ollama_runtime.httpx.Client", transport.sync_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+    ):
+        (
+            evaluator_readiness,
+            child_readiness,
+            thread_readiness,
+        ) = await evaluator.evaluate_local_model()
+
+    assert evaluator_readiness.ok is True
+    assert child_readiness.ok is False
+    assert child_readiness.reason_code is LLMReasonCode.MODEL_NOT_READY
+    assert thread_readiness.ok is False
+    assert thread_readiness.reason_code is LLMReasonCode.MODEL_NOT_READY
+
+
+@pytest.mark.parametrize(
+    ("tags", "server_version", "reason_code"),
+    [
+        (
+            _local_tags(digest=f"sha256:{'f' * 64}"),
+            _OLLAMA_VERSION,
+            LLMReasonCode.MODEL_NOT_READY,
+        ),
+        (_local_tags(), "0.31.2", LLMReasonCode.MODEL_NOT_READY),
+        (_local_tags(), "latest", LLMReasonCode.PROVIDER_UNAVAILABLE),
+    ],
+)
+@pytest.mark.asyncio
+async def test_evaluator_runtime_rejects_inexact_or_malformed_identity(
+    tags: object,
+    server_version: object,
+    reason_code: LLMReasonCode,
+) -> None:
+    import scripts.evaluate_v4_local_model_qualification as evaluator
+
+    transport = _HTTP(tags=tags, server_version=server_version)
+    runtime = evaluator._QualificationOllamaRuntime(_settings())
+
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+    ):
+        readiness = await runtime.readiness()
+
+    assert readiness.ok is False
+    assert readiness.reason_code is reason_code
+
+
+def test_production_runtime_exposes_no_qualification_bypass_factory() -> None:
+    assert not hasattr(OllamaRuntime, "for_local_model_qualification")
+
+
+@pytest.mark.asyncio
+async def test_production_generation_with_stale_report_never_posts_chat() -> None:
+    transport = _HTTP(outputs=['{"answer":"supported","confidence":0.9}'])
+    client = _ollama_client(_settings())
+
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+        pytest.raises(TypedGenerationError) as exc_info,
+    ):
+        await client.generate_typed(
+            response_model=_Answer,
+            prompt="Resolve the non-sensitive fixture.",
+            purpose=GenerationPurpose.FORM_RESOLUTION,
+            prompt_version="form-v1",
+            deadline=_deadline(),
+            data_classification=DataClassification.PRIVATE_APPLICATION,
+        )
+
+    assert exc_info.value.reason_code is LLMReasonCode.MODEL_NOT_READY
+    assert transport.posts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["generate", "generate_json"])
+async def test_raw_ollama_generation_with_stale_report_never_posts_chat(
+    method_name: str,
+) -> None:
+    transport = _HTTP(outputs=['{"answer":"must-not-be-used"}'])
+    port = 11440 if method_name == "generate" else 11441
+    client = _ollama_client(_settings(ollama_base_url=f"http://127.0.0.1:{port}"))
+
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+        pytest.raises(TypedGenerationError) as exc_info,
+    ):
+        await getattr(client, method_name)("Private application input")
+
+    assert exc_info.value.reason_code is LLMReasonCode.MODEL_NOT_READY
+    assert transport.posts == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_material_helper_with_stale_report_never_posts_chat() -> None:
+    transport = _HTTP(outputs=["must-not-be-used"])
+    client = _ollama_client(_settings(ollama_base_url="http://127.0.0.1:11442"))
+    job = JobData(
+        title="Software Engineer",
+        company="Synthetic employer",
+        description="Build Python services.",
+    )
+    profile = UserProfile.model_validate(
+        {
+            "personal": {"name": "Synthetic Candidate", "location": "Test City"},
+            "resume": {"text": "Built Python services."},
+        }
+    )
+
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+        patch("llm.generation._load_few_shot_examples", return_value=[]),
+        pytest.raises(TypedGenerationError) as exc_info,
+    ):
+        await generate_cover_letter(job, profile, client=client)
+
+    assert exc_info.value.reason_code is LLMReasonCode.MODEL_NOT_READY
+    assert transport.posts == []
+
+
+@pytest.mark.asyncio
+async def test_ingestion_parser_with_stale_report_never_posts_chat() -> None:
+    transport = _HTTP(outputs=['{"is_job":true}'])
+    client = _ollama_client(_settings(ollama_base_url="http://127.0.0.1:11443"))
+
+    with (
+        patch("llm.ollama_runtime.httpx.AsyncClient", transport.async_client),
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=False,
+        ),
+    ):
+        parsed = await parse_text_post(
+            "We are hiring a software engineer. Send CV.",
+            client=client,
+        )
+
+    assert parsed.is_job is False
+    assert transport.posts == []
+
+
+@pytest.mark.asyncio
 async def test_readiness_binds_live_server_version_and_inference_config() -> None:
     transport = _HTTP()
     runtime = OllamaRuntime(
@@ -600,7 +835,6 @@ async def test_repeated_readiness_outage_opens_circuit_before_chat_transport() -
                 temperature=0,
                 response_format=None,
                 deadline=_deadline(),
-                require_ready_model=True,
             )
         with pytest.raises(TypedGenerationError) as second:
             await runtime.chat(
@@ -610,7 +844,6 @@ async def test_repeated_readiness_outage_opens_circuit_before_chat_transport() -
                 temperature=0,
                 response_format=None,
                 deadline=_deadline(),
-                require_ready_model=True,
             )
 
     assert first.value.reason_code is LLMReasonCode.PROVIDER_UNAVAILABLE
@@ -864,7 +1097,6 @@ async def test_distributed_circuit_outage_prevents_ollama_request() -> None:
             temperature=0,
             response_format=None,
             deadline=_deadline(),
-            require_ready_model=False,
         )
 
     assert exc_info.value.reason_code is LLMReasonCode.PROVIDER_UNAVAILABLE
@@ -908,6 +1140,11 @@ async def test_waiting_caller_rechecks_circuit_after_lease_acquisition() -> None
             return None
 
     class _FailingHTTP:
+        async def get(self, url: str) -> _Response:
+            if url.endswith("/api/version"):
+                return _Response({"version": _OLLAMA_VERSION})
+            return _Response(_local_tags())
+
         async def post(self, _url: str, *, json: dict[str, Any]) -> _Response:
             del json
             nonlocal request_count
@@ -931,7 +1168,6 @@ async def test_waiting_caller_rechecks_circuit_after_lease_acquisition() -> None
                 temperature=0,
                 response_format=None,
                 deadline=_deadline(3),
-                require_ready_model=False,
             )
         return exc_info.value.reason_code
 
@@ -1034,7 +1270,6 @@ async def test_distributed_success_state_outage_discards_model_response() -> Non
             temperature=0,
             response_format=None,
             deadline=_deadline(),
-            require_ready_model=False,
         )
 
     assert exc_info.value.reason_code is LLMReasonCode.PROVIDER_UNAVAILABLE
@@ -1175,7 +1410,7 @@ def test_runtime_rejects_constructed_lease_ttl_shorter_than_generation_horizon()
 async def test_request_timeout_caps_slow_drip_below_longer_caller_horizon() -> None:
     runtime = _runtime(
         _settings(
-            llm_model="qwen2.5:request-timeout",
+            ollama_base_url="http://127.0.0.1:11444",
             ollama_request_timeout_seconds=1,
             llm_generation_max_horizon_seconds=5,
             ollama_lease_ttl_seconds=10,
@@ -1195,6 +1430,10 @@ async def test_request_timeout_caps_slow_drip_below_longer_caller_horizon() -> N
                 yield chunk
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/version":
+            return httpx.Response(200, request=request, json={"version": _OLLAMA_VERSION})
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, request=request, json=_local_tags())
         return httpx.Response(200, request=request, stream=_SlowDripBody())
 
     transport = httpx.MockTransport(handler)
@@ -1214,7 +1453,6 @@ async def test_request_timeout_caps_slow_drip_below_longer_caller_horizon() -> N
             temperature=0,
             response_format=None,
             deadline=_deadline(5),
-            require_ready_model=False,
         )
     elapsed = asyncio.get_running_loop().time() - started
 
@@ -1248,7 +1486,7 @@ async def test_readiness_currentness_check_cannot_overrun_deadline() -> None:
 async def test_absolute_deadline_stops_slow_drip_response_and_releases_resources() -> None:
     runtime = _runtime(
         _settings(
-            llm_model="qwen2.5:slow-drip-deadline",
+            ollama_base_url="http://127.0.0.1:11445",
             ollama_circuit_failure_threshold=3,
         )
     )
@@ -1276,6 +1514,10 @@ async def test_absolute_deadline_stops_slow_drip_response_and_releases_resources
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal request_count
+        if request.url.path == "/api/version":
+            return httpx.Response(200, request=request, json={"version": _OLLAMA_VERSION})
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, request=request, json=_local_tags())
         request_count += 1
         return httpx.Response(200, request=request, stream=body)
 
@@ -1299,7 +1541,6 @@ async def test_absolute_deadline_stops_slow_drip_response_and_releases_resources
             temperature=0,
             response_format=None,
             deadline=_deadline(0.05),
-            require_ready_model=False,
         )
     elapsed = asyncio.get_running_loop().time() - started
 
@@ -1317,13 +1558,18 @@ async def test_absolute_deadline_stops_slow_drip_response_and_releases_resources
 @pytest.mark.asyncio
 async def test_circuit_breaker_is_bounded_and_fails_before_second_request() -> None:
     settings = _settings(
-        llm_model="qwen2.5:circuit-test",
+        ollama_base_url="http://127.0.0.1:11446",
         ollama_circuit_failure_threshold=1,
     )
     runtime = _runtime(settings)
     request_count = 0
 
     class _FailingHTTP(_AsyncContext):
+        async def get(self, url: str) -> _Response:
+            if url.endswith("/api/version"):
+                return _Response({"version": _OLLAMA_VERSION})
+            return _Response(_local_tags())
+
         async def post(self, _url: str, *, json: dict[str, Any]) -> _Response:
             del json
             nonlocal request_count
@@ -1349,7 +1595,6 @@ async def test_circuit_breaker_is_bounded_and_fails_before_second_request() -> N
                 temperature=0,
                 response_format=None,
                 deadline=_deadline(),
-                require_ready_model=False,
             )
         with pytest.raises(TypedGenerationError) as second:
             await runtime.chat(
@@ -1359,7 +1604,6 @@ async def test_circuit_breaker_is_bounded_and_fails_before_second_request() -> N
                 temperature=0,
                 response_format=None,
                 deadline=_deadline(),
-                require_ready_model=False,
             )
 
     assert first.value.reason_code is LLMReasonCode.PROVIDER_UNAVAILABLE

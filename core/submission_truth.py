@@ -122,19 +122,76 @@ def is_employer_verified(attempt: SubmissionLike | None) -> bool:
     )
 
 
-def latest_employer_verified_query(db):
-    """Build one latest, typed employer-verified attempt per application."""
+def employer_verified_sql_conditions(db):
+    """Return the exact SQL equivalent of :func:`is_employer_verified`.
+
+    Every aggregate or count that presents employer verification must reuse
+    this predicate instead of inferring truth from the presence of an evidence
+    row alone.
+    """
+
     dialect_name = db.bind.dialect.name
     if dialect_name == "postgresql":
         evidence_not_future = SubmissionEvidence.observed_at <= (
             Submission.submitted_at + text("INTERVAL '5 seconds'")
         )
     elif dialect_name == "sqlite":
-        evidence_not_future = func.datetime(SubmissionEvidence.observed_at) <= func.datetime(
-            Submission.submitted_at, "+5 seconds"
+        # SQLite's datetime() truncates fractional seconds, which can turn an
+        # observation more than five seconds late into a false positive.  Julian
+        # day arithmetic retains the representable fractional component and
+        # matches the Python boundary without weakening the lower-bound check.
+        evidence_not_future = func.julianday(SubmissionEvidence.observed_at) <= (
+            func.julianday(Submission.submitted_at) + (5.0 / 86_400.0)
         )
     else:
         evidence_not_future = SubmissionEvidence.observed_at <= Submission.submitted_at
+
+    return (
+        SubmissionEvidence.attempt_id == Submission.id,
+        SubmissionEvidence.evidence_type == Submission.verification_kind,
+        SubmissionEvidence.evidence_digest == Submission.evidence_digest,
+        SubmissionEvidence.form_fingerprint == Submission.form_plan_fingerprint,
+        SubmissionEvidence.cv_hash == Submission.attached_cv_hash,
+        Submission.stage == "finished",
+        Submission.outcome == "confirmed_submitted",
+        Submission.status == SubmissionStatus.SUCCESS,
+        Submission.submitted_at.isnot(None),
+        Submission.final_action_at.isnot(None),
+        Submission.submitted_at >= Submission.final_action_at,
+        SubmissionEvidence.observed_at >= Submission.final_action_at,
+        evidence_not_future,
+        Submission.attachment_verified.is_(True),
+        Submission.form_plan_id.isnot(None),
+        Submission.adapter_name.isnot(None),
+        func.length(func.trim(Submission.adapter_name)) > 0,
+        Submission.adapter_version.isnot(None),
+        func.length(func.trim(Submission.adapter_version)) > 0,
+        Submission.selector_version.isnot(None),
+        func.length(func.trim(Submission.selector_version)) > 0,
+        Submission.profile_version.isnot(None),
+        Submission.profile_version > 0,
+        Submission.runner_release.isnot(None),
+        func.length(func.trim(Submission.runner_release)) > 0,
+        func.length(Submission.runner_release) <= 64,
+        Submission.reason_code.in_(EMPLOYER_VERIFIED_REASON_CODES),
+        Submission.verification_kind.in_(EMPLOYER_EVIDENCE_TYPES),
+        Submission.evidence_digest.isnot(None),
+        func.length(Submission.evidence_digest) == 64,
+        Submission.form_plan_fingerprint.isnot(None),
+        func.length(Submission.form_plan_fingerprint) == 64,
+        Submission.requested_cv_id.isnot(None),
+        func.length(func.trim(Submission.requested_cv_id)) > 0,
+        Submission.requested_cv_id == Submission.attached_cv_id,
+        Submission.requested_cv_hash.isnot(None),
+        func.length(Submission.requested_cv_hash) == 64,
+        Submission.attached_cv_hash.isnot(None),
+        func.length(Submission.attached_cv_hash) == 64,
+        Submission.requested_cv_hash == Submission.attached_cv_hash,
+    )
+
+
+def latest_employer_verified_query(db):
+    """Build one latest, typed employer-verified attempt per application."""
 
     latest_attempts = (
         db.query(
@@ -155,51 +212,9 @@ def latest_employer_verified_query(db):
         )
         .join(
             SubmissionEvidence,
-            and_(
-                SubmissionEvidence.attempt_id == Submission.id,
-                SubmissionEvidence.evidence_type == Submission.verification_kind,
-                SubmissionEvidence.evidence_digest == Submission.evidence_digest,
-                SubmissionEvidence.form_fingerprint == Submission.form_plan_fingerprint,
-                SubmissionEvidence.cv_hash == Submission.attached_cv_hash,
-            ),
+            SubmissionEvidence.attempt_id == Submission.id,
         )
-        .filter(
-            Submission.stage == "finished",
-            Submission.outcome == "confirmed_submitted",
-            Submission.status == SubmissionStatus.SUCCESS,
-            Submission.submitted_at.isnot(None),
-            Submission.final_action_at.isnot(None),
-            Submission.submitted_at >= Submission.final_action_at,
-            SubmissionEvidence.observed_at >= Submission.final_action_at,
-            evidence_not_future,
-            Submission.attachment_verified.is_(True),
-            Submission.form_plan_id.isnot(None),
-            Submission.adapter_name.isnot(None),
-            func.length(func.trim(Submission.adapter_name)) > 0,
-            Submission.adapter_version.isnot(None),
-            func.length(func.trim(Submission.adapter_version)) > 0,
-            Submission.selector_version.isnot(None),
-            func.length(func.trim(Submission.selector_version)) > 0,
-            Submission.profile_version.isnot(None),
-            Submission.profile_version > 0,
-            Submission.runner_release.isnot(None),
-            func.length(func.trim(Submission.runner_release)) > 0,
-            func.length(Submission.runner_release) <= 64,
-            Submission.reason_code.in_(EMPLOYER_VERIFIED_REASON_CODES),
-            Submission.verification_kind.in_(EMPLOYER_EVIDENCE_TYPES),
-            Submission.evidence_digest.isnot(None),
-            func.length(Submission.evidence_digest) == 64,
-            Submission.form_plan_fingerprint.isnot(None),
-            func.length(Submission.form_plan_fingerprint) == 64,
-            Submission.requested_cv_id.isnot(None),
-            func.length(func.trim(Submission.requested_cv_id)) > 0,
-            Submission.requested_cv_id == Submission.attached_cv_id,
-            Submission.requested_cv_hash.isnot(None),
-            func.length(Submission.requested_cv_hash) == 64,
-            Submission.attached_cv_hash.isnot(None),
-            func.length(Submission.attached_cv_hash) == 64,
-            Submission.requested_cv_hash == Submission.attached_cv_hash,
-        )
+        .filter(*employer_verified_sql_conditions(db))
         .distinct()
     )
 

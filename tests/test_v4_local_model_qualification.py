@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
+from profile.models import SelectedCVArtifact
+from types import SimpleNamespace
 
 import pytest
 import structlog
 
-from core.config import get_settings
+from core.config import Settings, get_settings
+from core.material_audit import persist_material_audit
+from llm.contracts import ModelIdentity
+from llm.generation import (
+    GeneratedApplication,
+    MaterialPackageBlockedError,
+    generate_material_package,
+)
+from llm.ollama_runtime import OllamaReadiness
+from llm.qualification_registry import (
+    QUALIFIED_OLLAMA_SERVER_VERSION,
+    load_qualified_local_model,
+)
 from scripts.build_v4_local_model_material_fixtures import build_material_cases
 from scripts.evaluate_v4_local_model_qualification import (
     _SOURCE_FILES,
@@ -25,6 +40,7 @@ from scripts.evaluate_v4_local_model_qualification import (
     _load_form_rows,
     _material_threshold_passes,
     _normalized_text_sha256,
+    _progress,
     _qualification_input_attestation,
     _qualification_purpose_key,
     _QualificationProgress,
@@ -69,6 +85,15 @@ def test_application_log_suppression_is_supported_and_content_free(capsys) -> No
         assert marker not in captured.err
     finally:
         structlog.reset_defaults()
+
+
+def test_progress_output_failure_cannot_abort_qualification(monkeypatch) -> None:
+    def closed_output(*_args: object, **_kwargs: object) -> None:
+        raise BrokenPipeError
+
+    monkeypatch.setattr("builtins.print", closed_output)
+
+    _progress("form_resolution", 240, 240, 0.0)
 
 
 def test_form_source_loader_discards_embedded_llm_output(tmp_path: Path) -> None:
@@ -166,6 +191,152 @@ def test_material_purpose_counter_uses_report_safe_alias() -> None:
     assert _qualification_purpose_key("cover_letter") == "full_material"
     assert _qualification_purpose_key("cv_routing") == "cv_routing"
     assert _qualification_purpose_key("private-dynamic-purpose") == "other_bounded_purpose"
+
+
+@pytest.mark.asyncio
+async def test_full_material_evaluator_uses_only_its_exact_runtime_when_report_is_stale(
+    monkeypatch,
+) -> None:
+    import scripts.evaluate_v4_local_model_qualification as evaluator
+
+    settings = Settings(
+        _env_file=None,
+        llm_provider="ollama",
+        llm_model="qwen2.5:7b",
+        tasks_always_eager=True,
+    )
+    monkeypatch.setattr("llm.client.get_settings", lambda: settings)
+    monkeypatch.setattr("llm.generation.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda **_kwargs: False,
+    )
+    client = evaluator._InstrumentedOllamaClient()
+    registry = load_qualified_local_model()
+    identity = ModelIdentity(
+        provider=registry.provider,
+        model=registry.model,
+        local=True,
+        digest=registry.digest,
+    )
+
+    async def exact_readiness(**_kwargs):
+        client.runtime.identity = identity
+        client.runtime.ollama_server_version = QUALIFIED_OLLAMA_SERVER_VERSION
+        return OllamaReadiness(
+            ok=True,
+            model_identity=identity,
+            ollama_server_version=QUALIFIED_OLLAMA_SERVER_VERSION,
+        )
+
+    provider_calls = 0
+
+    async def one_synthetic_plan(**kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        ordinal_match = re.search(r"(?m)^(\d+)\. \[cv\] ", kwargs["prompt"])
+        assert ordinal_match is not None
+        selection = {
+            "evidence_ordinal": int(ordinal_match.group(1)),
+            "source_kind": "cv",
+        }
+        return json.dumps(
+            {
+                "cover_letter_opening": "interest_role",
+                "cover_letter_evidence": [selection],
+                "cover_letter_closing": "welcome_contribute",
+                "recruiter_opening": "interest_opportunity",
+                "recruiter_evidence": [selection],
+                "recruiter_closing": "learn_more",
+                "why_this_company": "interest_opportunity",
+                "why_this_role": "interest_role",
+                "relevant_experience_evidence": [selection],
+            }
+        )
+
+    monkeypatch.setattr(client.runtime, "readiness", exact_readiness)
+    monkeypatch.setattr(client.runtime, "chat", one_synthetic_plan)
+    source = json.loads(
+        (FIXTURES / "local_model_full_material_40.json").read_text(encoding="utf-8")
+    )
+    row = evaluator._MaterialCaseV1.model_validate(source[0])
+    cv_text = "\n".join(row.cv_lines)
+    cv_hash = evaluator.hashlib.sha256(cv_text.encode("utf-8")).hexdigest()
+    profile = evaluator._synthetic_profile(
+        cv_hash=cv_hash,
+        cv_facts={},
+        confirmed=row.confirmed_facts,
+        resume_text=cv_text,
+    )
+    artifact = evaluator.CVArtifact(
+        pdf_sha256=cv_hash,
+        byte_size=len(cv_text.encode("utf-8")),
+        extracted_text=cv_text,
+    )
+
+    with pytest.raises(MaterialPackageBlockedError) as exc_info:
+        await generate_material_package(
+            row.job,
+            profile,
+            cv_artifact=artifact,
+            profile_version=7,
+            client=client,
+        )
+    assert exc_info.value.reason_code == "MATERIAL_MODEL_NOT_QUALIFIED"
+    assert client.provider_attempts == 0
+    assert provider_calls == 0
+
+    captured_packages = []
+    finalize = evaluator._finalize_material_package
+
+    def capture_package(*args, **kwargs):
+        package = finalize(*args, **kwargs)
+        captured_packages.append(package)
+        return package
+
+    monkeypatch.setattr(evaluator, "_finalize_material_package", capture_package)
+    result = await evaluator._evaluate_materials([row], client)
+
+    assert result["eligible"] == 1
+    assert result["blocked"] == 0
+    assert result["generation_failed"] == 0
+    assert result["typed_invocations"] == 1
+    assert result["provider_attempts"] == 1
+    assert result["provider_payloads"] == 1
+    assert result["successful_generations"] == 1
+    assert result["unsupported_eligible"] == 0
+    assert result["sensitive_eligible"] == 0
+    assert provider_calls == 1
+    assert len(captured_packages) == 1
+    package = captured_packages[0]
+    assert package.qualification_only is True
+    assert package.eligible is False
+
+    generated = GeneratedApplication(
+        cover_letter=package.cover_letter,
+        recruiter_message=package.recruiter_message,
+        qa_answers=package.qa_answer_dict(),
+        cv_sha256=package.cv_sha256,
+        profile_version=package.profile_version,
+        claim_evidence=list(package.claim_evidence),
+        material_package=package,
+    )
+    persisted_application = SimpleNamespace()
+    selected_cv = SelectedCVArtifact(
+        cv_id="synthetic-evaluator-cv",
+        resolved_path="private-local-only.pdf",
+        artifact=artifact,
+    )
+
+    blockers = persist_material_audit(
+        persisted_application,
+        generated,
+        selected_cv,
+    )
+
+    assert generated.eligible is False
+    assert persisted_application.material_eligible is False
+    assert "MATERIAL_MODEL_NOT_QUALIFIED" in blockers
 
 
 def test_partial_blocked_report_preserves_bounded_inference_without_qualifying() -> None:

@@ -176,6 +176,29 @@
                     </div>
                 </div>
 
+                <div class="activity-section operations-section" id="operations-section">
+                    <div class="operations-section-heading">
+                        <div>
+                            <div class="section-title">
+                                <i data-lucide="shield-check"></i> Operations &amp; Qualification
+                            </div>
+                            <p class="operations-section-copy">
+                                Redacted runtime, queue, adapter, and evidence signals.
+                                Employer, job, question, answer, and candidate details are never shown here.
+                            </p>
+                        </div>
+                        <div class="operations-generated-at" id="operations-generated-at">
+                            Protected snapshot not loaded
+                        </div>
+                    </div>
+                    <div id="operations-dashboard"
+                         class="operations-dashboard"
+                         role="status"
+                         aria-live="polite">
+                        <div class="operations-empty">Loading protected operational evidence…</div>
+                    </div>
+                </div>
+
                 <div class="activity-section">
                     <div class="section-title">
                         <i data-lucide="user-circle"></i> Candidate Profile
@@ -588,7 +611,8 @@
             </div>
         </div>
         <div class="modal-footer flex-end gap-1">
-            <div id="modal-send-disabled-reason" class="send-disabled-reason" style="display:none;"></div>
+            <div id="modal-send-disabled-reason" class="send-disabled-reason"
+                 role="status" aria-live="polite" style="display:none;"></div>
             <button class="btn btn-secondary" id="btn-reject-app">Skip / Reject</button>
             <button class="btn btn-retry" id="btn-retry-app" style="display:none;">
                 <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Retry attempt

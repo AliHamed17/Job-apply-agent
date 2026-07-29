@@ -148,10 +148,10 @@ def test_modal_requests_are_bound_to_the_exact_application() -> None:
 
 def test_send_requires_exact_audited_model_identities() -> None:
     blockers = APP_JS.split(
-        "function liveSendBlockers(application)",
+        "function liveSendBlockers(application, runtime = runtimeSubmissionState())",
         maxsplit=1,
     )[1].split(
-        "function renderApplications",
+        "function finalSendUiState",
         maxsplit=1,
     )[0]
     assert "application?.material_eligible !== true" in blockers
@@ -185,10 +185,10 @@ def test_send_requires_exact_live_qualified_adapter_and_form_scope() -> None:
     assert "outside the qualified live scope" in qualification
 
     blockers = APP_JS.split(
-        "function liveSendBlockers(application)",
+        "function liveSendBlockers(application, runtime = runtimeSubmissionState())",
         maxsplit=1,
     )[1].split(
-        "function renderApplications",
+        "function finalSendUiState",
         maxsplit=1,
     )[0]
     assert "blockers.push(...adapterQualificationBlockers(application));" in blockers

@@ -36,6 +36,7 @@ from llm.contracts import (
     GenerationPurpose,
     LLMReasonCode,
     ModelIdentity,
+    TypedGeneration,
     TypedGenerationError,
     is_qualified_material_identity,
 )
@@ -228,9 +229,9 @@ class MaterialPackageV1(BaseModel):
     ] = Field(default=(), max_length=20)
     placeholder_fields: tuple[str, ...] = ()
     eligibility_blockers: tuple[MaterialBlocker, ...] = ()
+    qualification_only: bool = False
 
-    @property
-    def eligible(self) -> bool:
+    def _meets_non_identity_eligibility_constraints(self) -> bool:
         supported_claim_digests = {
             claim.claim_digest for claim in self.claim_evidence if claim.supported
         }
@@ -242,6 +243,13 @@ class MaterialPackageV1(BaseModel):
             and not self.placeholder_fields
             and not self.eligibility_blockers
             and all(claim.supported for claim in self.claim_evidence)
+        )
+
+    @property
+    def eligible(self) -> bool:
+        return bool(
+            self._meets_non_identity_eligibility_constraints()
+            and not self.qualification_only
             and is_qualified_material_identity(
                 provider=self.model_identity.provider,
                 model=self.model_identity.model,
@@ -578,6 +586,17 @@ class MaterialPackageBlockedError(RuntimeError):
         self.reason_code = reason_code
 
 
+@dataclass(frozen=True, slots=True)
+class _MaterialGenerationContext:
+    """Pure production prompt context reused by the offline evaluator."""
+
+    prompt: str
+    system: str
+    prompt_catalog: tuple[EvidenceItemV1, ...]
+    full_catalog: tuple[EvidenceItemV1, ...]
+    feedback_example_count: int
+
+
 def _sanitize_feedback_examples(rows: list[dict]) -> list[dict[str, str]]:
     """Return bounded, non-sensitive examples safe for the local system prompt."""
 
@@ -692,6 +711,38 @@ def _build_bounded_material_context(
     if len(prompt) + len(system) > budget:
         raise MaterialPackageBlockedError("LLM_CONFIGURATION_INVALID")
     return prompt, system, prompt_catalog, len(chosen_examples)
+
+
+def _prepare_material_generation_context(
+    job: JobData,
+    profile: UserProfile,
+    *,
+    cv_artifact: CVArtifact,
+    profile_version: int,
+) -> _MaterialGenerationContext:
+    """Build the exact bounded production prompt without invoking a provider."""
+
+    if profile_version < 1:
+        raise MaterialPackageBlockedError("MATERIAL_PROFILE_VERSION_REQUIRED")
+    if material_input_has_prompt_injection(job, cv_artifact.extracted_text):
+        raise MaterialPackageBlockedError("UNTRUSTED_INPUT_BLOCKED")
+    full_catalog = build_evidence_catalog(profile, cv_artifact)
+    narrative_catalog = tuple(item for item in full_catalog if _is_narrative_evidence(item))
+    if not narrative_catalog:
+        raise MaterialPackageBlockedError("MATERIAL_EVIDENCE_EMPTY")
+    prompt, system, prompt_catalog, feedback_count = _build_bounded_material_context(
+        job,
+        profile,
+        narrative_catalog,
+        _load_few_shot_examples(),
+    )
+    return _MaterialGenerationContext(
+        prompt=prompt,
+        system=system,
+        prompt_catalog=prompt_catalog,
+        full_catalog=full_catalog,
+        feedback_example_count=feedback_count,
+    )
 
 
 def _resolve_material_selections(
@@ -821,52 +872,27 @@ def _render_material_plan(
     return draft, audit_catalog
 
 
-async def generate_material_package(
-    job: JobData,
+def _finalize_material_package(
     profile: UserProfile,
     *,
     cv_artifact: CVArtifact,
     profile_version: int,
-    client: LLMClient | None = None,
+    context: _MaterialGenerationContext,
+    generated: TypedGeneration[MaterialCompositionPlanV1],
+    expected_identity: ModelIdentity,
+    qualification_only: bool,
 ) -> MaterialPackageV1:
-    """Generate and validate one CV/profile-bound material package."""
+    """Run the production evidence validator and build one immutable package.
 
-    if profile_version < 1:
-        raise MaterialPackageBlockedError("MATERIAL_PROFILE_VERSION_REQUIRED")
-    if material_input_has_prompt_injection(job, cv_artifact.extracted_text):
-        raise MaterialPackageBlockedError("UNTRUSTED_INPUT_BLOCKED")
-    if client is None:
-        client = get_llm_client()
-    qualified_identity = await _require_qualified_material_client(client)
+    Qualification packages carry an explicit taint, so they can exercise the
+    exact content predicate without ever becoming production eligible.
+    """
 
-    full_catalog = build_evidence_catalog(profile, cv_artifact)
-    narrative_catalog = tuple(item for item in full_catalog if _is_narrative_evidence(item))
-    if not narrative_catalog:
-        raise MaterialPackageBlockedError("MATERIAL_EVIDENCE_EMPTY")
-
-    prompt, system, prompt_catalog, feedback_count = _build_bounded_material_context(
-        job,
-        profile,
-        narrative_catalog,
-        _load_few_shot_examples(),
-    )
-    generated = await client.generate_typed(
-        response_model=MaterialCompositionPlanV1,
-        prompt=prompt,
-        purpose=GenerationPurpose.COVER_LETTER,
-        prompt_version=MATERIAL_PROMPT_VERSION,
-        deadline=datetime.now(UTC)
-        + timedelta(seconds=get_settings().ollama_request_timeout_seconds),
-        data_classification=DataClassification.PRIVATE_APPLICATION,
-        system=system,
-        max_tokens=1600,
-        temperature=0.1,
-    )
     draft, audit_catalog = _render_material_plan(
         generated.value,
         profile,
-        prompt_catalog=prompt_catalog,
-        full_catalog=full_catalog,
+        prompt_catalog=context.prompt_catalog,
+        full_catalog=context.full_catalog,
     )
     qa_dict = draft.qa_answers.model_dump()
     all_text = [
@@ -883,12 +909,15 @@ async def generate_material_package(
     )
     placeholders = tuple(dict.fromkeys(_check_placeholders(" ".join(all_text))))
     blockers: set[MaterialBlocker] = set()
-    if generated.model_identity != qualified_identity or not is_qualified_material_identity(
+    production_qualified = is_qualified_material_identity(
         provider=generated.model_identity.provider,
         model=generated.model_identity.model,
         local=generated.model_identity.local,
         digest=generated.model_identity.digest,
         prompt_version=MATERIAL_PROMPT_VERSION,
+    )
+    if generated.model_identity != expected_identity or (
+        not qualification_only and not production_qualified
     ):
         blockers.add("MATERIAL_MODEL_NOT_QUALIFIED")
     if placeholders:
@@ -917,18 +946,69 @@ async def generate_material_package(
         relevant_experience_claim_digests=relevant_experience_claim_digests,
         placeholder_fields=placeholders,
         eligibility_blockers=tuple(sorted(blockers)),
+        qualification_only=qualification_only,
     )
     logger.info(
         "material_package_generated",
         cv_digest_prefix=cv_artifact.pdf_sha256[:12],
         profile_version=profile_version,
         claim_count=len(package.claim_evidence),
-        prompt_evidence_count=len(prompt_catalog),
-        feedback_example_count=feedback_count,
+        prompt_evidence_count=len(context.prompt_catalog),
+        feedback_example_count=context.feedback_example_count,
         blocker_count=len(package.eligibility_blockers),
+        qualification_only=package.qualification_only,
         eligible=package.eligible,
     )
     return package
+
+
+async def generate_material_package(
+    job: JobData,
+    profile: UserProfile,
+    *,
+    cv_artifact: CVArtifact,
+    profile_version: int,
+    client: LLMClient | None = None,
+) -> MaterialPackageV1:
+    """Generate and validate one CV/profile-bound material package."""
+
+    # Preserve local fail-fast validation before any runtime/readiness work. The
+    # shared context builder repeats these checks so evaluator-only qualification
+    # remains bound to the exact same production input contract.
+    if profile_version < 1:
+        raise MaterialPackageBlockedError("MATERIAL_PROFILE_VERSION_REQUIRED")
+    if material_input_has_prompt_injection(job, cv_artifact.extracted_text):
+        raise MaterialPackageBlockedError("UNTRUSTED_INPUT_BLOCKED")
+    if client is None:
+        client = get_llm_client()
+    qualified_identity = await _require_qualified_material_client(client)
+    context = _prepare_material_generation_context(
+        job,
+        profile,
+        cv_artifact=cv_artifact,
+        profile_version=profile_version,
+    )
+    generated = await client.generate_typed(
+        response_model=MaterialCompositionPlanV1,
+        prompt=context.prompt,
+        purpose=GenerationPurpose.COVER_LETTER,
+        prompt_version=MATERIAL_PROMPT_VERSION,
+        deadline=datetime.now(UTC)
+        + timedelta(seconds=get_settings().ollama_request_timeout_seconds),
+        data_classification=DataClassification.PRIVATE_APPLICATION,
+        system=context.system,
+        max_tokens=1600,
+        temperature=0.1,
+    )
+    return _finalize_material_package(
+        profile,
+        cv_artifact=cv_artifact,
+        profile_version=profile_version,
+        context=context,
+        generated=generated,
+        expected_identity=qualified_identity,
+        qualification_only=False,
+    )
 
 
 def _blocked_application(reason_code: MaterialBlocker) -> GeneratedApplication:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -18,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from api.routes import applications as applications_route
 from control_plane.job_control_plane import crypto as control_crypto
 from control_plane.job_control_plane import protocol as control_protocol
-from core.config import Settings
+from core.config import JOB_AGENT_ENV_FILE, Settings, get_settings
 from core.control_plane_review_permits import (
     ReviewGrantProjection,
     ReviewGrantRevocationProjection,
@@ -598,6 +600,8 @@ async def test_manual_reconciliation_emits_one_next_sequence_without_evidence(
 def test_runner_config_is_absolute_path_only_and_has_no_inline_secret(tmp_path):
     private_key_path = (tmp_path / "runner.key").resolve()
     public_key_path = (tmp_path / "control.pub").resolve()
+    runtime_env_path = (tmp_path / "runtime.env").resolve()
+    runtime_env_path.write_text("DRY_RUN=true\n", encoding="utf-8")
     config_path = (tmp_path / "runner.json").resolve()
     device_id = str(uuid4())
     control_signing_key_id = str(uuid4())
@@ -610,6 +614,7 @@ def test_runner_config_is_absolute_path_only_and_has_no_inline_secret(tmp_path):
                 "control_plane_audience": "job-apply-control-plane",
                 "private_key_path": str(private_key_path),
                 "control_plane_public_key_path": str(public_key_path),
+                "runtime_env_path": str(runtime_env_path),
                 "heartbeat_interval_seconds": 10,
                 "offline_after_seconds": 30,
             }
@@ -618,6 +623,7 @@ def test_runner_config_is_absolute_path_only_and_has_no_inline_secret(tmp_path):
     )
     loaded = load_runner_config(config_path)
     assert loaded.private_key_path == private_key_path
+    assert loaded.runtime_env_path == runtime_env_path
     assert "runner.key" not in repr(loaded)
     assert loaded.poll_interval_seconds == 10
     assert loaded.heartbeat_interval_seconds == 10
@@ -626,6 +632,11 @@ def test_runner_config_is_absolute_path_only_and_has_no_inline_secret(tmp_path):
         replace(loaded, poll_interval_seconds=4.9)
     with pytest.raises(ControlPlaneRunnerError, match="RUNNER_POLL_INTERVAL_INVALID"):
         replace(loaded, poll_interval_seconds=10.1)
+    with pytest.raises(ControlPlaneRunnerError, match="RUNNER_ENV_PATH_NOT_ABSOLUTE"):
+        replace(loaded, runtime_env_path=Path("runtime.env"))
+    runtime_env_path.unlink()
+    with pytest.raises(ControlPlaneRunnerError, match="RUNNER_ENV_UNAVAILABLE"):
+        load_runner_config(config_path)
 
     config_path.write_text(
         json.dumps(
@@ -643,6 +654,100 @@ def test_runner_config_is_absolute_path_only_and_has_no_inline_secret(tmp_path):
     )
     with pytest.raises(ControlPlaneRunnerError, match="RUNNER_CONFIG_INVALID"):
         load_runner_config(config_path)
+
+
+def test_runtime_file_is_authoritative_and_binds_runner_database(
+    tmp_path,
+    monkeypatch,
+):
+    device_private = Ed25519PrivateKey.generate()
+    control_private = Ed25519PrivateKey.generate()
+    private_path = (tmp_path / "authoritative-runner.key").resolve()
+    public_path = (tmp_path / "authoritative-control.pub").resolve()
+    runtime_env_path = (tmp_path / "authoritative-runtime.env").resolve()
+    runtime_database_url = (
+        "postgresql://runtime_user:runtime_password_1234567890@127.0.0.1:55432/runtime_job_agent"
+    )
+    runtime_env_path.write_text(
+        "\n".join(
+            (
+                "APP_ENV=production",
+                f"DATABASE_URL={runtime_database_url}",
+                "REDIS_URL=redis://127.0.0.1:56379/0",
+                "DRY_RUN=true",
+                "DRAFT_ONLY=true",
+                "AUTO_APPLY=false",
+                "PORTAL_FINAL_SUBMIT_ENABLED=false",
+                "LIVE_AUTOMATION_ACKNOWLEDGED=false",
+                "TASKS_ALWAYS_EAGER=false",
+                f"SECRET_KEY={'s' * 40}",
+                f"WHATSAPP_APP_SECRET={'w' * 40}",
+                "CORS_ORIGINS=http://127.0.0.1:8000",
+                "LLM_PROVIDER=ollama",
+                "LLM_MODEL=qwen2.5:7b",
+                "OLLAMA_BASE_URL=http://127.0.0.1:11434",
+                "OLLAMA_NO_CLOUD=true",
+                "CLOUD_VISION_ENABLED=false",
+                f"OLLAMA_EXPECTED_MODEL_DIGEST={_QUALIFIED_MODEL_DIGEST}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    key_material = {
+        private_path: control_crypto.private_key_to_base64url(device_private).encode(),
+        public_path: control_crypto.public_key_to_base64url(control_private.public_key()).encode(),
+    }
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'inherited.db'}")
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("DRAFT_ONLY", "false")
+    previous_runtime_selector = os.environ.pop(JOB_AGENT_ENV_FILE, None)
+    get_settings.cache_clear()
+
+    runner = ControlPlaneRunner(
+        RunnerConfig(
+            control_plane_url="https://control.example",
+            device_id=str(uuid4()),
+            control_signing_key_id=str(uuid4()),
+            control_plane_audience=control_protocol.CONTROL_AUDIENCE,
+            private_key_path=private_path,
+            control_plane_public_key_path=public_path,
+            runtime_env_path=runtime_env_path,
+        ),
+        client=object(),
+        key_loader=lambda path: key_material[path],
+    )
+    try:
+        assert runner._settings.database_url == runtime_database_url
+        assert runner._settings.dry_run is True
+        assert runner._settings.draft_only is True
+        assert runner._database_engine.url.drivername == "postgresql"
+        assert runner._database_engine.url.host == "127.0.0.1"
+        assert runner._database_engine.url.port == 55432
+        assert runner._database_engine.url.database == "runtime_job_agent"
+        db = runner._session_factory()
+        try:
+            assert db.get_bind() is runner._database_engine
+        finally:
+            db.close()
+        runtime_env_path.write_text(
+            "APP_ENV=test\n"
+            f"DATABASE_URL=sqlite:///{tmp_path / 'changed-after-activation.db'}\n"
+            "DRY_RUN=false\n"
+            "DRAFT_ONLY=false\n",
+            encoding="utf-8",
+        )
+        globally_resolved = get_settings()
+        assert globally_resolved.database_url == runtime_database_url
+        assert globally_resolved.dry_run is True
+        assert globally_resolved.draft_only is True
+    finally:
+        runner._database_engine.dispose()
+        if previous_runtime_selector is None:
+            os.environ.pop(JOB_AGENT_ENV_FILE, None)
+        else:
+            os.environ[JOB_AGENT_ENV_FILE] = previous_runtime_selector
+        get_settings.cache_clear()
 
 
 def test_post_commit_broker_wake_is_best_effort_and_never_replayed(monkeypatch):
@@ -1135,6 +1240,7 @@ async def test_unaccepted_review_grant_receipt_releases_projection_for_retry(
         client=Client(),
         key_loader=lambda path: key_material[path],
         settings=_settings(),
+        session_factory=factory,
     )
 
     with pytest.raises(

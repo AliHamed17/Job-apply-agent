@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from core.application_audit import record_application_event
 from core.application_revision import preparation_is_current
 from core.config import Settings, get_settings
+from core.operational_metrics import record_attempt_stage, record_retry
 from core.operations import readiness_report
 from core.runtime_identity import build_runtime_capabilities
 from core.submission_domain import FormPlanV1
@@ -587,6 +588,14 @@ def _create_one(
     )
     db.add(attempt)
     db.flush()
+    record_attempt_stage(
+        db,
+        attempt,
+        stage="queued",
+        occurred_at=now,
+        transition_key="initial",
+    )
+    record_retry(db, attempt, occurred_at=now)
     try:
         normalized_url = normalize_url(job_url)
     except Exception as exc:

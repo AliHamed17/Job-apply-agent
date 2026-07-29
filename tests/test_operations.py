@@ -347,3 +347,24 @@ def test_metrics_are_prometheus_and_contain_no_personal_data(monkeypatch) -> Non
     ]
     assert not any(value in response.text for value in forbidden)
     assert not re.search(r'route="[^"]*\\d{4,}', response.text)
+
+
+def test_http_metric_method_uses_fixed_vocabulary(monkeypatch) -> None:
+    import api.main as api_main
+    from core.metrics import normalize_http_method
+
+    hostile_method = "CANDIDATEEMAILPRIVATE"
+    assert normalize_http_method("get") == "GET"
+    assert normalize_http_method(hostile_method) == "OTHER"
+
+    monkeypatch.setattr(api_main.settings, "app_env", "development")
+    client = TestClient(api_main.app)
+    client.request(
+        hostile_method,
+        "/health/live",
+        headers={"Authorization": f"Bearer {api_main.settings.secret_key}"},
+    )
+    exposition = client.get("/metrics").text
+
+    assert 'method="OTHER"' in exposition
+    assert hostile_method not in exposition

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import ValidationError
 
-from job_control_plane.config import ConfigurationError, Settings
+from job_control_plane.config import (
+    ConfigurationError,
+    Settings,
+    build_identity_bundle_digest,
+)
 from job_control_plane.crypto import (
     ProtocolVerificationError,
     private_key_to_base64url,
@@ -26,13 +30,28 @@ from job_control_plane.protocol import (
     RunnerStatus,
 )
 
+IDENTITY_VERSION = UUID("00000000-0000-4000-8000-000000000123")
+PROJECT_ID = "prj_12345678abcdef"
+SCOPE_ID = "team_12345678abcdef"
+
+
+def _refresh_identity_digest(env: dict[str, str]) -> None:
+    env["CONTROL_IDENTITY_BUNDLE_DIGEST"] = build_identity_bundle_digest(
+        env,
+        version_id=IDENTITY_VERSION,
+        environment=env["VERCEL_ENV"],
+        project_id=env["VERCEL_PROJECT_ID"],
+        scope_id=SCOPE_ID,
+    )
+
 
 def _production_env() -> dict[str, str]:
     control = Ed25519PrivateKey.generate()
     runner = Ed25519PrivateKey.generate()
-    return {
+    env = {
         "APP_ENV": "production",
         "VERCEL_ENV": "production",
+        "VERCEL_PROJECT_ID": PROJECT_ID,
         "CONTROL_DATABASE_URL": "postgresql+psycopg://db/control?sslmode=verify-full",
         "CONTROL_PUBLIC_ORIGIN": "https://control.example",
         "CONTROL_OPERATOR_TOKEN": "operator-ABCDEF0123456789-" + ("o" * 20),
@@ -43,6 +62,8 @@ def _production_env() -> dict[str, str]:
         "CONTROL_RUNNER_PUBLIC_KEY_B64": public_key_to_base64url(runner.public_key()),
         "CONTROL_RUNNER_DEVICE_ID": str(uuid4()),
     }
+    _refresh_identity_digest(env)
+    return env
 
 
 def test_production_settings_require_tls_distinct_secrets_and_exact_origin() -> None:
@@ -116,6 +137,7 @@ def test_preview_uses_vercel_host_and_cannot_dispatch() -> None:
         }
     )
     env.pop("CONTROL_PUBLIC_ORIGIN")
+    _refresh_identity_digest(env)
     settings = Settings.from_env(env)
     assert settings.public_origin == "https://job-agent-git-safe-preview.vercel.app"
     assert settings.dispatch_allowed is False
@@ -137,6 +159,27 @@ def test_vercel_runtime_cannot_fall_back_to_development_security() -> None:
         Settings.from_env(env)
     with pytest.raises(ConfigurationError):
         Settings.from_env(dict(_production_env(), APP_ENV="development"))
+
+
+def test_vercel_identity_attestation_rejects_partial_or_cross_target_updates() -> None:
+    env = _production_env()
+    Settings.from_env(env)
+
+    with pytest.raises(ConfigurationError, match="incomplete or mixed"):
+        Settings.from_env(
+            dict(
+                env,
+                CONTROL_SESSION_SECRET="new-session-ABCDEF0123456789-" + ("n" * 24),
+            )
+        )
+    with pytest.raises(ConfigurationError, match="target"):
+        Settings.from_env(dict(env, VERCEL_PROJECT_ID="prj_deadbeef12345678"))
+    with pytest.raises(ConfigurationError, match="target"):
+        Settings.from_env(dict(env, VERCEL_ENV="preview", VERCEL_URL="safe.vercel.app"))
+    with pytest.raises(ConfigurationError, match="CONTROL_IDENTITY_BUNDLE_DIGEST"):
+        Settings.from_env(
+            {key: value for key, value in env.items() if key != "CONTROL_IDENTITY_BUNDLE_DIGEST"}
+        )
 
 
 def test_ed25519_envelope_verifies_purpose_audience_time_and_signature() -> None:

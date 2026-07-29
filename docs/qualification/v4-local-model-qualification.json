@@ -125,11 +125,11 @@
     "schema_version": "qualified-local-model-v1"
   },
   "runtime": {
-    "total_seconds": 1659.926
+    "total_seconds": 1611.619
   },
   "schema_version": "v4-local-model-qualification-v4",
   "source_integrity": {
-    "combined_sha256": "4572316b83e1deca6cbfb09f5489c11c452db90821a46f46b42675cd1abdb2f8",
+    "combined_sha256": "4acd638a3d984643e74611d70b9c4bb4735ec9c1cef8e8d6b2dc58b8b0008bcc",
     "files": {
       "config/qualified_local_model.json": {
         "file": "config/qualified_local_model.json",
@@ -141,7 +141,7 @@
       },
       "core/config.py": {
         "file": "core/config.py",
-        "sha256": "1f26d7ae869efe8f9bc9449e172f0f9b42806637baa815b1be7925de296cb531"
+        "sha256": "f09ec6e6e558304208d584ab10f854e83206d981dad8a3ccaca4744711192ff6"
       },
       "core/form_plan_evidence.py": {
         "file": "core/form_plan_evidence.py",
@@ -163,6 +163,10 @@
         "file": "core/submission_domain.py",
         "sha256": "73efcc5141a953f076eaa4c4280cadb90e071cd3f4ca69cfaefde6a439417317"
       },
+      "core/submission_truth.py": {
+        "file": "core/submission_truth.py",
+        "sha256": "5314840d5114d57ee076963dffd6fd30cfefb0ffc618b60c5261aecab6cdf7d9"
+      },
       "jobs/models.py": {
         "file": "jobs/models.py",
         "sha256": "d9e291f318d21abb4783729f8ece6e8a4fd2bd8ed7631da4ba66518af577898f"
@@ -173,7 +177,7 @@
       },
       "llm/client.py": {
         "file": "llm/client.py",
-        "sha256": "47d6e3c907af8d77136725f5c6673c707fd12c41fdb83b97ec17096e5a303e6a"
+        "sha256": "dc67f8b26b0d0acced982053341310839867b890b81b7489e3b343629d996845"
       },
       "llm/contracts.py": {
         "file": "llm/contracts.py",
@@ -185,11 +189,11 @@
       },
       "llm/generation.py": {
         "file": "llm/generation.py",
-        "sha256": "90f682809dfbce91f9fd7d9a68aa74d1738ae2588b806179ebe974555c77dbbc"
+        "sha256": "a9b3514b257ccc1e0fa22847947dadd9f9c09c3623c3abfe1208deaa21cffdee"
       },
       "llm/ollama_runtime.py": {
         "file": "llm/ollama_runtime.py",
-        "sha256": "a1e9aa54ef074380020b5c22327790223dfc59523abe890e3c3acd374fa9e4b1"
+        "sha256": "471dc561896b4817a52b81a9278533fd6175c7b6c55aa1651204bb17a24396d2"
       },
       "llm/prompts.py": {
         "file": "llm/prompts.py",
@@ -233,7 +237,7 @@
       },
       "scripts/evaluate_v4_local_model_qualification.py": {
         "file": "scripts/evaluate_v4_local_model_qualification.py",
-        "sha256": "42accebc068ea18eb3b03a3fb7468959cabac51aa811aada9e3789a26809e440"
+        "sha256": "e89d9c65b294fd9fa616fd000a0200c4fa2799eef517cac31bbc636f52cffbab"
       },
       "scripts/evaluate_v4_quality.py": {
         "file": "scripts/evaluate_v4_quality.py",
@@ -284,7 +288,7 @@
       "reason_counts": {
         "llm_abstained": 14
       },
-      "runtime_seconds": 129.647,
+      "runtime_seconds": 125.328,
       "successful_generation_cases": 22,
       "successful_generations": 22,
       "threshold": {
@@ -329,7 +333,7 @@
         "UNSUPPORTED_CLAIM": 63
       },
       "resolved_synthesis": 57,
-      "runtime_seconds": 604.815,
+      "runtime_seconds": 623.62,
       "sensitive_automatic_eligible": 0,
       "sensitive_provider_attempts": 0,
       "successful_generation_cases": 80,
@@ -370,16 +374,16 @@
       },
       "generation_failed": 0,
       "precision": 1.0,
-      "precision_denominator": 192,
+      "precision_denominator": 200,
       "provider_attempts": 40,
       "provider_cases": 40,
       "provider_payloads": 40,
       "reason_counts": {},
-      "runtime_seconds": 922.416,
+      "runtime_seconds": 860.143,
       "sensitive_eligible": 0,
       "successful_generation_cases": 40,
       "successful_generations": 40,
-      "supported_claims": 192,
+      "supported_claims": 200,
       "threshold": {
         "actual": {
           "coverage": 1.0,
@@ -391,7 +395,7 @@
           "sensitive_eligible": 0,
           "successful_generation_cases": 40,
           "supported_claim_precision": 1.0,
-          "supported_claims": 192,
+          "supported_claims": 200,
           "unsupported_claims": 0,
           "unsupported_eligible": 0
         },
@@ -422,7 +426,7 @@
         "UNTRUSTED_INPUT_BLOCKED": 6,
         "llm_input_rejected": 6
       },
-      "runtime_seconds": 0.092,
+      "runtime_seconds": 0.067,
       "semantic_prompt_injection_cases": 18,
       "semantic_prompt_injections_blocked": 18,
       "successful_generations": 0,
@@ -498,7 +502,7 @@
         "sensitive_eligible": 0,
         "successful_generation_cases": 40,
         "supported_claim_precision": 1.0,
-        "supported_claims": 192,
+        "supported_claims": 200,
         "unsupported_claims": 0,
         "unsupported_eligible": 0
       },

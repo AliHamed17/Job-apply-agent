@@ -12,6 +12,7 @@ from typing import Any
 
 import redis
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from core.config import Settings, get_settings
 from core.runtime_identity import get_runtime_identity
@@ -125,13 +126,18 @@ def llm_readiness(settings: Settings | None = None) -> dict[str, Any]:
     }
 
 
-def readiness_report(settings: Settings | None = None) -> dict[str, Any]:
+def readiness_report(
+    settings: Settings | None = None,
+    *,
+    engine: Engine | None = None,
+) -> dict[str, Any]:
     """Return bounded dependency status without exposing connection details."""
     cfg = settings or get_settings()
     checks: dict[str, dict[str, Any]] = {}
 
     try:
-        with get_engine().connect() as connection:
+        database_engine = engine or get_engine()
+        with database_engine.connect() as connection:
             connection.execute(text("SELECT 1"))
             current = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
         from alembic.config import Config

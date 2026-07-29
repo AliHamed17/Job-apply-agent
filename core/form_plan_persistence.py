@@ -10,6 +10,7 @@ from typing import cast
 
 from core.application_audit import record_application_event
 from core.form_planning import option_set_hash, reusable_field_contract_fingerprint
+from core.operational_metrics import record_form_plan_metrics
 from core.submission_domain import (
     AnswerDisposition,
     AnswerProvenance,
@@ -228,6 +229,11 @@ def persist_inspected_form_plan(
     )
     db.add(row)
     db.flush()
+    record_form_plan_metrics(
+        db,
+        plan=plan,
+        occurred_at=_naive_utc(plan.created_at),
+    )
     record_application_event(
         db,
         application_id=application.id,

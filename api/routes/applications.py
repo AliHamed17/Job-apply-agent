@@ -57,6 +57,7 @@ from core.form_planning import (
     option_set_hash,
     reusable_field_contract_fingerprint,
 )
+from core.operational_metrics import record_attempt_outcome, record_form_decision
 from core.operations import readiness_report
 from core.runtime_identity import build_runtime_capabilities, get_runtime_identity
 from core.submission_domain import (
@@ -125,6 +126,8 @@ class SubmissionAttemptResponse(BaseModel):
     runner_release: str | None
     reconciliation_source: str | None
     reconciliation_evidence_ref: str | None
+    created_at: str | None
+    reconciled_at: str | None
 
 
 class ApplicationEventResponse(BaseModel):
@@ -419,6 +422,13 @@ def _redacted_cv_ref(cv_id: str | None) -> str | None:
     return f"cv-ref-{digest[:12]}"
 
 
+def _utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return normalized.isoformat().replace("+00:00", "Z")
+
+
 def _attempt_response(attempt) -> SubmissionAttemptResponse:
     verified = is_employer_verified(attempt)
     return SubmissionAttemptResponse(
@@ -429,11 +439,9 @@ def _attempt_response(attempt) -> SubmissionAttemptResponse:
         verified=verified,
         platform=attempt.submitter_name,
         reason_code=attempt.reason_code,
-        started_at=attempt.started_at.isoformat() if attempt.started_at else None,
-        finished_at=attempt.finished_at.isoformat() if attempt.finished_at else None,
-        submitted_at=(
-            attempt.submitted_at.isoformat() if verified and attempt.submitted_at else None
-        ),
+        started_at=_utc_iso(attempt.started_at),
+        finished_at=_utc_iso(attempt.finished_at),
+        submitted_at=_utc_iso(attempt.submitted_at) if verified else None,
         selected_cv_id=attempt.selected_cv_id,
         profile_version=attempt.profile_version,
         confirmation_id=attempt.confirmation_id,
@@ -451,12 +459,14 @@ def _attempt_response(attempt) -> SubmissionAttemptResponse:
         attached_cv_id=attempt.attached_cv_id,
         attached_cv_hash=attempt.attached_cv_hash,
         attachment_verified=attempt.attachment_verified,
-        final_action_at=(attempt.final_action_at.isoformat() if attempt.final_action_at else None),
+        final_action_at=_utc_iso(attempt.final_action_at),
         verification_kind=attempt.verification_kind,
         evidence_digest=attempt.evidence_digest,
         runner_release=attempt.runner_release,
         reconciliation_source=attempt.reconciliation_source,
         reconciliation_evidence_ref=attempt.reconciliation_evidence_ref,
+        created_at=_utc_iso(attempt.created_at),
+        reconciled_at=_utc_iso(attempt.reconciled_at),
     )
 
 
@@ -1587,6 +1597,15 @@ async def confirm_application_answer(
         expires_at=plan.expires_at,
     )
     db.add(cloned)
+    db.flush()
+    record_form_decision(
+        db,
+        plan=cloned_domain,
+        field=field,
+        decision=replacement,
+        occurred_at=now,
+        event_kind="operator_confirmation",
+    )
     app.status = JobStatus.DRAFT
     if locked.job is not None:
         locked.job.status = JobStatus.DRAFT
@@ -1967,6 +1986,12 @@ def _reconcile_attempt(
         attempt.status = SubmissionStatus.FAILED
         attempt.outcome = "failed_before_commit"
         attempt.reason_code = "RECONCILED_NOT_SUBMITTED"
+    record_attempt_outcome(
+        db,
+        attempt,
+        occurred_at=now,
+        event_kind="operator_reconciliation",
+    )
     db.flush()
     unresolved = (
         db.query(Submission.id)

@@ -20,6 +20,11 @@ from core.async_lifecycle import (
 )
 from core.config import Settings, get_settings
 from core.metrics import GOVERNOR_DENIALS
+from core.operational_metrics import (
+    record_attempt_outcome,
+    record_attempt_stage,
+    record_governor_denial,
+)
 from core.runtime_identity import get_runtime_identity, runtime_source_is_current
 from core.submission_domain import (
     AlreadyAppliedOutcome,
@@ -94,12 +99,24 @@ def _runner_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"[:128]
 
 
-def _set_stage(attempt: Submission, target: AttemptStage) -> None:
+def _set_stage(
+    db,
+    attempt: Submission,
+    target: AttemptStage,
+    *,
+    occurred_at: datetime,
+) -> None:
     current = AttemptStage(attempt.stage)
     require_transition(current, target)
     attempt.stage = target.value
     attempt.outcome = None
     attempt.status = project_legacy_status(target)
+    record_attempt_stage(
+        db,
+        attempt,
+        stage=target,
+        occurred_at=occurred_at,
+    )
 
 
 def _confirmed_evidence_is_post_action(
@@ -214,7 +231,12 @@ def claim_submission_command(
     command.claimed_by = (runner_id or _runner_id())[:128]
     command.claim_token = secrets.token_hex(32)
     attempt.started_at = timestamp
-    _set_stage(attempt, AttemptStage.INSPECTING)
+    _set_stage(
+        db,
+        attempt,
+        AttemptStage.INSPECTING,
+        occurred_at=timestamp,
+    )
     enqueue_control_plane_attempt_transition(
         db,
         attempt=attempt,
@@ -312,6 +334,11 @@ def _finish_attempt(
             if attempt.application.job:
                 attempt.application.job.status = JobStatus.DRAFT
 
+    record_attempt_outcome(
+        db,
+        attempt,
+        occurred_at=now,
+    )
     command.state = "completed"
     command.completed_at = now
     command.claimed_at = None
@@ -506,12 +533,18 @@ def _enter_claimed_preflight(
     ):
         db.rollback()
         return False
-    _set_stage(attempt, AttemptStage.PREPARING)
+    stage_at = _now()
+    _set_stage(
+        db,
+        attempt,
+        AttemptStage.PREPARING,
+        occurred_at=stage_at,
+    )
     enqueue_control_plane_attempt_transition(
         db,
         attempt=attempt,
         command=_command,
-        occurred_at=_now(),
+        occurred_at=stage_at,
     )
     db.commit()
     return True
@@ -561,7 +594,12 @@ def _mark_claimed_attempt_ready(
     except (TypeError, ValueError, json.JSONDecodeError):
         db.rollback()
         return "invalid"
-    _set_stage(attempt, AttemptStage.READY)
+    _set_stage(
+        db,
+        attempt,
+        AttemptStage.READY,
+        occurred_at=now,
+    )
     enqueue_control_plane_attempt_transition(
         db,
         attempt=attempt,
@@ -653,6 +691,12 @@ def _enter_commit_boundary(
             allowed, raw_reason = False, "governor backend unavailable"
         if not allowed:
             GOVERNOR_DENIALS.labels(reason=_governor_metric_reason(raw_reason)).inc()
+            record_governor_denial(
+                db,
+                attempt,
+                occurred_at=validation_at,
+                reason_code=_governor_metric_reason(raw_reason).upper(),
+            )
             _finish_attempt(
                 db,
                 attempt=attempt,
@@ -699,7 +743,12 @@ def _enter_commit_boundary(
         )
         db.commit()
         raise _CommitBoundaryRejectedError(reason.value) from exc
-    _set_stage(attempt, AttemptStage.COMMITTING)
+    _set_stage(
+        db,
+        attempt,
+        AttemptStage.COMMITTING,
+        occurred_at=commit_at,
+    )
     enqueue_control_plane_attempt_transition(
         db,
         attempt=attempt,
@@ -1067,7 +1116,12 @@ def execute_claimed_submission_command(
         ):
             outcome = UnknownOutcome(reason_code=ReasonCode.EVIDENCE_INVALID)
         if isinstance(outcome, ConfirmedSubmittedOutcome):
-            _set_stage(attempt, AttemptStage.VERIFYING)
+            _set_stage(
+                db,
+                attempt,
+                AttemptStage.VERIFYING,
+                occurred_at=finished_at,
+            )
             enqueue_control_plane_attempt_transition(
                 db,
                 attempt=attempt,
@@ -1181,6 +1235,13 @@ def reconcile_stale_submission_commands(
             attempt.outcome = None
             attempt.status = project_legacy_status(AttemptStage.QUEUED)
             attempt.started_at = None
+            record_attempt_stage(
+                db,
+                attempt,
+                stage=AttemptStage.QUEUED,
+                occurred_at=timestamp,
+                transition_key=f"safe-redelivery:{command.id}:{timestamp.isoformat()}",
+            )
             enqueue_control_plane_attempt_transition(
                 db,
                 attempt=attempt,

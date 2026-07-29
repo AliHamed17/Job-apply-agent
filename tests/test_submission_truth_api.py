@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api.routes import applications as applications_route
 from api.routes import dashboard as dashboard_route
+from core.dashboard_operations import build_operations_snapshot
 from core.submission_truth import (
     is_employer_verified,
     latest_employer_verified_count,
@@ -319,6 +320,48 @@ def test_employer_verified_query_rejects_evidence_that_predates_final_action(tmp
     assert latest_employer_verified_count(db) == 0
     attempt = db.query(Submission).one()
     assert not is_employer_verified(attempt)
+    db.close()
+
+
+@pytest.mark.parametrize(
+    ("evidence_delay", "expected_verified"),
+    [
+        (timedelta(seconds=4, microseconds=900_000), True),
+        (timedelta(seconds=5), True),
+        (timedelta(seconds=5, microseconds=800_000), False),
+    ],
+    ids=("fractionally-inside", "exact-boundary", "fractionally-late"),
+)
+def test_sqlite_employer_evidence_time_boundary_matches_python_and_dashboard(
+    tmp_path,
+    evidence_delay: timedelta,
+    expected_verified: bool,
+):
+    db = _db(tmp_path)
+    submitted_at = datetime(2026, 7, 29, 12, 0, 1, 100_000)
+    application = _application(db, "fractional-evidence")
+    db.add(
+        _success_attempt(
+            db,
+            application,
+            clock=submitted_at,
+            final_action_at=submitted_at,
+            submitted_at=submitted_at,
+            evidence_observed_at=submitted_at + evidence_delay,
+        )
+    )
+    db.commit()
+
+    attempt = db.query(Submission).one()
+    snapshot = build_operations_snapshot(
+        db,
+        {"status": "degraded", "checks": {}},
+        now=submitted_at + timedelta(minutes=1),
+    )
+
+    assert is_employer_verified(attempt) is expected_verified
+    assert latest_employer_verified_count(db) == int(expected_verified)
+    assert sum(row["count"] for row in snapshot["evidence_types"]) == int(expected_verified)
     db.close()
 
 

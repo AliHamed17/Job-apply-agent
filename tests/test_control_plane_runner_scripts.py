@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_control_plane_runner.ps1"
+RUNTIME_MODULE = ROOT / "scripts" / "JobAgent.Runtime.psm1"
 
 
 def _powershell() -> str:
@@ -43,12 +44,35 @@ def test_installer_whatif_without_existing_task_returns_simulated_state(tmp_path
     public_key = tmp_path / "control.pub"
     private_key.write_text("private-key-fixture", encoding="ascii")
     public_key.write_text("public-key-fixture", encoding="ascii")
+    local_app_data = tmp_path / "local-app-data"
+    runtime_env = local_app_data / "JobApplyAgent" / "runtime" / "runtime.env"
+    runtime_env.parent.mkdir(parents=True)
+    generated = subprocess.run(
+        [
+            _powershell(),
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            (
+                f"Import-Module {_ps_literal(RUNTIME_MODULE)} -Force; "
+                f"$layout = Get-JobAgentLayout -LocalAppDataRoot "
+                f"{_ps_literal(local_app_data.resolve())}; "
+                "New-JobAgentRuntimeEnvironmentText "
+                "-Layout $layout -BuildSha ('a' * 40)"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    runtime_env.write_text(generated.stdout, encoding="utf-8")
     config = tmp_path / "runner.json"
     config.write_text(
         json.dumps(
             {
                 "private_key_path": str(private_key.resolve()),
                 "control_plane_public_key_path": str(public_key.resolve()),
+                "runtime_env_path": str(runtime_env.resolve()),
             }
         ),
         encoding="utf-8",
@@ -113,7 +137,7 @@ def test_installer_whatif_without_existing_task_returns_simulated_state(tmp_path
     )
     result = json.loads(marker)
     assert result["TaskName"] == "JobApplyAgent-WhatIf-Test"
-    assert result["State"] == "Simulated"
-    assert result["Result"] == "SkippedByShouldProcess"
+    assert result["Classification"] == "Absent"
+    assert result["State"] == "NotInstalled"
+    assert result["Result"] == "WhatIf"
     assert result["Applied"] is False
-    assert result["ExistingTask"] is False

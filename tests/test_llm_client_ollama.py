@@ -13,6 +13,9 @@ import pytest
 
 from core.config import Settings
 from llm.client import OllamaClient
+from llm.qualification_registry import load_qualified_local_model
+
+_QUALIFIED_DIGEST = load_qualified_local_model().digest
 
 
 def _client(**overrides) -> OllamaClient:
@@ -27,11 +30,38 @@ def _client(**overrides) -> OllamaClient:
         return OllamaClient()
 
 
-def _mock_response(content: str):
+def _mock_json_response(payload: object):
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
-    resp.json = MagicMock(return_value={"message": {"role": "assistant", "content": content}})
+    resp.json = MagicMock(return_value=payload)
     return resp
+
+
+def _mock_response(content: str):
+    return _mock_json_response({"message": {"role": "assistant", "content": content}})
+
+
+def _mock_readiness_get() -> AsyncMock:
+    async def get(url: str):
+        if url.endswith("/api/version"):
+            return _mock_json_response({"version": "0.31.1"})
+        if url.endswith("/api/tags"):
+            return _mock_json_response(
+                {
+                    "models": [
+                        {
+                            "name": "qwen2.5:7b",
+                            "model": "qwen2.5:7b",
+                            "digest": _QUALIFIED_DIGEST,
+                            "size": 4_700_000_000,
+                            "details": {"format": "gguf"},
+                        }
+                    ]
+                }
+            )
+        raise AssertionError(f"unexpected Ollama readiness URL: {url}")
+
+    return AsyncMock(side_effect=get)
 
 
 @pytest.mark.asyncio
@@ -39,8 +69,16 @@ async def test_generate_posts_correct_payload_and_parses_content():
     client = _client()
     mock_post = AsyncMock(return_value=_mock_response("Hello from Qwen"))
 
-    with patch("llm.client.httpx.AsyncClient") as mock_ac:
-        mock_ac.return_value.__aenter__.return_value.post = mock_post
+    with (
+        patch("llm.client.httpx.AsyncClient") as mock_ac,
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=True,
+        ),
+    ):
+        transport = mock_ac.return_value.__aenter__.return_value
+        transport.get = _mock_readiness_get()
+        transport.post = mock_post
         result = await client.generate(
             prompt="Say hi", system="You are helpful.", max_tokens=50, temperature=0.7
         )
@@ -68,8 +106,16 @@ async def test_generate_json_forces_json_format_and_parses_dict():
     client = _client()
     mock_post = AsyncMock(return_value=_mock_response('{"question_1": "5 years"}'))
 
-    with patch("llm.client.httpx.AsyncClient") as mock_ac:
-        mock_ac.return_value.__aenter__.return_value.post = mock_post
+    with (
+        patch("llm.client.httpx.AsyncClient") as mock_ac,
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=True,
+        ),
+    ):
+        transport = mock_ac.return_value.__aenter__.return_value
+        transport.get = _mock_readiness_get()
+        transport.post = mock_post
         result = await client.generate_json(prompt="Answer the question")
 
     assert result == {"question_1": "5 years"}
@@ -83,8 +129,16 @@ async def test_no_system_message_when_system_empty():
     client = _client()
     mock_post = AsyncMock(return_value=_mock_response("ok"))
 
-    with patch("llm.client.httpx.AsyncClient") as mock_ac:
-        mock_ac.return_value.__aenter__.return_value.post = mock_post
+    with (
+        patch("llm.client.httpx.AsyncClient") as mock_ac,
+        patch(
+            "llm.qualification_registry.qualified_model_report_is_current",
+            return_value=True,
+        ),
+    ):
+        transport = mock_ac.return_value.__aenter__.return_value
+        transport.get = _mock_readiness_get()
+        transport.post = mock_post
         await client.generate(prompt="hi")
 
     payload = mock_post.call_args.kwargs["json"]
