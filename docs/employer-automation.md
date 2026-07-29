@@ -55,9 +55,10 @@ python -m scripts.portal_session_bootstrap "https://employer.wd5.myworkdayjobs.c
 Sign in and complete MFA directly on the employer page. When the account page
 is visible, return to the terminal and press Enter; only that explicit
 confirmation marks the session ready. Browser state is saved under
-`.portal_profiles/<hostname>/`, which is ignored by Git and must be treated
-like a secret. Run the bootstrap again only when the portal says the session
-expired.
+the configured `PORTAL_BROWSER_PROFILE_ROOT`; the example environment resolves
+that to `.browser-state/portals/<hostname>/`, the same state mounted into
+Compose workers. It is ignored by Git and must be treated like a secret. Run
+the bootstrap again only when the portal says the session expired.
 
 Do not point the application at an active Chrome or Edge profile and do not
 copy their password database. The dedicated profile avoids password extraction
@@ -164,7 +165,8 @@ DRAFT_ONLY=true
 AUTO_APPLY=false
 DRY_RUN=true
 PORTAL_FINAL_SUBMIT_ENABLED=false
-PORTAL_BROWSER_PROFILE_ROOT=.portal_profiles
+JOB_AGENT_BROWSER_STATE_DIR=./.browser-state
+PORTAL_BROWSER_PROFILE_ROOT=${JOB_AGENT_BROWSER_STATE_DIR}/portals
 PORTAL_REUSE_LAST_APPLICATION=true
 ```
 

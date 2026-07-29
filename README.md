@@ -180,6 +180,9 @@ python -m scripts.portal_session_bootstrap "https://employer.example/job/..."
 ```
 
 Complete sign-in and MFA manually. Session readiness does not qualify the form.
+The example environment derives LinkedIn and employer profile paths from
+`JOB_AGENT_BROWSER_STATE_DIR`, so host sign-in commands and Compose workers use
+the same isolated browser state.
 Every inspection creates an expiring immutable plan. Any form, selector,
 application, CV, profile, session, or build change invalidates its authority.
 

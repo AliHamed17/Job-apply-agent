@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import yaml
+from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "scripts" / "JobAgent.Runtime.psm1"
@@ -12,6 +13,7 @@ INSTALL = ROOT / "scripts" / "install_control_plane_runner.ps1"
 UNINSTALL = ROOT / "scripts" / "uninstall_control_plane_runner.ps1"
 STATUS = ROOT / "scripts" / "control_plane_runner_status.ps1"
 COMPOSE = ROOT / "docker-compose.yml"
+ENV_EXAMPLE = ROOT / ".env.example"
 BOOTSTRAP_DOC = ROOT / "docs" / "control-plane-bootstrap.md"
 
 
@@ -234,8 +236,15 @@ def test_status_preserves_unbound_foreign_and_unverifiable_classifications() -> 
 
 def test_compose_uses_only_loopback_ports_and_external_private_mounts() -> None:
     compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    env_text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    host_environment = dotenv_values(ENV_EXAMPLE)
 
     assert compose["name"] == "job-apply-agent"
+    assert "LINKEDIN_BROWSER_PROFILE_DIR=${JOB_AGENT_BROWSER_STATE_DIR}/linkedin" in env_text
+    assert "PORTAL_BROWSER_PROFILE_ROOT=${JOB_AGENT_BROWSER_STATE_DIR}/portals" in env_text
+    browser_state = host_environment["JOB_AGENT_BROWSER_STATE_DIR"]
+    assert host_environment["LINKEDIN_BROWSER_PROFILE_DIR"] == f"{browser_state}/linkedin"
+    assert host_environment["PORTAL_BROWSER_PROFILE_ROOT"] == f"{browser_state}/portals"
     for service in compose["services"].values():
         for port in service.get("ports", []):
             assert str(port).startswith("127.0.0.1:")
