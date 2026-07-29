@@ -6,6 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -18,6 +19,7 @@ from core.operational_labels import QUEUE_LABELS
 from core.operational_metrics import (
     DurableOperationalCollector,
     authoritative_queue_depths,
+    record_attempt_stage,
     record_operational_event,
     register_durable_operational_collector,
 )
@@ -56,6 +58,92 @@ def _record_stage(db, dedup_key: str, *, occurred_at: datetime | None = None) ->
         occurred_at=occurred_at,
         duration_seconds=2.5,
     )
+
+
+def test_attempt_stage_duration_is_labeled_with_exited_stage_and_records_terminal_stage(
+    tmp_path,
+):
+    engine, factory = _sqlite_factory(tmp_path / "metric-stage-duration.db")
+    started = datetime.now(UTC).replace(tzinfo=None)
+    attempt = SimpleNamespace(
+        id=73,
+        adapter_name=None,
+        submitter_name="unknown",
+        adapter_version=None,
+        selector_version=None,
+    )
+    db = factory()
+    try:
+        assert record_attempt_stage(
+            db,
+            attempt,
+            stage="queued",
+            occurred_at=started,
+            transition_key="initial",
+        )
+        assert record_attempt_stage(
+            db,
+            attempt,
+            stage="inspecting",
+            previous_stage="queued",
+            occurred_at=started + timedelta(seconds=2),
+            transition_key="queued-to-inspecting",
+        )
+        assert record_attempt_stage(
+            db,
+            attempt,
+            stage="preparing",
+            previous_stage="inspecting",
+            occurred_at=started + timedelta(seconds=5),
+            transition_key="inspecting-to-preparing",
+        )
+        assert record_attempt_stage(
+            db,
+            attempt,
+            stage="finished",
+            previous_stage="preparing",
+            occurred_at=started + timedelta(seconds=9),
+            transition_key="finished:failed_before_commit",
+        )
+        assert not record_attempt_stage(
+            db,
+            attempt,
+            stage="finished",
+            previous_stage="preparing",
+            occurred_at=started + timedelta(seconds=9),
+            transition_key="finished:failed_before_commit",
+        )
+        db.commit()
+
+        events = (
+            db.query(OperationalMetricEvent)
+            .filter(OperationalMetricEvent.metric_name == "attempt_stage")
+            .order_by(OperationalMetricEvent.occurred_at, OperationalMetricEvent.id)
+            .all()
+        )
+        assert [(event.stage, event.duration_ms) for event in events] == [
+            ("queued", None),
+            ("queued", 2_000),
+            ("inspecting", 3_000),
+            ("preparing", 4_000),
+        ]
+
+        timed_rollups = (
+            db.query(OperationalMetricRollup)
+            .filter(
+                OperationalMetricRollup.metric_name == "attempt_stage",
+                OperationalMetricRollup.duration_count > 0,
+            )
+            .all()
+        )
+        assert {row.stage: (row.duration_count, row.duration_sum_ms) for row in timed_rollups} == {
+            "queued": (1, 2_000),
+            "inspecting": (1, 3_000),
+            "preparing": (1, 4_000),
+        }
+    finally:
+        db.close()
+        engine.dispose()
 
 
 def test_sqlite_concurrent_redelivery_increments_rollup_once(tmp_path):

@@ -401,6 +401,7 @@ def record_attempt_stage(
     attempt,
     *,
     stage: object,
+    previous_stage: object | None = None,
     occurred_at: datetime,
     transition_key: str | None = None,
 ) -> bool:
@@ -421,7 +422,7 @@ def record_attempt_stage(
     )
     duration = (
         max(0.0, (timestamp - previous.occurred_at).total_seconds())
-        if previous is not None
+        if previous_stage is not None and previous is not None
         else None
     )
     ats, adapter_version, selector_version = _attempt_identity(attempt)
@@ -436,7 +437,7 @@ def record_attempt_stage(
         ats=ats,
         adapter_version=adapter_version,
         selector_version=selector_version,
-        stage=stage,
+        stage=previous_stage if previous_stage is not None else stage,
     )
 
 

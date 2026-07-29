@@ -115,6 +115,7 @@ def _set_stage(
         db,
         attempt,
         stage=target,
+        previous_stage=current,
         occurred_at=occurred_at,
     )
 
@@ -258,6 +259,14 @@ def _finish_attempt(
     current = AttemptStage(attempt.stage)
     terminal = AttemptOutcome(outcome.kind)
     require_transition(current, AttemptStage.FINISHED, terminal)
+    record_attempt_stage(
+        db,
+        attempt,
+        stage=AttemptStage.FINISHED,
+        previous_stage=current,
+        occurred_at=now,
+        transition_key=f"finished:{terminal.value}",
+    )
     attempt.stage = AttemptStage.FINISHED.value
     attempt.outcome = terminal.value
     attempt.status = project_legacy_status(AttemptStage.FINISHED, terminal)
@@ -1226,6 +1235,7 @@ def reconcile_stale_submission_commands(
                 now=timestamp,
             )
         else:
+            previous_stage = AttemptStage(attempt.stage)
             command.state = "pending"
             command.claimed_at = None
             command.claimed_by = None
@@ -1239,6 +1249,7 @@ def reconcile_stale_submission_commands(
                 db,
                 attempt,
                 stage=AttemptStage.QUEUED,
+                previous_stage=previous_stage,
                 occurred_at=timestamp,
                 transition_key=f"safe-redelivery:{command.id}:{timestamp.isoformat()}",
             )
