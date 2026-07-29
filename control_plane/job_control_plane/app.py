@@ -2,6 +2,7 @@
 
 import hashlib
 import html
+import logging
 from collections.abc import Generator
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
@@ -66,11 +67,13 @@ from .services import (
 )
 from .vercel_oidc import (
     VERCEL_OIDC_HEADER,
+    VercelOidcDenialCode,
     VercelOidcVerificationError,
     VercelOidcVerifier,
 )
 
 CURRENT_SCHEMA_REVISION = EXPECTED_SCHEMA_REVISION
+LOGGER = logging.getLogger(__name__)
 
 
 class ApiModel(BaseModel):
@@ -194,21 +197,29 @@ def create_app(
         request_too_large = bool(
             content_length and content_length.isdigit() and int(content_length) > 65_536
         )
-        oidc_denied = False
+        oidc_denial_code: VercelOidcDenialCode | None = None
         if runtime.requires_vercel_oidc and not public_liveness:
             oidc_headers = request.headers.getlist(VERCEL_OIDC_HEADER)
-            if len(oidc_headers) != 1 or request_identity_verifier is None:
-                oidc_denied = True
+            if not oidc_headers:
+                oidc_denial_code = VercelOidcDenialCode.MISSING_HEADER
+            elif len(oidc_headers) != 1:
+                oidc_denial_code = VercelOidcDenialCode.HEADER_CARDINALITY
+            elif request_identity_verifier is None:
+                oidc_denial_code = VercelOidcDenialCode.VERIFIER_UNAVAILABLE
             else:
                 try:
                     await run_in_threadpool(
                         request_identity_verifier.verify,
                         oidc_headers[0],
                     )
-                except VercelOidcVerificationError:
-                    oidc_denied = True
+                except VercelOidcVerificationError as exc:
+                    oidc_denial_code = exc.code
         response: Response
-        if oidc_denied:
+        if oidc_denial_code is not None:
+            LOGGER.warning(
+                "vercel_oidc_attestation_denied code=%s",
+                oidc_denial_code.value,
+            )
             response = JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"code": "VERCEL_OIDC_ATTESTATION_FAILED"},

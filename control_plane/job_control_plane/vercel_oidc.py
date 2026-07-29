@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -29,7 +30,13 @@ MAX_JWKS_BYTES = 262_144
 MAX_JWKS_KEYS = 16
 MAX_JSON_NESTING_DEPTH = 32
 MAX_CLOCK_SKEW_SECONDS = 30
-MAX_TOKEN_TTL_SECONDS = 3_600
+# Vercel documents one-hour Preview/Production tokens and twelve-hour local
+# development tokens. Its Python runtime can fall back to the signed
+# VERCEL_OIDC_TOKEN when the internal request token is unavailable. Live
+# Preview qualification has observed that fallback with exact Preview target
+# claims, so retain the strict target check below and cap every accepted token
+# at Vercel's documented absolute twelve-hour ceiling.
+MAX_TOKEN_TTL_SECONDS = 12 * 60 * 60
 DEFAULT_JWKS_CACHE_TTL_SECONDS = 3_600
 DEFAULT_JWKS_REFRESH_COOLDOWN_SECONDS = 30
 _OIDC_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
@@ -39,8 +46,35 @@ JwksDocument = Mapping[str, object]
 JwksFetcher = Callable[[str], JwksDocument]
 
 
+class VercelOidcDenialCode(StrEnum):
+    """Bounded, non-sensitive reason codes for server-side diagnostics."""
+
+    BAD_ISSUER = "BAD_ISSUER"
+    BAD_SIGNATURE = "BAD_SIGNATURE"
+    BAD_TARGET = "BAD_TARGET"
+    BAD_TIME_EXPIRED = "BAD_TIME_EXPIRED"
+    BAD_TIME_IAT = "BAD_TIME_IAT"
+    BAD_TIME_NBF = "BAD_TIME_NBF"
+    BAD_TIME_ORDERING = "BAD_TIME_ORDERING"
+    BAD_TIME_TTL = "BAD_TIME_TTL"
+    HEADER_CARDINALITY = "HEADER_CARDINALITY"
+    JWKS_UNAVAILABLE = "JWKS_UNAVAILABLE"
+    MALFORMED_TOKEN = "MALFORMED_TOKEN"
+    MISSING_HEADER = "MISSING_HEADER"
+    VERIFIER_UNAVAILABLE = "VERIFIER_UNAVAILABLE"
+
+
 class VercelOidcVerificationError(ValueError):
     """Raised without reflecting token or key material."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: VercelOidcDenialCode = VercelOidcDenialCode.MALFORMED_TOKEN,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +187,10 @@ def _decode_json_object(segment: str, *, name: str, max_bytes: int) -> dict[str,
 
 def _jwks_path_for_issuer(issuer: str) -> str:
     if issuer != VERCEL_OIDC_GLOBAL_ISSUER:
-        raise VercelOidcVerificationError("issuer is invalid")
+        raise VercelOidcVerificationError(
+            "issuer is invalid",
+            code=VercelOidcDenialCode.BAD_ISSUER,
+        )
     return "/.well-known/jwks"
 
 
@@ -178,22 +215,37 @@ def fetch_vercel_jwks(issuer: str) -> JwksDocument:
         )
         response = connection.getresponse()
         if response.status != 200:
-            raise VercelOidcVerificationError("JWKS endpoint is unavailable")
+            raise VercelOidcVerificationError(
+                "JWKS endpoint is unavailable",
+                code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+            )
         raw_length = response.getheader("Content-Length")
         if raw_length is not None:
             try:
                 content_length = int(raw_length)
             except ValueError as exc:
-                raise VercelOidcVerificationError("JWKS response is invalid") from exc
+                raise VercelOidcVerificationError(
+                    "JWKS response is invalid",
+                    code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+                ) from exc
             if content_length < 0 or content_length > MAX_JWKS_BYTES:
-                raise VercelOidcVerificationError("JWKS response is invalid")
+                raise VercelOidcVerificationError(
+                    "JWKS response is invalid",
+                    code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+                )
         raw = response.read(MAX_JWKS_BYTES + 1)
     except (OSError, http.client.HTTPException) as exc:
-        raise VercelOidcVerificationError("JWKS endpoint is unavailable") from exc
+        raise VercelOidcVerificationError(
+            "JWKS endpoint is unavailable",
+            code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+        ) from exc
     finally:
         connection.close()
     if len(raw) > MAX_JWKS_BYTES:
-        raise VercelOidcVerificationError("JWKS response is invalid")
+        raise VercelOidcVerificationError(
+            "JWKS response is invalid",
+            code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+        )
     try:
         decoded = raw.decode("utf-8")
         _assert_json_nesting_depth(decoded)
@@ -210,9 +262,15 @@ def fetch_vercel_jwks(issuer: str) -> JwksDocument:
         ValueError,
         RecursionError,
     ) as exc:
-        raise VercelOidcVerificationError("JWKS response is invalid") from exc
+        raise VercelOidcVerificationError(
+            "JWKS response is invalid",
+            code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+        ) from exc
     if not isinstance(value, dict):
-        raise VercelOidcVerificationError("JWKS response is invalid")
+        raise VercelOidcVerificationError(
+            "JWKS response is invalid",
+            code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+        )
     return value
 
 
@@ -302,17 +360,29 @@ class VercelJwksCache:
             if entry is not None and entry.expires_at > now and kid in entry.keys:
                 return entry.keys[kid]
             if now < self._next_network_refresh_at:
-                raise VercelOidcVerificationError("JWKS refresh is rate limited")
+                raise VercelOidcVerificationError(
+                    "JWKS refresh is rate limited",
+                    code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+                )
 
             self._next_network_refresh_at = now + self._refresh_cooldown_seconds
-            keys = _parse_jwks(self._fetcher(issuer))
+            try:
+                keys = _parse_jwks(self._fetcher(issuer))
+            except VercelOidcVerificationError as exc:
+                raise VercelOidcVerificationError(
+                    str(exc),
+                    code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+                ) from exc
             self._entry = _JwksEntry(
                 keys=keys,
                 expires_at=now + self._ttl_seconds,
             )
             key = keys.get(kid)
             if key is None:
-                raise VercelOidcVerificationError("JWT key identifier is unknown")
+                raise VercelOidcVerificationError(
+                    "JWT key identifier is unknown",
+                    code=VercelOidcDenialCode.JWKS_UNAVAILABLE,
+                )
             return key
 
 
@@ -350,7 +420,10 @@ class VercelOidcVerifier:
         if not _OIDC_NAME_PATTERN.fullmatch(owner):
             raise VercelOidcVerificationError("owner claim is invalid")
         if issuer != VERCEL_OIDC_GLOBAL_ISSUER:
-            raise VercelOidcVerificationError("issuer claim is invalid")
+            raise VercelOidcVerificationError(
+                "issuer claim is invalid",
+                code=VercelOidcDenialCode.BAD_ISSUER,
+            )
         return issuer, owner
 
     def _validate_authenticated_claims(
@@ -369,31 +442,61 @@ class VercelOidcVerifier:
         if not _OIDC_NAME_PATTERN.fullmatch(project):
             raise VercelOidcVerificationError("project claim is invalid")
         if audience != f"https://vercel.com/{owner}":
-            raise VercelOidcVerificationError("audience claim is invalid")
+            raise VercelOidcVerificationError(
+                "audience claim is invalid",
+                code=VercelOidcDenialCode.BAD_TARGET,
+            )
         expected_subject = f"owner:{owner}:project:{project}:environment:{environment}"
         if subject != expected_subject:
-            raise VercelOidcVerificationError("subject claim is invalid")
+            raise VercelOidcVerificationError(
+                "subject claim is invalid",
+                code=VercelOidcDenialCode.BAD_TARGET,
+            )
         if (
             owner_id != self._target.scope_id
             or project_id != self._target.project_id
             or environment != self._target.environment
         ):
-            raise VercelOidcVerificationError("deployment target claim is invalid")
+            raise VercelOidcVerificationError(
+                "deployment target claim is invalid",
+                code=VercelOidcDenialCode.BAD_TARGET,
+            )
 
         issued_at = _required_timestamp(claims, "iat")
         not_before = _required_timestamp(claims, "nbf")
         expires_at = _required_timestamp(claims, "exp")
         now = self._wall_clock()
         if issued_at > now + MAX_CLOCK_SKEW_SECONDS:
-            raise VercelOidcVerificationError("issued-at claim is invalid")
+            raise VercelOidcVerificationError(
+                "issued-at claim is invalid",
+                code=VercelOidcDenialCode.BAD_TIME_IAT,
+            )
         if not_before > now + MAX_CLOCK_SKEW_SECONDS:
-            raise VercelOidcVerificationError("not-before claim is invalid")
+            raise VercelOidcVerificationError(
+                "not-before claim is invalid",
+                code=VercelOidcDenialCode.BAD_TIME_NBF,
+            )
         if expires_at <= now - MAX_CLOCK_SKEW_SECONDS:
-            raise VercelOidcVerificationError("expiry claim is invalid")
-        if expires_at <= issued_at or expires_at - issued_at > MAX_TOKEN_TTL_SECONDS:
-            raise VercelOidcVerificationError("token lifetime is invalid")
+            raise VercelOidcVerificationError(
+                "expiry claim is invalid",
+                code=VercelOidcDenialCode.BAD_TIME_EXPIRED,
+            )
+        if expires_at <= issued_at:
+            raise VercelOidcVerificationError(
+                "token lifetime is invalid",
+                code=VercelOidcDenialCode.BAD_TIME_ORDERING,
+            )
+        token_ttl = expires_at - issued_at
+        if token_ttl > MAX_TOKEN_TTL_SECONDS:
+            raise VercelOidcVerificationError(
+                "token lifetime is invalid",
+                code=VercelOidcDenialCode.BAD_TIME_TTL,
+            )
         if not issued_at - MAX_CLOCK_SKEW_SECONDS <= not_before < expires_at:
-            raise VercelOidcVerificationError("token time ordering is invalid")
+            raise VercelOidcVerificationError(
+                "token time ordering is invalid",
+                code=VercelOidcDenialCode.BAD_TIME_ORDERING,
+            )
 
         return VercelOidcClaims(
             issuer=issuer,
@@ -446,7 +549,10 @@ class VercelOidcVerifier:
                 hashes.SHA256(),
             )
         except InvalidSignature as exc:
-            raise VercelOidcVerificationError("JWT signature is invalid") from exc
+            raise VercelOidcVerificationError(
+                "JWT signature is invalid",
+                code=VercelOidcDenialCode.BAD_SIGNATURE,
+            ) from exc
 
         authenticated = self._validate_authenticated_claims(
             claims,
@@ -464,6 +570,7 @@ __all__ = [
     "MAX_TOKEN_BYTES",
     "MAX_TOKEN_TTL_SECONDS",
     "VERCEL_OIDC_HEADER",
+    "VercelOidcDenialCode",
     "VercelJwksCache",
     "VercelOidcClaims",
     "VercelOidcVerificationError",
