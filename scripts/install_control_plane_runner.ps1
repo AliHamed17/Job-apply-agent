@@ -107,8 +107,11 @@ $expected = Get-JobAgentExpectedTaskAction `
     -RepositoryPath $repository `
     -PythonExecutable $python `
     -ConfigPath $config
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$currentUser = ''
+if ($null -ne $existing) {
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+}
 $ownership = Get-JobAgentTaskOwnership `
     -Task $existing `
     -ExpectedAction $expected `
@@ -181,6 +184,10 @@ if (-not $PSCmdlet.ShouldProcess($TaskName, $operation)) {
         Result = 'WhatIf'
     }
     return
+}
+
+if ([string]::IsNullOrWhiteSpace($currentUser)) {
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 
 if ($null -ne $existing -and [string]$existing.State -eq 'Running') {
