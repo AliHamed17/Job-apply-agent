@@ -27,6 +27,7 @@ VERCEL_OIDC_HOST = "oidc.vercel.com"
 MAX_TOKEN_BYTES = 16_384
 MAX_JWKS_BYTES = 262_144
 MAX_JWKS_KEYS = 16
+MAX_JSON_NESTING_DEPTH = 32
 MAX_CLOCK_SKEW_SECONDS = 30
 MAX_TOKEN_TTL_SECONDS = 3_600
 DEFAULT_JWKS_CACHE_TTL_SECONDS = 3_600
@@ -100,10 +101,37 @@ def _finite_json_float(value: str) -> float:
     return parsed
 
 
+def _assert_json_nesting_depth(value: str) -> None:
+    """Reject deeply nested JSON without relying on interpreter recursion limits."""
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_NESTING_DEPTH:
+                raise VercelOidcVerificationError("JSON nesting is too deep")
+        elif character in "]}":
+            depth -= 1
+    # Structural mismatches are normalized by json.loads below.
+
+
 def _decode_json_object(segment: str, *, name: str, max_bytes: int) -> dict[str, object]:
     raw = _decode_base64url(segment, name=name, max_bytes=max_bytes)
     try:
         decoded = raw.decode("utf-8")
+        _assert_json_nesting_depth(decoded)
         value = json.loads(
             decoded,
             object_pairs_hook=_unique_json_object,
@@ -167,8 +195,10 @@ def fetch_vercel_jwks(issuer: str) -> JwksDocument:
     if len(raw) > MAX_JWKS_BYTES:
         raise VercelOidcVerificationError("JWKS response is invalid")
     try:
+        decoded = raw.decode("utf-8")
+        _assert_json_nesting_depth(decoded)
         value = json.loads(
-            raw.decode("utf-8"),
+            decoded,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_json_constant,
             parse_float=_finite_json_float,
@@ -428,6 +458,7 @@ class VercelOidcVerifier:
 
 __all__ = [
     "MAX_CLOCK_SKEW_SECONDS",
+    "MAX_JSON_NESTING_DEPTH",
     "MAX_JWKS_BYTES",
     "MAX_JWKS_KEYS",
     "MAX_TOKEN_BYTES",

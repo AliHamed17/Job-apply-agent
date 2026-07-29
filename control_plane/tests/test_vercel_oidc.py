@@ -24,6 +24,7 @@ from job_control_plane.config import (
 from job_control_plane.crypto import private_key_to_base64url, public_key_to_base64url
 from job_control_plane.db import Base
 from job_control_plane.vercel_oidc import (
+    MAX_JSON_NESTING_DEPTH,
     MAX_JWKS_KEYS,
     MAX_TOKEN_BYTES,
     VERCEL_OIDC_GLOBAL_ISSUER,
@@ -188,6 +189,8 @@ def test_only_exact_global_issuer_tokens_verify(
     assert global_claims.project_id == PROJECT_ID
     assert global_claims.environment == "production"
     global_verifier.verify(_signed_token(rsa_private_key))
+    string_delimiters = _claims(overrides={"opaque": "[{" * (MAX_JSON_NESTING_DEPTH + 1)})
+    global_verifier.verify(_signed_token(rsa_private_key, claims=string_delimiters))
     assert global_fetches == [VERCEL_OIDC_GLOBAL_ISSUER]
 
     team_issuer = f"{VERCEL_OIDC_GLOBAL_ISSUER}/{OWNER}"
@@ -196,6 +199,29 @@ def test_only_exact_global_issuer_tokens_verify(
     with pytest.raises(VercelOidcVerificationError, match="issuer"):
         team_verifier.verify(_signed_token(rsa_private_key, claims=_claims(issuer=team_issuer)))
     assert team_fetches == []
+
+
+def test_json_nesting_bound_is_exact_and_string_aware(
+    rsa_private_key: RSAPrivateKey,
+) -> None:
+    def nested_lists(levels: int) -> object:
+        value: object = 0
+        for _index in range(levels):
+            value = [value]
+        return value
+
+    verifier = _verifier(rsa_private_key)
+    accepted_claims = _claims(
+        overrides={
+            "nested": nested_lists(MAX_JSON_NESTING_DEPTH - 1),
+            "opaque": r"\"[{]}\\tail",
+        }
+    )
+    verifier.verify(_signed_token(rsa_private_key, claims=accepted_claims))
+
+    otherwise_valid_over_depth = _claims(overrides={"nested": nested_lists(MAX_JSON_NESTING_DEPTH)})
+    with pytest.raises(VercelOidcVerificationError, match="JWT claims"):
+        verifier.verify(_signed_token(rsa_private_key, claims=otherwise_valid_over_depth))
 
 
 @pytest.mark.parametrize(
@@ -460,7 +486,11 @@ def test_jwks_transport_uses_only_fixed_vercel_host_and_rejects_redirects(
     response_status[0] = 200
     for malformed_json in (
         b'{"too_large":' + (b"9" * 5_000) + b"}",
-        b'{"too_deep":' + (b"[" * 4_000) + b"0" + (b"]" * 4_000) + b"}",
+        b'{"too_deep":'
+        + (b"[" * MAX_JSON_NESTING_DEPTH)
+        + b"0"
+        + (b"]" * MAX_JSON_NESTING_DEPTH)
+        + b"}",
         b'{"not_finite":1e9999}',
     ):
         response_payload[0] = malformed_json
@@ -580,7 +610,11 @@ def test_duplicate_oidc_headers_are_rejected(
     "raw_claims",
     [
         '{"too_large":' + ("9" * 5_000) + "}",
-        '{"too_deep":' + ("[" * 4_000) + "0" + ("]" * 4_000) + "}",
+        '{"too_deep":'
+        + ("[" * MAX_JSON_NESTING_DEPTH)
+        + "0"
+        + ("]" * MAX_JSON_NESTING_DEPTH)
+        + "}",
         '{"not_finite":1e9999}',
     ],
 )
