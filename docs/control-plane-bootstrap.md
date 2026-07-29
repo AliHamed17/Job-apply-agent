@@ -265,10 +265,12 @@ token from selecting a team-specific JWKS path: the verifier accepts only
 `https://oidc.vercel.com` and fetches only
 `https://oidc.vercel.com/.well-known/jwks`. Vercel then places its short-lived
 signed token in `x-vercel-oidc-token` on each function request.
-Vercel's Python runtime may fall back to its signed environment token when the
-internal request token is unavailable. The verifier still requires the exact
-Preview or Production target and current expiry, rejects development tokens,
-and applies Vercel's documented twelve-hour absolute lifetime ceiling.
+Vercel documents a one-hour lifetime for Preview and Production tokens. The
+verifier enforces that replay boundary as a one-hour maximum age from signed
+`iat`, regardless of a later `exp`, and rejects declared lifetimes beyond
+Vercel's twelve-hour absolute ceiling. Bounded server-only codes distinguish
+an overlong environment fallback from an overlong request token without
+logging token or claim material.
 The isolated project uses the `[tool.vercel]` FastAPI entrypoint and Vercel's
 current Python framework runtime. Do not reintroduce legacy `builds` or
 `routes` entries: those bypass current framework request handling and can

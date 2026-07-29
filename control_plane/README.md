@@ -113,11 +113,13 @@ path. The only accepted issuer is `https://oidc.vercel.com`, and the only JWKS
 request is `https://oidc.vercel.com/.well-known/jwks`. Retrieval does not follow
 redirects and is bounded by response, key-count, one-entry cache, TTL, and
 refresh limits.
-Vercel documents one-hour deployment tokens and twelve-hour development
-tokens. Its Python runtime can fall back to the signed environment token when
-the internal request token is unavailable. The verifier therefore requires the
-exact Preview/Production target and current expiry before applying a hard
-twelve-hour lifetime ceiling; development-scoped tokens remain invalid.
+Vercel documents a one-hour lifetime for Preview and Production tokens. The
+verifier enforces that replay boundary as a one-hour maximum age from the
+signed `iat` claim, regardless of a later signed `exp`. It separately rejects
+declared lifetimes beyond Vercel's twelve-hour absolute token ceiling.
+Server-only diagnostics distinguish an overlong environment fallback from an
+overlong request token without logging either value; development-scoped tokens
+remain invalid.
 Do not create a persistent replacement token or configure a caller-supplied
 scope variable. OIDC authenticates the Vercel deployment, not the human
 operator; the operator session, Origin, and CSRF controls remain mandatory.

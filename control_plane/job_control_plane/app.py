@@ -1,8 +1,10 @@
 """FastAPI surface for the isolated, redacted Vercel control plane."""
 
 import hashlib
+import hmac
 import html
 import logging
+import os
 from collections.abc import Generator
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
@@ -214,6 +216,17 @@ def create_app(
                     )
                 except VercelOidcVerificationError as exc:
                     oidc_denial_code = exc.code
+                    if exc.code is VercelOidcDenialCode.BAD_TIME_TTL:
+                        runtime_environment_token = os.environ.get("VERCEL_OIDC_TOKEN")
+                        oidc_denial_code = (
+                            VercelOidcDenialCode.BAD_TIME_TTL_ENV_FALLBACK
+                            if runtime_environment_token
+                            and hmac.compare_digest(
+                                oidc_headers[0],
+                                runtime_environment_token,
+                            )
+                            else VercelOidcDenialCode.BAD_TIME_TTL_REQUEST
+                        )
         response: Response
         if oidc_denial_code is not None:
             LOGGER.warning(

@@ -27,6 +27,7 @@ from job_control_plane.db import Base
 from job_control_plane.vercel_oidc import (
     MAX_JSON_NESTING_DEPTH,
     MAX_JWKS_KEYS,
+    MAX_TOKEN_AGE_SECONDS,
     MAX_TOKEN_BYTES,
     MAX_TOKEN_TTL_SECONDS,
     VERCEL_OIDC_GLOBAL_ISSUER,
@@ -244,6 +245,13 @@ def test_json_nesting_bound_is_exact_and_string_aware(
         ({"iat": NOW + 31}, "issued-at"),
         ({"nbf": NOW + 31}, "not-before"),
         ({"exp": NOW - 31}, "expiry"),
+        (
+            {
+                "iat": NOW - MAX_TOKEN_AGE_SECONDS - 31,
+                "nbf": NOW - MAX_TOKEN_AGE_SECONDS - 31,
+            },
+            "token age",
+        ),
         ({"exp": NOW + MAX_TOKEN_TTL_SECONDS + 1}, "token lifetime"),
         ({"nbf": NOW - 31}, "time ordering"),
         ({"iat": float(NOW)}, "iat claim"),
@@ -657,6 +665,59 @@ def test_duplicate_oidc_headers_are_rejected(
         engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("matches_environment", "expected_code"),
+    [
+        (True, "BAD_TIME_TTL_ENV_FALLBACK"),
+        (False, "BAD_TIME_TTL_REQUEST"),
+    ],
+)
+def test_overlong_token_source_is_classified_without_logging_values(
+    rsa_private_key: RSAPrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+    matches_environment: bool,
+    expected_code: str,
+) -> None:
+    log_calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        app_module.LOGGER,
+        "warning",
+        lambda *arguments: log_calls.append(arguments),
+    )
+    token = _signed_token(
+        rsa_private_key,
+        claims=_claims(overrides={"exp": NOW + MAX_TOKEN_TTL_SECONDS + 1}),
+    )
+    monkeypatch.setenv(
+        "VERCEL_OIDC_TOKEN",
+        token if matches_environment else "different-runtime-token",
+    )
+    settings = _production_settings()
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        oidc_verifier=_verifier(rsa_private_key),
+    )
+    try:
+        with TestClient(app, base_url=settings.public_origin) as client:
+            response = client.get(
+                "/",
+                headers={VERCEL_OIDC_HEADER: token},
+            )
+            assert response.status_code == 401
+            assert response.json() == {"code": "VERCEL_OIDC_ATTESTATION_FAILED"}
+            assert log_calls == [("vercel_oidc_attestation_denied code=%s", expected_code)]
+            assert token not in repr(log_calls)
+    finally:
+        engine.dispose()
+
+
 def test_verification_errors_expose_only_bounded_diagnostic_codes() -> None:
     error = VercelOidcVerificationError("never log this token-like detail")
 
@@ -665,11 +726,14 @@ def test_verification_errors_expose_only_bounded_diagnostic_codes() -> None:
         "BAD_ISSUER",
         "BAD_SIGNATURE",
         "BAD_TARGET",
+        "BAD_TIME_AGE",
         "BAD_TIME_EXPIRED",
         "BAD_TIME_IAT",
         "BAD_TIME_NBF",
         "BAD_TIME_ORDERING",
         "BAD_TIME_TTL",
+        "BAD_TIME_TTL_ENV_FALLBACK",
+        "BAD_TIME_TTL_REQUEST",
         "HEADER_CARDINALITY",
         "JWKS_UNAVAILABLE",
         "MALFORMED_TOKEN",
