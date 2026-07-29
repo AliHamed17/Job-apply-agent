@@ -5,6 +5,12 @@ redacted coordination metadata. Candidate identity, job URLs, CV identifiers or
 hashes, answers, cover letters, browser state, and Ollama inputs stay on the
 private Windows runner.
 
+This directory is deployable code, not proof of a current production
+deployment. It also does not enable employer submission. The first-five ATS
+adapters remain fixture-qualified only: 87 sanitized fixtures, zero real-URL
+dry runs, zero live canaries, zero qualified form scopes, and zero final
+executors.
+
 ## Trust model
 
 - `GET /health/live` is the only unauthenticated informational route.
@@ -49,6 +55,7 @@ Production requires:
 
 - `APP_ENV=production`
 - `VERCEL_ENV=production` (provided by Vercel)
+- `VERCEL_PROJECT_ID` (provided by Vercel system environment variables)
 - `CONTROL_DATABASE_URL` — dedicated PostgreSQL URL with TLS `sslmode`
 - `CONTROL_PUBLIC_ORIGIN` — exact HTTPS origin, with no path/query/credentials
 - `CONTROL_OPERATOR_TOKEN` — random secret, at least 32 bytes
@@ -58,12 +65,54 @@ Production requires:
 - `CONTROL_SIGNING_KEY_ID` — UUID for the control signing identity
 - `CONTROL_RUNNER_PUBLIC_KEY_B64` — base64url Ed25519 public key
 - `CONTROL_RUNNER_DEVICE_ID` — UUID for the private runner identity
+- `CONTROL_IDENTITY_BUNDLE_DIGEST` — schema-v2 target/bundle attestation,
+  written last and recomputed at startup
 
 Never commit any value for those variables. Preview deployments should receive
 separate non-production values; they remain unable to dispatch.
 
-Enable Vercel system environment variables so `VERCEL_URL` is available. The
-exact deployment hostname is trusted only for host validation and liveness
+From a private Windows host, `scripts/control_plane_identity.py
+configure-vercel` can configure only the seven identity-derived `CONTROL_*`
+values plus the final `CONTROL_IDENTITY_BUNDLE_DIGEST`. Its `--dry-run` never
+decrypts the DPAPI bundle or invokes Vercel. The live command requires an exact
+linked project/scope from a clean local staging checkout outside OneDrive,
+synced folders, and reparse points, plus either a SHA-256/version-pinned package-internal
+native Vercel executable or separately SHA-256-pinned absolute `node.exe` and
+`vercel\dist\vc.js` files. The npm `.cmd` shim is never executed. Both Node/JS
+files are rehashed before every write, and values travel only over stdin with
+a sanitized process environment. The helper writes the bundle digest last, so
+a partial or mixed update makes the next Production/Preview startup fail
+closed. It never configures the database, public origin, or `APP_ENV`. The
+separate `validate-selection` command checks DPAPI-protected schema-v2 target
+metadata and both private/public signing-key bindings without printing private
+material. The separate `copy-operator-token` command uses an owned,
+sequence-bound native Windows clipboard lease and clears after a bounded TTL
+only if the clipboard is unchanged. See the repository-level bootstrap
+runbook for the exact commands.
+
+Enable Vercel system environment variables so `VERCEL_URL` and
+`VERCEL_PROJECT_ID` are available. `VERCEL_ORG_ID` is not a Vercel runtime
+system variable and is neither required nor trusted. The expected scope ID
+comes from the schema-v2 identity digest.
+
+In Project Settings > Security, enable
+**[Secure Backend Access with OIDC Federation](https://vercel.com/docs/oidc)**
+and select **Global issuer mode**. At runtime Vercel places a short-lived token
+in the `x-vercel-oidc-token` request header. Every Production or Preview request
+except minimal `GET`/`HEAD /health/live` fails closed unless the control plane
+verifies the Vercel RS256 signature and exact issuer, audience, subject, time
+window, environment, project ID, and owner ID. The signed `owner_id` must equal
+the scope retained from the identity digest. Team issuer mode is intentionally
+rejected so an unauthenticated token cannot select a team-specific network
+path. The only accepted issuer is `https://oidc.vercel.com`, and the only JWKS
+request is `https://oidc.vercel.com/.well-known/jwks`. Retrieval does not follow
+redirects and is bounded by response, key-count, one-entry cache, TTL, and
+refresh limits.
+Do not create a persistent replacement token or configure a caller-supplied
+scope variable. OIDC authenticates the Vercel deployment, not the human
+operator; the operator session, Origin, and CSRF controls remain mandatory.
+
+The exact deployment hostname is trusted only for host validation and liveness
 checks in production; login, CSRF, and mutations remain restricted to
 `CONTROL_PUBLIC_ORIGIN`. In preview, the exact `VERCEL_URL` is the
 non-dispatching operator origin, so protected preview tests remain possible
@@ -72,6 +121,33 @@ without a wildcard origin.
 Set the Vercel Project Root exactly to this `control_plane` directory. Its
 `requirements.txt` and `vercel.json` are authoritative; do not build the
 function from the parent application's dependency manifest.
+
+Use Preview only with isolated Preview data and identities. For an immutable
+production candidate, disable automatic production-domain assignment, run
+`vercel deploy --prod --skip-domain`, verify that staged Production deployment,
+and then run `vercel promote <deployment-url> --yes`. Promoting a Preview
+triggers a Production rebuild; promoting a staged Production deployment only
+assigns the domain and preserves the verified artifact.
+
+## Restore safety
+
+A restored database contains stale one-use authority and must never be attached
+directly to a deployment. From the repository root, before reconnecting it:
+
+```powershell
+python scripts/quarantine_restored_control_plane.py --dry-run
+python scripts/quarantine_restored_control_plane.py --apply
+```
+
+The quarantine deactivates restored devices, revokes operator sessions, and
+rejects undelivered queued/claimed commands. It does not create runner events,
+submission evidence, or signed revocation envelopes. Run it a second time and
+require zero changed rows, then generate a new device UUID and new Ed25519
+identities. Old devices are never reactivated.
+
+See the repository-level
+[control-plane bootstrap](../docs/control-plane-bootstrap.md) and
+[backup/restore runbook](../docs/control-plane-backup-restore.md).
 
 ## Local verification
 

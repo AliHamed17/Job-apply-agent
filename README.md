@@ -1,353 +1,256 @@
-# AI Job Apply Agent
+# Job Apply Agent
 
-An AI-powered system that monitors WhatsApp for job links, extracts job postings, scores them against your profile, and generates tailored application materials with human approval.
+A private, local-first assistant for discovering jobs, routing a CV, preparing
+application materials, reviewing observed ATS forms, and recording
+evidence-verified outcomes.
+
+## Current verified status
+
+The system is **not a universal or unattended auto-applier**.
+
+- Workday, Greenhouse, Lever, Ashby, and SmartRecruiters are
+  `fixture_qualified` only.
+- The committed evidence contains exactly 87 sanitized fixtures:
+  Workday 9, Greenhouse 22, Lever 28, Ashby 13, and SmartRecruiters 15.
+- Real-URL dry runs completed: 0.
+- Live canaries completed: 0.
+- Qualified form fingerprints/scopes: 0.
+- Enabled final executors: 0.
+- No NVIDIA, employer-tenant, or real-submission qualification is claimed.
+
+The generated [qualification matrix](docs/qualification/adapter-matrix.md)
+binds these numbers to the central registry and five report pairs.
+
+Discovery and preparation can run continuously. Final **Send application**
+remains an explicit operator action for one exact reviewed application or
+reviewed batch. With the current qualification evidence, the final-action gate
+stays closed.
+
+## Submission truth
+
+Preparing, queueing, clicking, redirecting, receiving HTTP 2xx, finding a
+generic success phrase, or expecting an email never makes an application green.
+
+Green requires employer-side evidence tied to the exact attempt, reviewed form
+fingerprint, and verified CV attachment. A possible external action without
+that proof becomes `unknown`, moves to review, and cannot retry automatically.
+
+Attempt stages are:
+
+`queued → inspecting → preparing → ready → committing → verifying → finished`
+
+Terminal outcomes include `confirmed_submitted`, `already_applied`,
+`needs_review`, `unknown`, `failed_before_commit`, `draft_only`,
+`operator_confirmed`, and `legacy_unverified`. Operator reconciliation is
+useful audit information but is not employer-verified green.
+
+## Privacy and safety boundary
+
+The private Windows runner keeps:
+
+- `user_profile.yaml`, `cv_routing.yaml`, and every CV;
+- confirmed answers, generated materials, and form plans;
+- browser profiles, cookies, and employer sessions;
+- Chromium and the browser worker;
+- local Ollama prompts and outputs.
+
+An optional Vercel control plane stores only redacted coordination metadata:
+opaque application/grant/command references, adapter/outcome codes, timestamps,
+and evidence digests.
+
+The project does not:
+
+- extract Chrome or Edge passwords;
+- accept credentials through chat;
+- solve CAPTCHA or bypass MFA/security challenges;
+- use stealth escalation, proxy rotation, or automatic retry after ambiguity;
+- send private application content to Vercel;
+- use an automatic cloud-LLM fallback in production;
+- treat a previous employer application as proof of a new submission.
 
 ## Architecture
 
+The five bounded contexts are:
+
+1. **Job Discovery** — ingest and deduplicate public job metadata.
+2. **Application Preparation** — score, route a CV, generate bounded material,
+   and abstain on unsupported facts.
+3. **Submission Execution** — create a durable attempt, one-use permit, and
+   database-backed command.
+4. **ATS Integration** — inspect through one exact versioned candidate-browser
+   adapter; authorized API transports remain separate and disabled.
+5. **Evidence/Reconciliation** — verify employer evidence or retain a
+   non-retryable unknown outcome.
+
+Redis/Celery may wake work, but PostgreSQL is authoritative. The irreversible
+boundary is persisted before the final action. A worker crash after that
+boundary can never create an automatic duplicate.
+
+## Local model
+
+Production preparation uses local Ollama `qwen2.5:7b`, one inference at a time,
+with schema validation, bounded timeouts, a circuit breaker, and no cloud
+fallback:
+
+```powershell
+ollama pull qwen2.5:7b
+ollama serve
 ```
-WhatsApp Cloud API (user forwards job links → business number)
-        │
-        ▼
-┌─── FastAPI (api/main.py) ──────────────────────────────────┐
-│  POST /webhook/whatsapp   ← ingestion + interactive actions │
-│  GET  /api/jobs           ← list extracted jobs              │
-│  GET  /api/applications   ← approval dashboard              │
-│  POST /api/applications/{id}/approve                         │
-│  POST /api/applications/{id}/reject                          │
-│  POST /api/ingest         ← manual URL ingestion             │
-│  GET  /api/dashboard      ← pipeline summary stats           │
-│  GET  /health | /metrics                                     │
-└────────┬───────────────────────────────────────────────────┘
-         │ enqueue
-         ▼
-┌─── Celery Workers ────────────────────────────────────────┐
-│  1. process_message   → extract URLs                       │
-│  2. process_url       → fetch + parse (JSON-LD/HTML)       │
-│  3. score_job         → score vs profile → skip/draft      │
-│  4. generate_app      → LLM cover letter + Q&A             │
-│  5. submit_app        → submit (if approved) or draft-only │
-└────┬──────────┬────────────┬──────────────────────────────┘
-     ▼          ▼            ▼
-  SQLite     Redis       LLM (OpenAI / Claude)
-```
 
-## WhatsApp Compliance
+Answer resolution is deterministic facts first, then exact user-confirmed
+evidence, approved reusable facts, structured CV evidence, and local-LLM
+synthesis for non-sensitive questions. Authorization, sponsorship,
+citizenship, nationality, clearance, licensing, certifications, demographics,
+consent, and attestations require confirmed evidence. No LLM runs during the
+final external-action stage.
 
-> **Important**: The official WhatsApp Cloud API cannot read messages from arbitrary groups. This system uses the **forward-to-bot** pattern:
->
-> 1. You register a WhatsApp Business number
-> 2. Users forward job links to that number in a 1:1 chat
-> 3. The webhook receives forwarded messages and extracts URLs
-> 4. Results and approval buttons are sent back via WhatsApp
+## Quick start in safe mode
 
-## Quick Start
+Prerequisites:
 
-### Prerequisites
+- Python 3.11 or 3.13;
+- PowerShell 7.2 or newer (`pwsh`) for the managed Windows runtime;
+- Docker Desktop for the managed Windows runtime;
+- local Ollama with `qwen2.5:7b`;
+- Redis for asynchronous workers;
+- PostgreSQL for production and concurrency guarantees;
+- Chromium/Playwright only for explicit browser inspection.
 
-- Python 3.11+
-- Redis (for Celery task queue)
-- A WhatsApp Business Account (optional — you can use manual ingestion)
-- An OpenAI or Anthropic API key (for LLM generation)
+Install:
 
-### 1. Clone and install
-
-```bash
-git clone https://github.com/AliHamed17/Job-apply-agent.git
-cd Job-apply-agent
+```powershell
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Linux/Mac
-pip install -e ".[dev]"
-```
-
-### 2. Configure environment
-
-```bash
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev,browser]"
+playwright install chromium
 copy .env.example .env
-# Edit .env with your API keys
-```
-
-### 3. Edit your profile
-
-```bash
 copy user_profile.yaml.example user_profile.yaml
+copy cv_routing.yaml.example cv_routing.yaml
 ```
 
-Edit the ignored `user_profile.yaml` with your real details. Personal profiles,
-`cv_routing.yaml`, and the `cvs/` directory are local-only; commit only their
-sanitized `.example` templates.
+Keep the safe values:
 
-### 4. Run the server
-
-```bash
-uvicorn api.main:app --reload --port 8000
+```dotenv
+APP_ENV=development
+DRY_RUN=true
+DRAFT_ONLY=true
+AUTO_APPLY=false
+PORTAL_FINAL_SUBMIT_ENABLED=false
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen2.5:7b
+OLLAMA_NO_CLOUD=true
 ```
 
-The database (SQLite) is created automatically on first run.
+Run the API:
 
-### 5. Start Celery workers (optional — for async processing)
-
-```bash
-celery -A worker.celery_app worker --loglevel=info
+```powershell
+python -m uvicorn api.main:app --port 8000
 ```
 
-For a local qualification run without Redis, keep `DRY_RUN=true` and
-`DRAFT_ONLY=true`, then start the fail-closed scheduler:
+Open `http://127.0.0.1:8000/`. The effective-mode banner and readiness checks
+must agree before preparation. A green liveness check does not mean submission
+is available.
 
-```bash
-python -m scripts.run_safe_automation
+For asynchronous preparation, start a worker and Beat only after Redis and the
+database are ready:
+
+```powershell
+python -m celery -A worker.celery_app worker --loglevel=info
+python -m celery -A worker.celery_app beat --loglevel=info
 ```
 
-It runs discovery immediately and then every `DISCOVERY_INTERVAL_H`. LinkedIn
-challenges pause only LinkedIn; the rate-limited public remote-jobs fallback can
-continue on its own six-hour cadence. The runner refuses placeholder profiles
-and never enables final submission.
+## Private profile and CV routing
 
-### 6. Test with manual ingestion
+Edit the ignored `user_profile.yaml`, `cv_routing.yaml`, and `cvs/` directory.
+Only sanitized `.example` templates belong in Git.
 
-```bash
-curl -X POST http://localhost:8000/api/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://boards.greenhouse.io/example/jobs/12345"}'
+Routing uses title, description, seniority, required skills, and ordered
+overrides. It returns a selected CV, confidence, evidence, and fallback reason.
+Low confidence, malformed output, unreadable CVs, and non-finite confidence
+fail closed for review. The selected CV identifier/hash and profile version are
+bound through preparation, form planning, attachment, attempt, and evidence.
+
+## Browser sessions
+
+Use isolated persistent profiles; never point the project at an active
+Chrome/Edge profile:
+
+```powershell
+python -m scripts.portal_session_bootstrap "https://employer.example/job/..."
 ```
 
-### 7. WhatsApp webhook setup (production)
+Complete sign-in and MFA manually. Session readiness does not qualify the form.
+The example environment derives LinkedIn and employer profile paths from
+`JOB_AGENT_BROWSER_STATE_DIR`, so host sign-in commands and Compose workers use
+the same isolated browser state.
+Every inspection creates an expiring immutable plan. Any form, selector,
+application, CV, profile, session, or build change invalidates its authority.
 
-1. Create a Meta Developer Account and WhatsApp Business App
-2. Get your Phone Number ID, API Token, and App Secret
-3. Add them to `.env`
-4. Run `ngrok http 8000` to get a public HTTPS URL
-5. In Meta Developer Console → WhatsApp → Configuration:
-   - Set webhook URL: `https://your-ngrok.ngrok.io/webhook/whatsapp`
-   - Set verify token: your `WHATSAPP_VERIFY_TOKEN` value
-   - Subscribe to `messages` webhook field
+## Main operator interfaces
 
-## Application Modes
+The local Windows API leaves `GET /health/live`, `GET /health/ready`, and
+`GET /metrics` unauthenticated so local process and container probes can use
+them. Bind them to loopback or an internal network; do not publish them through
+Vercel or an internet-facing proxy. Detailed application and operational API
+routes require bearer authentication outside the explicit development-only,
+prepare-only placeholder-auth bypass.
 
-| Mode | Env Var | Default | Behavior |
-|------|---------|---------|----------|
-| Draft Only | `DRAFT_ONLY=true` | **true** | Generate applications but never auto-submit |
-| Auto Prepare | `AUTO_APPLY=true` | **false** | Mark high-score jobs eligible for an explicit review batch |
-| Dry Run | `DRY_RUN=true` | **true in `.env.example`** | Prevent every external submitter from running |
+| Method | Path | Meaning |
+|---|---|---|
+| GET | `/health/live` | Process liveness only |
+| GET | `/health/ready` | Dependency and runtime readiness |
+| GET | `/metrics` | Bounded Prometheus exposition |
+| GET | `/api/runtime/capabilities` | Build, mode, runner, LLM, and send guards |
+| GET | `/api/ats/adapters` | Version and qualification inventory |
+| POST | `/api/applications/{id}/prepare` | Review/prepare; queues no external action |
+| POST | `/api/applications/{id}/inspect` | Build a private form plan |
+| GET | `/api/applications/{id}/form-plan` | Read latest plan and blockers |
+| POST | `/api/applications/{id}/answers/{field_id}/confirm` | Confirm one exact answer |
+| POST | `/api/applications/{id}/submit` | Request exact explicit send; normally disabled now |
+| GET | `/api/submission-attempts/{id}` | Poll the authoritative attempt |
+| POST | `/api/submission-attempts/{id}/reconcile` | Reconcile an unknown attempt |
+| POST | `/api/applications/{id}/retry` | Re-prepare only definitive pre-commit/draft outcomes |
 
-## Continuous preparation and controlled submission
+The deprecated `/approve` route is a preparation alias and never claims
+submission.
 
-The scheduler can discover, score, route a CV, and prepare every suitable job
-without repeated instructions. A score never approves an employment
-application. Review one application or select an exact batch in the dashboard;
-the submission worker then handles the approved set.
+## Vercel control plane
 
-### Enabling continuous preparation
+Vercel cannot run Chromium, Ollama, or the authoritative private application
+workflow. It may host a protected redacted control plane whose one-use commands
+are signed and accepted only by the private runner.
 
-Set these in `.env` (see `.env.example`):
+This is a separate HTTP boundary: the isolated Vercel control plane exposes
+only `/health/live` without an operator session. Its readiness, grant, command,
+dashboard, and runner-management routes remain protected.
 
-```bash
-AUTO_APPLY=true
-MIN_APPLY_SCORE=40
-TASKS_ALWAYS_EAGER=false
+Start with the [control-plane bootstrap](docs/control-plane-bootstrap.md).
+Preview deployments cannot dispatch. A restored control plane deactivates all
+old devices and requires new identities before reconnecting.
+
+## Operations and recovery
+
+- [Production operations](docs/operations.md)
+- [Qualification evidence](docs/qualification/README.md)
+- [Employer automation boundary](docs/employer-automation.md)
+- [Local Ollama form planning](docs/ollama-form-plan-v1.md)
+- [Backup and restore](docs/control-plane-backup-restore.md)
+- [Recovery runbooks](docs/recovery-runbooks.md)
+- [Private-data retention and deletion](docs/private-data-retention.md)
+
+Validate the deterministic qualification aggregate:
+
+```powershell
+python scripts/build_adapter_qualification_matrix.py --check
 ```
 
-- `AUTO_APPLY=true` — computes eligibility for the review queue; it does not
-  bypass approval.
-- `MIN_APPLY_SCORE=40` — minimum score for batch-review eligibility.
-- `TASKS_ALWAYS_EAGER=false` — uses Redis, Celery worker, and Celery Beat for
-  scheduled processing.
+Run focused tests and style checks:
 
-Bring up the full stack (Postgres, Redis, web API, worker, and the scheduler) with:
-
-```bash
-docker-compose up -d
+```powershell
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
 ```
-
-`celery-beat` is the scheduler that periodically triggers LinkedIn discovery (`DISCOVERY_INTERVAL_H`) and digest/outbound jobs; `celery-worker` consumes the `ingestion`, `processing`, `llm`, `submission`, and `discovery` queues.
-
-### One-time browser sessions
-
-LinkedIn discovery and Easy Apply drive a real, persistent browser profile rather than the LinkedIn API (there is no public API for this). Before enabling full-auto, log in once interactively so the session cookie is saved to `LINKEDIN_BROWSER_PROFILE_DIR` (default `.linkedin_profile/`):
-
-```bash
-python -m discovery.login
-```
-
-A browser window opens to the LinkedIn login page — complete login and any 2FA challenge manually. The script detects a successful login (redirect to `/feed`) and closes the window, leaving the authenticated profile on disk for the worker to reuse. Re-run this whenever the session expires or LinkedIn forces a re-login.
-
-For Workday and employer portals, create a tenant-isolated session without
-extracting browser passwords:
-
-```bash
-python -m scripts.portal_session_bootstrap "https://employer.wd5.myworkdayjobs.com/job/..."
-```
-
-See [Employer application automation](docs/employer-automation.md) for the
-NVIDIA/Workday flow, exact batch approval, confirmed evidence, platform
-coverage, audit history, and deployment constraints.
-
-### Uploading your CV
-
-Full-auto scoring and application generation are driven by your parsed CV/profile. Update it any time via either path:
-
-- **Dashboard**: `POST /api/profile/resume` with a PDF file (multipart `file` field) — rebuilds your profile and re-scores pending jobs.
-- **WhatsApp**: send the CV as a PDF document to the bot number — the webhook detects `document` messages with `mime_type: application/pdf`, rebuilds the profile, and re-scores the queue the same way.
-
-Uploads are streamed with a configurable `MAX_RESUME_BYTES` limit (10 MB by
-default), validated as readable non-encrypted PDFs, and parsed before the active
-resume/profile is replaced. Docker stores these files under the shared
-`profile-data/` runtime directory, which is intentionally ignored by Git.
-
-### Governor caps and the kill switch
-
-All LinkedIn actions go through `core/governor.py`'s `RateGovernor`, which enforces, independent of scoring:
-
-- **Daily cap** — `LINKEDIN_DAILY_CAP` applications per day.
-- **Active hours** — `ACTIVE_HOURS` (e.g. `09:00-21:00`); no actions outside this window.
-- **Jittered gaps** — a random delay between `LINKEDIN_MIN_GAP_S` and `LINKEDIN_MAX_GAP_S` between actions, to avoid bot-like bursts.
-- **Cooldown / circuit breaker** — a LinkedIn challenge (CAPTCHA/checkpoint) trips an exponentially increasing cooldown (up to 48h) before any further automated action.
-- **Kill switch** — an operator override that halts all automated LinkedIn actions immediately, independent of the other checks.
-
-Check status or flip the kill switch via the control API:
-
-```bash
-curl -X POST -H "Authorization: Bearer $SECRET_KEY" http://localhost:8000/api/control/kill     # stop everything now
-curl -X POST -H "Authorization: Bearer $SECRET_KEY" http://localhost:8000/api/control/resume   # resume
-curl -H "Authorization: Bearer $SECRET_KEY" http://localhost:8000/api/control/status            # current governor state
-```
-
-### ACCOUNT-RISK WARNING
-
-> **Read before enabling FULL_AUTO.**
->
-> - **LinkedIn**: automating actions against linkedin.com (including Easy Apply) violates LinkedIn's Terms of Service. LinkedIn actively detects and can permanently ban accounts for automated activity, regardless of rate limiting, jitter, or the governor's caps — those controls reduce detection risk and blast radius, they do not eliminate it. Use a LinkedIn account you are willing to lose, not your primary professional identity. You are solely responsible for compliance with LinkedIn's ToS in your jurisdiction.
-> - **WhatsApp**: the CV-upload-by-WhatsApp path in this document refers to the official WhatsApp Cloud API webhook. If you are instead using an unofficial WhatsApp Web automation bridge (e.g. a `whatsapp-web.js`-style bridge, see `bridge/`) to send or receive messages, be aware this also violates WhatsApp's Terms of Service and can result in the connected phone number being banned. Prefer the official Cloud API webhook wherever possible; treat any unofficial bridge as higher-risk and disposable.
-> - Start with `DRY_RUN=true` and/or `DRAFT_ONLY=true` and watch the dashboard before flipping on full auto-submit.
-
-## API Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/health` | No | Health check |
-| GET | `/metrics` | Bearer | Pipeline metrics |
-| GET/POST | `/webhook/whatsapp` | Meta signature | WhatsApp webhook |
-| GET | `/api/jobs` | Bearer | List jobs (filter by status, min_score) |
-| GET | `/api/jobs/{id}` | Bearer | Get job details |
-| GET | `/api/applications` | Bearer | List applications |
-| GET | `/api/applications/{id}` | Bearer | Get application details |
-| POST | `/api/applications/{id}/approve` | Bearer | Approve and queue for submission |
-| POST | `/api/applications/{id}/reject` | Bearer | Reject application |
-| GET | `/api/dashboard` | Bearer | Pipeline summary stats |
-| GET | `/api/dashboard/insights` | Bearer | Actionable backlog, stale-work, bottleneck, and top-opportunity insights |
-| POST | `/api/ingest` | Bearer | Manually ingest a URL |
-
-**Auth**: Set `SECRET_KEY` in `.env`, then pass `Authorization: Bearer <your-secret-key>` header.
-
-## Operator Insights
-
-Use `GET /api/dashboard/insights` when you need an actionable operations view instead of only aggregate dashboard counts. The endpoint returns:
-
-- queue depth by pipeline stage (`urls_pending`, `jobs_extracted`, `applications_draft`, submission states);
-- stale work based on a configurable `stale_hours` query parameter;
-- bottleneck recommendations with severity and remediation steps;
-- top scored opportunities still awaiting action;
-- recent job events within a configurable `window_days` window.
-
-Example:
-
-```bash
-curl -H "Authorization: Bearer $SECRET_KEY" \
-  "http://localhost:8000/api/dashboard/insights?window_days=14&stale_hours=12&limit=5"
-```
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-## Project Structure
-
-```
-job-agent/
-├── api/                    # FastAPI application
-│   ├── main.py             # App with auth, rate limit, CORS middleware
-│   └── routes/             # Webhook, jobs, applications, dashboard
-├── core/                   # Configuration and logging
-│   ├── config.py           # Pydantic settings from env vars
-│   └── logging.py          # structlog setup with correlation IDs
-├── db/                     # Database layer
-│   ├── models.py           # SQLAlchemy ORM (Message, URL, Job, Application, Submission)
-│   └── session.py          # Engine + session factory
-├── ingestion/              # WhatsApp ingestion
-│   ├── whatsapp_webhook.py # (legacy, replaced by api/routes/webhook.py)
-│   └── url_utils.py        # URL normalize, hash, expand, dedup
-├── jobs/                   # Job extraction
-│   ├── fetcher.py          # HTTP fetch with retries, robots.txt, caching
-│   ├── extractor.py        # Parser orchestrator
-│   ├── models.py           # JobData Pydantic model
-│   └── parsers/            # JSON-LD, HTML heuristic, Greenhouse, Lever
-├── llm/                    # LLM integration
-│   ├── client.py           # Pluggable interface (OpenAI / Anthropic)
-│   ├── generation.py       # Cover letter, recruiter msg, Q&A generation
-│   └── prompts.py          # Prompt templates with guardrails
-├── match/                  # Job scoring
-│   └── scoring.py          # Weighted scoring + action decision
-├── profile/                # User profile
-│   ├── models.py           # UserProfile Pydantic model
-│   └── loader.py           # YAML loader with validation
-├── submitters/             # Job board integrations
-│   ├── base.py             # Typed two-phase interface + safe registry
-│   ├── workday_v2.py       # Fixture-qualified candidate-browser adapter
-│   ├── greenhouse_v1.py    # Fixture-qualified candidate-browser adapter
-│   ├── greenhouse.py       # Deprecated fail-closed compatibility shim
-│   ├── lever_v1.py         # Fixture-qualified Lever two-phase domain adapter
-│   ├── lever_playwright.py # Private exact-multipart candidate transport
-│   ├── lever_api.py        # Disabled authorized-API capability
-│   ├── lever.py            # Inert legacy compatibility shim
-│   ├── ashby_v1.py         # Fixture-qualified React-aware domain adapter
-│   ├── ashby_playwright.py # Exact candidate-browser transport
-│   ├── ashby_api.py        # Disabled authorized-API capability
-│   ├── ashby.py            # Inert legacy compatibility shim
-│   ├── smartrecruiters_v1.py # Fixture-qualified candidate domain adapter
-│   ├── smartrecruiters_playwright.py # Private one-shot browser transport
-│   ├── smartrecruiters_api.py # Disabled authorized OAuth capability
-│   └── smartrecruiters.py  # Inert legacy compatibility shim
-├── worker/                 # Async task pipeline
-│   ├── celery_app.py       # Celery configuration
-│   └── tasks.py            # 5-stage pipeline with approval enforcement
-├── tests/                  # Unit tests
-├── .env.example            # Environment variables template
-├── user_profile.yaml.example # Sanitized profile template
-└── pyproject.toml          # Project metadata and dependencies
-```
-
-## Security Checklist
-
-| Item | Status | Notes |
-|------|--------|-------|
-| No plaintext portal credentials | ✅ | Dedicated signed-in profiles; no Chrome/Edge password extraction |
-| Webhook signature verification | ✅ | X-Hub-Signature-256 from Meta |
-| API bearer token auth | ✅ | Middleware checks `SECRET_KEY` |
-| Rate limiting | ✅ | Per-IP middleware, Celery rate limits |
-| Allowed sender whitelist | ✅ | `ALLOWED_SENDERS` env var |
-| DRAFT_ONLY default | ✅ | No external submission by default |
-| Approval enforcement | ✅ | Score eligibility never replaces exact operator approval |
-| Verified confirmation | ✅ | Clicks/timeouts never count as submitted |
-| Unknown reconciliation | ✅ | Indeterminate outcomes cannot auto-retry |
-| robots.txt compliance | ✅ | Checked before fetching pages |
-| Polite crawling | ✅ | Configurable delay between fetches |
-| No CAPTCHA bypass | ✅ | Detects and switches to draft-only |
-| Correlation IDs in logs | ✅ | structlog with request tracing |
-| PII in logs | ⚠️ | Avoid logging full message bodies in production |
-| Data encryption at rest | ⚠️ | Use disk-level encryption for SQLite/Postgres |
-| CORS restricted | ⚠️ | Currently localhost only; configure for production |
-
-## Edge Cases Handled
-
-- **URL shorteners**: Expanded via HEAD requests (bit.ly, t.co, tinyurl, etc.)
-- **Duplicate reposts**: Triple dedup — URL hash, apply_url hash, job signature
-- **Multiple locations**: Parsed from JSON-LD arrays
-- **Bot protection**: Detected via heuristics; gracefully switches to manual/draft
-- **CAPTCHAs**: Never bypassed; switches to draft-only mode
-- **Non-English postings**: Passed through (LLM handles multilingual content)
-- **Pages with no jobs**: Classified and skipped
 
 ## License
 

@@ -72,8 +72,8 @@ def test_greenhouse_prepare_and_send_use_capabilities_without_platform_bypass() 
     assert "app.platform ===" not in modal_actions
 
     send_gate = _function(
-        "liveSendBlockers(application)",
-        "renderApplications()",
+        "liveSendBlockers(application, runtime = runtimeSubmissionState())",
+        "finalSendUiState(application)",
     )
     assert "!hasValidFormPlan(application)" in send_gate
     assert "adapterQualificationBlockers(application)" in send_gate
@@ -81,7 +81,7 @@ def test_greenhouse_prepare_and_send_use_capabilities_without_platform_bypass() 
 
     qualification_gate = _function(
         "adapterQualificationBlockers(application)",
-        "liveSendBlockers(application)",
+        "liveSendBlockers(application, runtime = runtimeSubmissionState())",
     )
     assert "capability.final_execution_enabled !== true" in qualification_gate
     assert "capability.qualified_form_scope" in qualification_gate

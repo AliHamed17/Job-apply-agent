@@ -42,12 +42,24 @@ def test_live_send_is_fail_closed_and_runtime_banner_is_persistent() -> None:
     assert "Dashboard and API releases do not match; reload this page" in APP_JS
     assert 'name="job-agent-ui-digest"' in INDEX_HTML
     assert "A current validated form plan is required" in APP_JS
-    assert "sendBtn.disabled = blockers.length > 0" in APP_JS
+    assert "function finalSendUiState(application)" in APP_JS
+    assert "&& runtime.allowed" in APP_JS
+    assert "&& hasValidFormPlan(application)" in APP_JS
+    assert "&& blockers.length === 0" in APP_JS
+    assert "const planId = plan.plan_id || application?.form_plan_id" in APP_JS
+    assert "plan.plan_id !== application.form_plan_id" in APP_JS
+    assert "plan.fingerprint !== application.form_plan_fingerprint" in APP_JS
+    assert "sendBtn.style.display = sendUi.visible ? 'inline-flex' : 'none'" in APP_JS
+    assert "sendBtn.disabled = !sendUi.visible" in APP_JS
     assert "form_plan_id: app.form_plan_id" in APP_JS
     assert "client_release: LOADED_DASHBOARD_RELEASE" in APP_JS
     assert "ACTIVE_SUBMISSION_STAGES" in APP_JS
     assert "A submission attempt is already in progress" in APP_JS
-    assert "&& !hasActiveSubmissionAttempt(app)" in APP_JS
+    assert "&& !hasActiveSubmissionAttempt(application)" in APP_JS
+    assert 'role="status" aria-live="polite"' in INDEX_HTML
+    assert "Send application is hidden until every live-readiness" in APP_JS
+    assert "Open application details to review every blocker." in APP_JS
+    assert "$('btn-send-app').style.display = 'none'" in APP_JS
 
 
 def test_remote_send_permission_is_explicit_bound_and_never_claims_submission() -> None:
@@ -59,7 +71,8 @@ def test_remote_send_permission_is_explicit_bound_and_never_claims_submission() 
     assert "form_plan_id: app.form_plan_id" in APP_JS
     assert "This does not submit now." in APP_JS
     assert "No application was submitted." in APP_JS
-    assert "remoteSendBtn.disabled = blockers.length > 0" in APP_JS
+    assert "remoteSendBtn.style.display = sendUi.visible ? 'inline-flex' : 'none'" in APP_JS
+    assert "remoteSendBtn.disabled = !sendUi.visible" in APP_JS
 
 
 def test_attempt_status_is_polled_when_api_supplies_a_status_url() -> None:

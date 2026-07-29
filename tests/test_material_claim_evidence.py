@@ -1365,6 +1365,30 @@ async def test_generated_package_is_bound_typed_and_evidence_eligible():
 
 
 @pytest.mark.asyncio
+async def test_normal_material_generation_with_stale_report_never_calls_provider(
+    monkeypatch,
+):
+    client = _TypedMaterialClient()
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda **_kwargs: False,
+    )
+
+    generated = await generate_full_application(
+        _job(),
+        _profile(),
+        client=client,
+        cv_artifact=_artifact(),
+        profile_version=7,
+    )
+
+    assert generated.eligibility_blockers == ["MATERIAL_MODEL_NOT_QUALIFIED"]
+    assert generated.material_package is None
+    assert generated.eligible is False
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_fresh_ollama_client_binds_readiness_before_material_generation(
     monkeypatch,
 ):

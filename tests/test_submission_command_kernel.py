@@ -44,6 +44,7 @@ from db.models import (
     FormPlan,
     Job,
     JobStatus,
+    OperationalMetricEvent,
     Submission,
     SubmissionCommand,
     SubmissionEvidence,
@@ -1079,6 +1080,17 @@ def test_missing_final_executor_finishes_before_commit_without_consuming_permit(
     assert attempt.final_submit_permit.consumed_at is None
     assert attempt.submitted_at is None
     assert not is_employer_verified(attempt)
+    stage_durations = (
+        db.query(OperationalMetricEvent)
+        .filter(
+            OperationalMetricEvent.metric_name == "attempt_stage",
+            OperationalMetricEvent.duration_ms.is_not(None),
+        )
+        .order_by(OperationalMetricEvent.occurred_at, OperationalMetricEvent.id)
+        .all()
+    )
+    assert [event.stage for event in stage_durations] == ["queued", "inspecting"]
+    assert all(event.stage != "finished" for event in stage_durations)
     db.close()
     with pytest.raises(SubmissionAdmissionError) as exc:
         _admit(factory, reviewed, key="direct-resubmit-without-retry")

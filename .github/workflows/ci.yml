@@ -116,6 +116,22 @@ jobs:
           worker/control_plane_client.py worker/control_plane_event_outbox.py
           worker/control_plane_runner.py worker/submission_commands.py
           api/routes/ats.py
+      - name: Typed qualification operations and recovery
+        run: >
+          mypy --follow-imports=skip --ignore-missing-imports
+          --disable-error-code var-annotated
+          --disable-error-code assignment
+          --disable-error-code arg-type
+          --disable-error-code misc
+          --disable-error-code union-attr
+          --disable-error-code return-value
+          api/routes/operations.py
+          core/dashboard_operations.py core/operational_labels.py
+          core/operational_metrics.py core/restore_safety.py
+          scripts/build_adapter_qualification_matrix.py
+          scripts/control_plane_identity.py
+          scripts/quarantine_restored_control_plane.py
+          scripts/quarantine_restored_runtime.py
       - name: Typed local intelligence and form planning
         run: >
           mypy --follow-imports=skip --ignore-missing-imports
@@ -151,9 +167,12 @@ jobs:
       - name: Offline quality contract
         run: |
           python scripts/evaluate_v4_quality.py --check
+          python scripts/build_adapter_qualification_matrix.py --check
           git diff --exit-code -- \
             docs/qualification/v4-quality-baseline.json \
-            docs/qualification/v4-quality-baseline.md
+            docs/qualification/v4-quality-baseline.md \
+            docs/qualification/adapter-matrix.json \
+            docs/qualification/adapter-matrix.md
       - name: Exact local-model qualification artifact
         run: |
           python scripts/build_v4_local_model_material_fixtures.py
@@ -170,10 +189,13 @@ jobs:
         run: >
           bandit -q -lll
           api/main.py api/routes/applications.py api/routes/cv_routing.py
-          api/routes/dashboard.py api/routes/realign.py api/routes/runtime.py
+          api/routes/dashboard.py api/routes/operations.py
+          api/routes/realign.py api/routes/runtime.py
           core/application_audit.py core/config.py core/form_plan_evidence.py
           core/form_planning.py core/form_plan_persistence.py
           core/material_audit.py core/operations.py core/runtime_identity.py
+          core/dashboard_operations.py core/operational_labels.py
+          core/operational_metrics.py core/restore_safety.py
           core/sensitive_policy.py core/submission_domain.py core/submission_service.py
           core/control_plane_review_permits.py core/utils.py db/models.py
           submitters/smartrecruiters.py submitters/smartrecruiters_identity.py
@@ -191,6 +213,10 @@ jobs:
           profile/cv_routing_llm.py profile/models.py
           scripts/evaluate_v4_local_model_qualification.py
           scripts/build_v4_local_model_material_fixtures.py
+          scripts/build_adapter_qualification_matrix.py
+          scripts/control_plane_identity.py
+          scripts/quarantine_restored_control_plane.py
+          scripts/quarantine_restored_runtime.py
           submitters/form_brain.py submitters/registry.py
           submitters/workday_v2.py submitters/workday_playwright.py
           submitters/greenhouse.py submitters/greenhouse_api.py
@@ -309,3 +335,31 @@ jobs:
       - name: Stop operational stack
         if: always()
         run: docker compose down --volumes
+
+  windows-runtime:
+    name: Windows private runtime and ownership contracts
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install runtime test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,postgres]"
+      - name: Verify PowerShell runtime and WhatIf contracts
+        shell: pwsh
+        run: ./tests/windows/JobAgent.Runtime.Tests.ps1
+      - name: Verify identity and Compose privacy contracts
+        shell: pwsh
+        run: >
+          python -m pytest -q
+          tests/test_windows_runtime_assets.py
+          tests/test_control_plane_identity.py
+          tests/test_control_plane_runner.py
+          tests/test_config.py

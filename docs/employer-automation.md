@@ -33,10 +33,12 @@ timeout, generic “success” word, or exception is never treated as proof.
    answer candidates.
 5. The application remains a draft.
 6. The operator reviews one item or selects an exact batch.
-7. A submission attempt is committed as `running` before any external action.
+7. A durable attempt and command are created before any browser work.
 8. The platform adapter fills known fields and stops on unknown required data.
-9. The final state is one of `success`, `failed`, `draft_only`, or `unknown`.
-10. A redacted event and attempt trace is displayed in Automation history.
+9. `committing` is persisted immediately before the one irreversible action.
+10. The terminal outcome is typed; only `confirmed_submitted` with exact
+    employer evidence is green.
+11. A redacted event and attempt trace is displayed in Automation history.
 
 ## One-time employer sign-in
 
@@ -53,36 +55,34 @@ python -m scripts.portal_session_bootstrap "https://employer.wd5.myworkdayjobs.c
 Sign in and complete MFA directly on the employer page. When the account page
 is visible, return to the terminal and press Enter; only that explicit
 confirmation marks the session ready. Browser state is saved under
-`.portal_profiles/<hostname>/`, which is ignored by Git and must be treated
-like a secret. Run the bootstrap again only when the portal says the session
-expired.
+the configured `PORTAL_BROWSER_PROFILE_ROOT`; the example environment resolves
+that to `.browser-state/portals/<hostname>/`, the same state mounted into
+Compose workers. It is ignored by Git and must be treated like a secret. Run
+the bootstrap again only when the portal says the session expired.
 
 Do not point the application at an active Chrome or Edge profile and do not
 copy their password database. The dedicated profile avoids password extraction
 and prevents one employer from receiving another employer's cookies.
 
-## Workday and NVIDIA flow
+## Workday prepared-flow policy
 
-The reusable Workday adapter implements the sanitized flow qualified on the
-NVIDIA tenant:
+The Workday v2 adapter models this flow in sanitized offline fixtures:
 
 1. Open the exact job and click Apply.
 2. Prefer **Use My Last Application** when the tenant offers it.
 3. Reuse existing identity, experience, education, links, and resume.
-4. For NVIDIA, answer the source hierarchy using
-   **Website → NVIDIA.COM**.
-5. Resolve remaining required questions through `FormBrain`.
-6. Stop if confirmed evidence is missing.
-7. Reach Review.
-8. Click Submit only when `PORTAL_FINAL_SUBMIT_ENABLED=true` and the database
-   application was explicitly approved.
-9. Require Workday's submitted/already-applied confirmation.
+4. Resolve remaining required questions through the evidence policy.
+5. Stop if confirmed evidence is missing.
+6. Verify the exact routed CV bytes, not only the displayed filename.
+7. Reach Review and discard during qualification.
+8. Require an application-specific Workday confirmation after any separately
+   qualified final action.
 
-The NVIDIA source path is public workflow metadata, not candidate data. Other
-employers receive a generic Workday policy. Add known, non-personal tenant
-details to a private `employer_workflows.yaml`, using
-`employer_workflows.yaml.example` as the schema. An unknown source value causes
-review rather than a guess.
+This is not evidence from an NVIDIA tenant or any other live employer. No
+real-URL Workday dry run or canary is recorded. Public, non-personal workflow
+metadata may be configured in a private `employer_workflows.yaml`, using
+`employer_workflows.yaml.example` as the schema, but configuration does not
+qualify a tenant. An unknown source value causes review rather than a guess.
 
 ## Confirmed profile evidence
 
@@ -165,22 +165,15 @@ DRAFT_ONLY=true
 AUTO_APPLY=false
 DRY_RUN=true
 PORTAL_FINAL_SUBMIT_ENABLED=false
-PORTAL_BROWSER_PROFILE_ROOT=.portal_profiles
+JOB_AGENT_BROWSER_STATE_DIR=./.browser-state
+PORTAL_BROWSER_PROFILE_ROOT=${JOB_AGENT_BROWSER_STATE_DIR}/portals
 PORTAL_REUSE_LAST_APPLICATION=true
 ```
 
-For a controlled approved submission worker:
-
-```dotenv
-DRAFT_ONLY=false
-DRY_RUN=false
-PORTAL_FINAL_SUBMIT_ENABLED=true
-LIVE_AUTOMATION_ACKNOWLEDGED=true
-```
-
-Production startup rejects contradictory or unacknowledged live settings.
-Keep the final-submit flag false until fixture tests and a review-only run pass
-for the employer tenant.
+The current first-five evidence does not authorize a controlled live worker.
+Keep `PORTAL_FINAL_SUBMIT_ENABLED=false`. A future change to live settings
+requires a separately reviewed adapter/version/form-scope qualification record,
+an exact operator-approved application, and production startup acknowledgement.
 
 ## Audit and reconciliation
 

@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .auth import (
@@ -62,6 +63,11 @@ from .services import (
     require_current_schema,
     sha256_bytes,
     utc_now,
+)
+from .vercel_oidc import (
+    VERCEL_OIDC_HEADER,
+    VercelOidcVerificationError,
+    VercelOidcVerifier,
 )
 
 CURRENT_SCHEMA_REVISION = EXPECTED_SCHEMA_REVISION
@@ -143,10 +149,17 @@ def create_app(
     *,
     engine: Engine | None = None,
     initialize_schema: bool = False,
+    oidc_verifier: VercelOidcVerifier | None = None,
 ) -> FastAPI:
     runtime = settings or Settings.from_env()
     database = engine or build_engine(runtime)
     sessions = build_session_factory(database)
+    request_identity_verifier = oidc_verifier
+    if runtime.requires_vercel_oidc and request_identity_verifier is None:
+        identity_target = runtime.vercel_identity_target
+        if identity_target is None:
+            raise RuntimeError("Vercel runtime identity target is unavailable")
+        request_identity_verifier = VercelOidcVerifier(identity_target)
     if initialize_schema:
         Base.metadata.create_all(database)
 
@@ -159,6 +172,7 @@ def create_app(
     app.state.settings = runtime
     app.state.engine = database
     app.state.sessions = sessions
+    app.state.vercel_oidc_verifier = request_identity_verifier
     invalid_login_limiter = InvalidLoginLimiter()
     app.state.invalid_login_limiter = invalid_login_limiter
 
@@ -172,12 +186,35 @@ def create_app(
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
+        public_liveness = request.url.path == "/health/live" and request.method in {
+            "GET",
+            "HEAD",
+        }
         content_length = request.headers.get("content-length")
         request_too_large = bool(
             content_length and content_length.isdigit() and int(content_length) > 65_536
         )
-        if request_too_large:
-            response: Response = JSONResponse(
+        oidc_denied = False
+        if runtime.requires_vercel_oidc and not public_liveness:
+            oidc_headers = request.headers.getlist(VERCEL_OIDC_HEADER)
+            if len(oidc_headers) != 1 or request_identity_verifier is None:
+                oidc_denied = True
+            else:
+                try:
+                    await run_in_threadpool(
+                        request_identity_verifier.verify,
+                        oidc_headers[0],
+                    )
+                except VercelOidcVerificationError:
+                    oidc_denied = True
+        response: Response
+        if oidc_denied:
+            response = JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"code": "VERCEL_OIDC_ATTESTATION_FAILED"},
+            )
+        elif request_too_large:
+            response = JSONResponse(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 content={"code": "REQUEST_TOO_LARGE"},
             )
@@ -323,14 +360,22 @@ def create_app(
     @app.get("/api/review-grants", include_in_schema=False)
     def list_grants(db: db_dep, _operator: operator_dep) -> dict[str, list[dict[str, object]]]:
         now = utc_now()
+        configured_device = db.get(RunnerDevice, str(runtime.runner_device_id))
         rows = db.scalars(
             select(ReviewGrant)
             .where(ReviewGrant.expires_at > now)
             .order_by(ReviewGrant.created_at.desc())
             .limit(100)
         ).all()
-        return {
-            "grants": [
+        grants: list[dict[str, object]] = []
+        for row in rows:
+            eligibility_state = _review_grant_state(
+                row,
+                configured_device=configured_device,
+                settings=runtime,
+                now=now,
+            )
+            grants.append(
                 {
                     "grant_id": row.id,
                     "application_ref": row.application_ref,
@@ -340,11 +385,11 @@ def create_app(
                     "form_fingerprint_digest": row.form_fingerprint_digest,
                     "expires_at": row.expires_at,
                     "revoked_at": row.revoked_at,
-                    "eligible": row.consumed_at is None and row.revoked_at is None,
+                    "eligibility_state": eligibility_state,
+                    "eligible": eligibility_state == "eligible",
                 }
-                for row in rows
-            ]
-        }
+            )
+        return {"grants": grants}
 
     @app.get("/api/commands", include_in_schema=False)
     def list_commands(db: db_dep, _operator: operator_dep) -> dict[str, list[dict[str, object]]]:
@@ -524,7 +569,23 @@ def create_app(
         commands = db.scalars(
             select(SubmissionCommand).order_by(SubmissionCommand.created_at.desc()).limit(50)
         ).all()
-        return HTMLResponse(_dashboard_html(grants=grants, commands=commands, now=now))
+        configured_device = db.get(RunnerDevice, str(runtime.runner_device_id))
+        grant_states = {
+            row.id: _review_grant_state(
+                row,
+                configured_device=configured_device,
+                settings=runtime,
+                now=now,
+            )
+            for row in grants
+        }
+        return HTMLResponse(
+            _dashboard_html(
+                grants=grants,
+                commands=commands,
+                grant_states=grant_states,
+            )
+        )
 
     return app
 
@@ -580,22 +641,50 @@ def _command_view(row: SubmissionCommand) -> dict[str, object]:
     }
 
 
+def _review_grant_state(
+    grant: ReviewGrant,
+    *,
+    configured_device: RunnerDevice | None,
+    settings: Settings,
+    now: datetime,
+) -> str:
+    """Return the display/send state without mutating restored grant history."""
+
+    if grant.revoked_at is not None:
+        return "revoked"
+    if grant.consumed_at is not None:
+        return "used"
+    if as_utc(grant.expires_at) <= now:
+        return "expired"
+    if not settings.dispatch_allowed:
+        return "dispatch_disabled"
+    if (
+        configured_device is None
+        or configured_device.id != str(settings.runner_device_id)
+        or grant.device_id != configured_device.id
+        or not configured_device.active
+    ):
+        return "runner_disabled"
+    if (
+        configured_device.status != "ready"
+        or not configured_device.boot_id
+        or configured_device.last_seen_at is None
+        or now - as_utc(configured_device.last_seen_at)
+        > timedelta(seconds=settings.runner_offline_seconds)
+    ):
+        return "runner_offline"
+    return "eligible"
+
+
 def _dashboard_html(
     *,
     grants: list[ReviewGrant],
     commands: list[SubmissionCommand],
-    now: datetime,
+    grant_states: dict[str, str],
 ) -> str:
     grant_rows_parts: list[str] = []
     for row in grants:
-        if row.revoked_at is not None:
-            state = "revoked"
-        elif row.consumed_at is not None:
-            state = "used"
-        elif as_utc(row.expires_at) <= now:
-            state = "expired"
-        else:
-            state = "eligible"
+        state = grant_states[row.id]
         grant_rows_parts.append(
             "<tr>"
             f"<td><code>{html.escape(row.id)}</code></td>"

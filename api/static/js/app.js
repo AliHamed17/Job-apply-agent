@@ -31,6 +31,17 @@ const LOADED_DASHBOARD_RELEASE = Object.freeze({
 });
 const QUALIFIED_MATERIAL_PROMPT_VERSION = 'application-materials-v1';
 const QUALIFIED_FORM_PROMPT_VERSION = 'form-resolution-v1';
+const OPERATIONS_ARRAY_LIMIT = 16;
+const OPERATION_DEPENDENCY_NAMES = Object.freeze([
+    'database',
+    'redis',
+    'migration',
+    'shared_storage',
+    'worker',
+    'beat',
+    'browser',
+    'llm',
+]);
 
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -55,6 +66,8 @@ const state = {
     runtimeProbeStatus: 'loading',
     adapterCapabilities: null,
     adapterProbeStatus: 'loading',
+    operationsData: null,
+    operationsProbeStatus: 'loading',
     sendIdempotencyKeys: new Map(),
 };
 
@@ -302,6 +315,7 @@ async function probeJson(endpoint, method = 'GET', body = null) {
 async function refreshAllData() {
     await fetchRuntimeStatus();
     await fetchDashboard();
+    await fetchOperationsDashboard();
     await fetchOverview();
     // Always keep jobs current (used by dashboard histogram + CSV export)
     await fetchJobs();
@@ -619,6 +633,19 @@ async function fetchDashboard() {
     badge.style.display = pending > 0 ? 'inline-block' : 'none';
 }
 
+async function fetchOperationsDashboard() {
+    const result = await probeJson('/api/dashboard/operations');
+    state.operationsData = result.ok && result.data && typeof result.data === 'object'
+        ? result.data
+        : null;
+    state.operationsProbeStatus = result.ok
+        ? 'available'
+        : result.status === 401 || result.status === 403
+            ? 'authentication_required'
+            : 'unavailable';
+    renderOperationsDashboard();
+}
+
 async function fetchApplications() {
     const data = await apiCall('/api/applications');
     if (!data) return;
@@ -702,7 +729,7 @@ function renderDashboard() {
         <div class="stat-card">
             <div class="stat-header"><i data-lucide="scan-search"></i> Browser Qualification</div>
             <div class="stat-value count-anim">${d.browser_qualification_runs ?? 0}</div>
-            <div class="stat-sub">${Object.entries(d.selector_failure_clusters || {}).map(([reason, count]) => `${esc(reason)}: ${count}`).join(' · ') || 'No selector failures'}</div>
+            <div class="stat-sub">See the bounded operational failure clusters below</div>
         </div>
     `;
 
@@ -711,6 +738,302 @@ function renderDashboard() {
     renderPipelineFunnel(d);
     renderScoreHistogram(d);
     renderActivityFeed();
+}
+
+function boundedOperationalItems(value, limit = OPERATIONS_ARRAY_LIMIT) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+        .slice(0, Math.max(0, Math.min(limit, OPERATIONS_ARRAY_LIMIT)));
+}
+
+function operationalCount(value) {
+    const count = Number(value);
+    return Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+}
+
+function operationalToken(value, fallback = 'unknown') {
+    if (value === null || value === undefined || value === '') return fallback;
+    return String(value).replace(/_/g, ' ');
+}
+
+function shortOperationalToken(value, maxLength = 18) {
+    if (value === null || value === undefined || value === '') return 'unknown';
+    const token = String(value);
+    return token.length > maxLength ? `${token.slice(0, maxLength)}…` : token;
+}
+
+function dependencyFallbackFromReadiness() {
+    const checks = state.runtimeCapabilities?.readiness?.checks
+        || state.readiness?.checks
+        || {};
+    return OPERATION_DEPENDENCY_NAMES
+        .filter(name => Object.prototype.hasOwnProperty.call(checks, name))
+        .map(name => {
+            const check = checks[name];
+            const ok = check === true || check?.ok === true;
+            return {
+                name,
+                status: ok ? 'ready' : 'degraded',
+                ok,
+                reason_code: ok ? null : check?.reason_code || null,
+                last_seen_at: check?.last_seen_at || check?.seen_at || null,
+            };
+        });
+}
+
+function adapterFallbackFromRuntime() {
+    return boundedOperationalItems(state.adapterCapabilities).map(adapter => ({
+        ats: adapter.ats,
+        adapter_version: adapter.adapter_version,
+        selector_version: adapter.selector_version,
+        qualification_tier: adapter.qualification_tier,
+        final_execution_enabled: adapter.final_execution_enabled === true,
+    }));
+}
+
+function runtimeIdentityFallback() {
+    const capabilities = state.runtimeCapabilities || {};
+    const release = capabilities.release || {};
+    const worker = capabilities.worker || {};
+    return {
+        build_sha: release.build_sha,
+        protocol_version: release.protocol_version,
+        boot_id: release.boot_id,
+        runner_release: worker.release_id || worker.runner_release,
+    };
+}
+
+function operationalStatusClass(value, ok = null) {
+    const status = String(value || '').toLowerCase();
+    if (ok === false || ['down', 'failed', 'unavailable', 'offline'].includes(status)) {
+        return 'is-danger';
+    }
+    if (['degraded', 'warning', 'stale', 'blocked'].includes(status)) {
+        return 'is-warning';
+    }
+    if (ok === true || ['ready', 'healthy', 'available', 'online'].includes(status)) {
+        return 'is-ready';
+    }
+    return 'is-neutral';
+}
+
+function operationalList(items, {
+    labelKeys,
+    secondaryKeys = [],
+    emptyText,
+    countKeys = ['count', 'value'],
+}) {
+    const rows = boundedOperationalItems(items);
+    if (!rows.length) {
+        return `<div class="operations-empty">${esc(emptyText)}</div>`;
+    }
+    return `<div class="operations-list">${rows.map(item => {
+        const labelValue = labelKeys
+            .map(key => item[key])
+            .find(value => value !== null && value !== undefined && value !== '');
+        const secondary = secondaryKeys
+            .map(key => item[key])
+            .filter(value => value !== null && value !== undefined && value !== '')
+            .map(value => operationalToken(value))
+            .join(' · ');
+        const countValue = countKeys
+            .map(key => item[key])
+            .find(value => value !== null && value !== undefined && value !== '');
+        return `<div class="operations-list-row">
+            <div>
+                <div class="operations-list-label">${esc(operationalToken(labelValue))}</div>
+                ${secondary ? `<div class="operations-list-detail">${esc(secondary)}</div>` : ''}
+            </div>
+            <span class="operations-count">${esc(operationalCount(countValue))}</span>
+        </div>`;
+    }).join('')}</div>`;
+}
+
+function renderOperationsDashboard() {
+    const container = $('operations-dashboard');
+    const generatedAt = $('operations-generated-at');
+    if (!container || !generatedAt) return;
+
+    if (!state.operationsData) {
+        generatedAt.textContent = 'Protected snapshot unavailable';
+        const message = state.operationsProbeStatus === 'authentication_required'
+            ? 'Enter the API Secret to load protected operational evidence.'
+            : state.operationsProbeStatus === 'loading'
+                ? 'Loading protected operational evidence…'
+                : 'Operational evidence is unavailable. Submission safety remains unchanged.';
+        container.innerHTML = `<div class="operations-empty">${esc(message)}</div>`;
+        return;
+    }
+
+    const data = state.operationsData;
+    const dependencies = boundedOperationalItems(data.dependencies);
+    const effectiveDependencies = dependencies.length
+        ? dependencies
+        : dependencyFallbackFromReadiness();
+    const adapterMatrix = boundedOperationalItems(data.adapter_matrix);
+    const effectiveAdapters = adapterMatrix.length
+        ? adapterMatrix
+        : adapterFallbackFromRuntime();
+    const runtimeIdentity = data.runtime_identity && typeof data.runtime_identity === 'object'
+        && !Array.isArray(data.runtime_identity)
+        ? data.runtime_identity
+        : runtimeIdentityFallback();
+    const windowDays = operationalCount(data.window_days);
+    const snapshotTime = fmtDateTime(data.generated_at);
+    generatedAt.textContent = `${snapshotTime} · ${windowDays || 0}-day bounded window`;
+
+    const lastDiscoveryValue = data.last_successful_discovery;
+    const lastDiscoveryAt = lastDiscoveryValue && typeof lastDiscoveryValue === 'object'
+        ? lastDiscoveryValue.finished_at || lastDiscoveryValue.occurred_at || null
+        : lastDiscoveryValue;
+    const readyDependencies = effectiveDependencies.filter(item => (
+        item.ok === true
+        || ['ready', 'healthy', 'available', 'online'].includes(String(item.status || '').toLowerCase())
+    )).length;
+
+    const dependencyHtml = effectiveDependencies.length
+        ? `<div class="operations-dependency-grid">${effectiveDependencies.map(item => {
+            const name = item.name || item.dependency || 'dependency';
+            const status = item.status || (item.ok === true ? 'ready' : item.ok === false ? 'degraded' : 'unknown');
+            const reason = item.reason_code
+                ? `<span class="operations-dependency-reason">${esc(operationalToken(item.reason_code))}</span>`
+                : '';
+            const seenAt = item.last_seen_at || item.seen_at;
+            return `<div class="operations-dependency">
+                <span class="operations-status-dot ${operationalStatusClass(status, item.ok)}" aria-hidden="true"></span>
+                <div>
+                    <div class="operations-dependency-name">${esc(operationalToken(name))}</div>
+                    <div class="operations-dependency-status">
+                        ${esc(operationalToken(status))}${reason}
+                        ${seenAt ? ` · seen ${esc(fmtDateTime(seenAt))}` : ''}
+                    </div>
+                </div>
+            </div>`;
+        }).join('')}</div>`
+        : '<div class="operations-empty">No dependency observations are available.</div>';
+
+    const adapterHtml = effectiveAdapters.length
+        ? `<div class="operations-table-wrap"><table class="operations-table">
+            <thead><tr>
+                <th>ATS</th>
+                <th>Adapter</th>
+                <th>Selector</th>
+                <th>Qualification</th>
+                <th>Final action</th>
+            </tr></thead>
+            <tbody>${effectiveAdapters.map(adapter => {
+                const finalAction = adapter.final_execution_enabled === true
+                    ? 'enabled for qualified scope'
+                    : 'inspection only';
+                return `<tr>
+                    <td>${esc(operationalToken(adapter.ats))}</td>
+                    <td>${esc(shortOperationalToken(adapter.adapter_version))}</td>
+                    <td>${esc(shortOperationalToken(adapter.selector_version))}</td>
+                    <td><span class="operations-tier">${esc(operationalToken(adapter.qualification_tier))}</span></td>
+                    <td>${esc(finalAction)}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table></div>`
+        : '<div class="operations-empty">No versioned adapter inventory is available.</div>';
+
+    container.innerHTML = `
+        <div class="operations-summary-grid">
+            <div class="operations-summary-card">
+                <div class="operations-summary-label">Dependencies ready</div>
+                <div class="operations-summary-value">${esc(readyDependencies)} / ${esc(effectiveDependencies.length)}</div>
+                <div class="operations-summary-detail">A degraded dependency keeps Send disabled.</div>
+            </div>
+            <div class="operations-summary-card">
+                <div class="operations-summary-label">Last successful discovery</div>
+                <div class="operations-summary-value operations-summary-date">${esc(fmtDateTime(lastDiscoveryAt))}</div>
+                <div class="operations-summary-detail">Derived from a completed successful discovery run.</div>
+            </div>
+            <div class="operations-summary-card">
+                <div class="operations-summary-label">Runtime identity</div>
+                <div class="operations-summary-value operations-summary-runtime">
+                    build ${esc(shortOperationalToken(runtimeIdentity.build_sha, 12))}
+                </div>
+                <div class="operations-summary-detail">
+                    protocol ${esc(shortOperationalToken(runtimeIdentity.protocol_version, 16))}
+                    · boot ${esc(shortOperationalToken(runtimeIdentity.boot_id, 12))}
+                    · runner ${esc(shortOperationalToken(runtimeIdentity.runner_release, 12))}
+                </div>
+            </div>
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Dependency health</h4>
+                <span>${esc(effectiveDependencies.length)} bounded checks</span>
+            </div>
+            ${dependencyHtml}
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Versioned adapter matrix</h4>
+                <span>Qualification is scoped to the exact version and selector set</span>
+            </div>
+            ${adapterHtml}
+        </div>
+
+        <div class="operations-card-grid">
+            <div class="operations-card">
+                <div class="operations-card-heading"><h4>Queue depth</h4></div>
+                ${operationalList(data.queue_depth, {
+                    labelKeys: ['queue', 'name'],
+                    emptyText: 'All bounded queues are empty.',
+                })}
+            </div>
+            <div class="operations-card">
+                <div class="operations-card-heading"><h4>Attempt stages</h4></div>
+                ${operationalList(data.attempt_stages, {
+                    labelKeys: ['stage'],
+                    emptyText: 'No attempts in this window.',
+                })}
+            </div>
+            <div class="operations-card">
+                <div class="operations-card-heading"><h4>Attempt outcomes</h4></div>
+                ${operationalList(data.attempt_outcomes, {
+                    labelKeys: ['outcome'],
+                    emptyText: 'No terminal outcomes in this window.',
+                })}
+            </div>
+            <div class="operations-card">
+                <div class="operations-card-heading"><h4>Failure clusters</h4></div>
+                ${operationalList(data.failure_clusters, {
+                    labelKeys: ['reason_code'],
+                    secondaryKeys: ['ats', 'adapter_version', 'selector_version'],
+                    emptyText: 'No bounded failure clusters in this window.',
+                })}
+            </div>
+            <div class="operations-card">
+                <div class="operations-card-heading"><h4>Form resolution</h4></div>
+                ${operationalList(data.form_resolution, {
+                    labelKeys: ['resolver', 'resolver_source'],
+                    secondaryKeys: ['field_type'],
+                    emptyText: 'No form-resolution observations in this window.',
+                })}
+            </div>
+            <div class="operations-card">
+                <div class="operations-card-heading"><h4>Attachment results</h4></div>
+                ${operationalList(data.attachment_results, {
+                    labelKeys: ['result', 'attachment_result'],
+                    secondaryKeys: ['ats'],
+                    emptyText: 'No attachment observations in this window.',
+                })}
+            </div>
+            <div class="operations-card">
+                <div class="operations-card-heading"><h4>Evidence types</h4></div>
+                ${operationalList(data.evidence_types, {
+                    labelKeys: ['evidence_type', 'type'],
+                    secondaryKeys: ['ats'],
+                    emptyText: 'No employer evidence recorded in this window.',
+                })}
+            </div>
+        </div>`;
+    lucide.createIcons();
 }
 
 function renderPipelineFunnel(d) {
@@ -1075,6 +1398,23 @@ function parseServerTimestamp(rawValue) {
 function hasValidFormPlan(application) {
     const plan = application?.form_plan || application?.latest_form_plan || {};
     if (plan.invalidated_at || application?.form_plan_invalidated_at) return false;
+    const planId = plan.plan_id || application?.form_plan_id;
+    const fingerprint = plan.fingerprint || application?.form_plan_fingerprint;
+    if (!planId || !/^[0-9a-f]{64}$/.test(String(fingerprint || ''))) return false;
+    if (
+        plan.plan_id
+        && application?.form_plan_id
+        && plan.plan_id !== application.form_plan_id
+    ) {
+        return false;
+    }
+    if (
+        plan.fingerprint
+        && application?.form_plan_fingerprint
+        && plan.fingerprint !== application.form_plan_fingerprint
+    ) {
+        return false;
+    }
     const explicitlyValid = application?.form_plan_valid === true
         || application?.form_plan_status === 'valid'
         || plan.valid === true
@@ -1188,8 +1528,8 @@ function adapterQualificationBlockers(application) {
     return blockers;
 }
 
-function liveSendBlockers(application) {
-    const blockers = [...runtimeSubmissionState().reasons];
+function liveSendBlockers(application, runtime = runtimeSubmissionState()) {
+    const blockers = [...runtime.reasons];
     const runtimeModel = state.runtimeCapabilities?.llm;
     if (hasActiveSubmissionAttempt(application)) {
         blockers.push('A submission attempt is already in progress');
@@ -1225,6 +1565,29 @@ function liveSendBlockers(application) {
     return [...new Set(blockers)];
 }
 
+function finalSendUiState(application) {
+    const runtime = runtimeSubmissionState();
+    const blockers = liveSendBlockers(application, runtime);
+    const candidate = (
+        isPreparedApplication(application)
+        && !isEmployerVerified(application)
+        && !hasActiveSubmissionAttempt(application)
+    );
+    const visible = (
+        candidate
+        && runtime.allowed
+        && hasValidFormPlan(application)
+        && blockers.length === 0
+    );
+    return { candidate, visible, blockers };
+}
+
+function summarizeSendBlockers(blockers, limit = 2) {
+    const visible = blockers.slice(0, limit);
+    const remaining = Math.max(0, blockers.length - visible.length);
+    return `${visible.join(' · ')}${remaining ? ` · ${remaining} more` : ''}`;
+}
+
 function renderApplications() {
     const filtered = state.applications.filter(
         application => matchesApplicationFilter(application, state.filters.applications)
@@ -1254,6 +1617,16 @@ function renderApplications() {
         const outcome = attemptOutcome(app);
         const verified = isEmployerVerified(app);
         const canRetry = ['failed', 'failed_before_commit', 'draft_only'].includes(outcome);
+        const sendUi = finalSendUiState(app);
+        const sendGuidance = sendUi.candidate && !sendUi.visible
+            ? `<div class="app-action-guidance">
+                <i data-lucide="circle-alert" aria-hidden="true"></i>
+                <span><strong>Send unavailable.</strong>
+                    ${esc(summarizeSendBlockers(sendUi.blockers))}
+                    Open application details to review every blocker.
+                </span>
+            </div>`
+            : '';
 
         // Submission badge
         let subBadge = '';
@@ -1318,6 +1691,7 @@ function renderApplications() {
                 </div>
                 ${subBadge}
                 <div class="app-excerpt">${esc(app.cover_letter || '—')}</div>
+                ${sendGuidance}
             </div>
             <div style="border-top:1px solid var(--border-light);padding-top:14px;margin-top:auto;display:flex;flex-direction:column;gap:8px;">
                 ${isPending
@@ -1944,6 +2318,13 @@ window.openReviewModal = async appId => {
         button.disabled = true;
         button.onclick = null;
     });
+    $('btn-allow-remote-send').style.display = 'none';
+    $('btn-send-app').style.display = 'none';
+    const initialSendReason = $('modal-send-disabled-reason');
+    if (initialSendReason) {
+        initialSendReason.style.display = 'none';
+        initialSendReason.textContent = '';
+    }
     $('btn-approve-app').innerHTML = 'Prepare application';
     $('btn-allow-remote-send').innerHTML = '<i data-lucide="shield-check"></i> Allow remote Send';
     $('btn-send-app').innerHTML = '<i data-lucide="send"></i> Send application';
@@ -2047,11 +2428,7 @@ window.openReviewModal = async appId => {
             title: event.event_type.replace(/_/g, ' '),
             detail: `${event.actor}${event.details?.reason_code ? ' · ' + event.details.reason_code : ''}`,
         })),
-        ...attempts.map(attempt => ({
-            time: attempt.finished_at || attempt.started_at,
-            title: `attempt ${attempt.attempt_number} · ${attempt.status}`,
-            detail: `${attempt.platform || 'unresolved'}${attempt.reason_code ? ' · ' + attempt.reason_code : ''}`,
-        })),
+        ...attempts.map(attemptHistoryItem),
     ].sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
     $('modal-audit-list').innerHTML = history.length
         ? history.map(item => `<div class="qa-item">
@@ -2136,30 +2513,27 @@ window.openReviewModal = async appId => {
     const remoteSendBtn = $('btn-allow-remote-send');
     const sendBtn = $('btn-send-app');
     const sendReason = $('modal-send-disabled-reason');
-    const finalActionVisible = (
-        isPrepared
-        && !isEmployerVerified(app)
-        && !hasActiveSubmissionAttempt(app)
-    );
-    const blockers = liveSendBlockers(app);
+    const sendUi = finalSendUiState(app);
     if (remoteSendBtn) {
-        remoteSendBtn.style.display = finalActionVisible ? 'inline-flex' : 'none';
-        remoteSendBtn.disabled = blockers.length > 0;
-        remoteSendBtn.title = blockers.length
-            ? blockers.join(' · ')
-            : 'Create a one-use, five-minute permit for this exact reviewed application';
+        remoteSendBtn.style.display = sendUi.visible ? 'inline-flex' : 'none';
+        remoteSendBtn.disabled = !sendUi.visible;
+        remoteSendBtn.title = sendUi.visible
+            ? 'Create a one-use, five-minute permit for this exact reviewed application'
+            : '';
         remoteSendBtn.onclick = () => handleAllowRemoteSend(app.id);
     }
     if (sendBtn) {
-        sendBtn.style.display = finalActionVisible ? 'inline-flex' : 'none';
-        sendBtn.disabled = blockers.length > 0;
-        sendBtn.title = blockers.join(' · ');
+        sendBtn.style.display = sendUi.visible ? 'inline-flex' : 'none';
+        sendBtn.disabled = !sendUi.visible;
+        sendBtn.title = '';
         sendBtn.onclick = () => handleSend(app.id);
         if (sendReason) {
-            sendReason.style.display = sendBtn.style.display === 'none' || blockers.length === 0
-                ? 'none'
-                : 'block';
-            sendReason.textContent = blockers.join(' · ');
+            sendReason.style.display = sendUi.candidate && !sendUi.visible
+                ? 'block'
+                : 'none';
+            sendReason.textContent = sendUi.candidate && !sendUi.visible
+                ? `Send application is hidden until every live-readiness and form-plan blocker is resolved: ${sendUi.blockers.join(' · ')}`
+                : '';
         }
     } else if (sendReason) {
         sendReason.style.display = 'none';
@@ -2755,7 +3129,8 @@ function showToast(message, type = 'info') {
     const icons = { success: 'check-circle-2', error: 'alert-circle', info: 'info', warning: 'alert-triangle' };
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    toast.innerHTML = `<i data-lucide="${icons[type] || 'info'}" style="width:16px;height:16px;flex-shrink:0;"></i><span>${message}</span>`;
+    toast.innerHTML = `<i data-lucide="${icons[type] || 'info'}" style="width:16px;height:16px;flex-shrink:0;"></i><span></span>`;
+    toast.querySelector('span').textContent = String(message);
     $('toast-container').appendChild(toast);
     lucide.createIcons();
     setTimeout(() => {
@@ -2774,10 +3149,64 @@ function esc(s) {
         .replace(/"/g, '&quot;');
 }
 
+function attemptHistoryItem(attempt) {
+    const stage = attempt.stage || attempt.status || 'unknown';
+    const outcome = attempt.outcome || attempt.status || 'unknown';
+    const adapterParts = [
+        operationalToken(attempt.platform, 'unresolved ATS'),
+        attempt.adapter_version
+            ? `adapter ${shortOperationalToken(attempt.adapter_version)}`
+            : null,
+        attempt.selector_version
+            ? `selector ${shortOperationalToken(attempt.selector_version)}`
+            : null,
+    ].filter(Boolean);
+    const auditParts = [
+        ...adapterParts,
+        attempt.reason_code ? operationalToken(attempt.reason_code) : null,
+        attempt.form_plan_fingerprint
+            ? `plan ${shortOperationalToken(attempt.form_plan_fingerprint, 14)}`
+            : null,
+        attempt.attachment_verified === true
+            ? 'attachment verified'
+            : attempt.attachment_verified === false
+                ? 'attachment not verified'
+                : null,
+        attempt.verification_kind
+            ? `evidence ${operationalToken(attempt.verification_kind)}`
+            : null,
+        attempt.runner_release
+            ? `runner ${shortOperationalToken(attempt.runner_release, 14)}`
+            : null,
+        attempt.created_at ? `created ${fmtDateTime(attempt.created_at)}` : null,
+        attempt.reconciled_at ? `reconciled ${fmtDateTime(attempt.reconciled_at)}` : null,
+    ].filter(Boolean);
+    return {
+        time: attempt.reconciled_at
+            || attempt.finished_at
+            || attempt.started_at
+            || attempt.created_at,
+        title: `attempt ${attempt.attempt_number} · ${operationalToken(stage)} → ${operationalToken(outcome)}`,
+        detail: auditParts.join(' · '),
+    };
+}
+
 function fmtDate(iso) {
     if (!iso) return '—';
     try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
     catch { return iso; }
+}
+
+function fmtDateTime(iso) {
+    if (!iso) return '—';
+    const date = new Date(iso);
+    if (!Number.isFinite(date.getTime())) return '—';
+    return date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 function timeAgo(date) {

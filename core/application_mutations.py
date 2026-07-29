@@ -20,6 +20,7 @@ from core.application_revision import (
     mark_application_prepared,
     preparation_is_current,
 )
+from core.operational_metrics import record_attempt_outcome, record_attempt_stage
 from db.models import (
     Application,
     FinalSubmitPermit,
@@ -338,12 +339,27 @@ def transition_locked_application_to_skipped(
             or (locked.active_permit is not None and locked.active_permit.consumed_at is not None)
         ):
             raise ApplicationMutationBlockedError("FINAL_ACTION_INDETERMINATE")
+        previous_stage = attempt.stage
+        record_attempt_stage(
+            db,
+            attempt,
+            stage="finished",
+            previous_stage=previous_stage,
+            occurred_at=timestamp,
+            transition_key="operator-cancellation",
+        )
         attempt.stage = "finished"
         attempt.outcome = "failed_before_commit"
         attempt.status = SubmissionStatus.FAILED
         attempt.reason_code = reason_code[:64]
         attempt.finished_at = timestamp
         attempt.submitted_at = None
+        record_attempt_outcome(
+            db,
+            attempt,
+            occurred_at=timestamp,
+            event_kind="operator_cancellation",
+        )
         cancelled_attempt = True
         if locked.active_command is not None:
             locked.active_command.state = "cancelled"

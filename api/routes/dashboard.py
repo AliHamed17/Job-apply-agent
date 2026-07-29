@@ -18,6 +18,16 @@ from core.application_state import (
     reviewable_application_count,
 )
 from core.config import get_settings
+from core.operational_labels import (
+    normalize_adapter_version,
+    normalize_ats,
+    normalize_reason_code,
+    normalize_selector_version,
+    sql_normalize_adapter_version,
+    sql_normalize_ats,
+    sql_normalize_reason_code,
+    sql_normalize_selector_version,
+)
 from core.operations import readiness_report
 from core.submission_truth import (
     latest_employer_verified_count,
@@ -27,6 +37,7 @@ from db.models import (
     Application,
     BrowserQualificationRun,
     CoverLetterFeedback,
+    DiscoveryRun,
     ExtractedURL,
     Job,
     JobStatus,
@@ -206,7 +217,14 @@ async def dashboard_summary(db: Session = Depends(get_db)):
     degraded_dependencies = [
         name for name, result in operations["checks"].items() if not result["ok"]
     ]
-    last_successful_discovery = db.query(func.max(Job.created_at)).scalar()
+    last_successful_discovery = (
+        db.query(func.max(DiscoveryRun.finished_at))
+        .filter(
+            DiscoveryRun.status == "success",
+            DiscoveryRun.finished_at.isnot(None),
+        )
+        .scalar()
+    )
     routing_total = (
         db.query(Application).filter(Application.cv_routing_confidence.isnot(None)).count()
     )
@@ -225,19 +243,58 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         .group_by(Application.outcome)
         .all()
     )
+    cluster_ats = sql_normalize_ats(BrowserQualificationRun.adapter_name).label("normalized_ats")
+    cluster_version = sql_normalize_adapter_version(
+        BrowserQualificationRun.adapter_version,
+        ats_expression=cluster_ats,
+    ).label("normalized_adapter_version")
+    cluster_selector = sql_normalize_selector_version(
+        BrowserQualificationRun.selector_version,
+        ats_expression=cluster_ats,
+    ).label("normalized_selector_version")
+    cluster_reason = sql_normalize_reason_code(BrowserQualificationRun.terminal_reason).label(
+        "normalized_reason_code"
+    )
+    cluster_count = func.count(BrowserQualificationRun.id).label("event_count")
     cluster_rows = (
         db.query(
-            BrowserQualificationRun.selector_version,
-            BrowserQualificationRun.terminal_reason,
-            func.count(BrowserQualificationRun.id),
+            cluster_ats,
+            cluster_version,
+            cluster_selector,
+            cluster_reason,
+            cluster_count,
         )
         .filter(BrowserQualificationRun.qualified.is_(False))
         .group_by(
-            BrowserQualificationRun.selector_version,
-            BrowserQualificationRun.terminal_reason,
+            cluster_ats,
+            cluster_version,
+            cluster_selector,
+            cluster_reason,
         )
+        .order_by(
+            cluster_count.desc(),
+            cluster_ats,
+            cluster_version,
+            cluster_selector,
+            cluster_reason,
+        )
+        .limit(50)
         .all()
     )
+    normalized_clusters: dict[tuple[str, str, str, str], int] = {}
+    for adapter_name, adapter_version, selector_version, reason, count in cluster_rows:
+        ats = normalize_ats(adapter_name)
+        key = (
+            ats,
+            normalize_adapter_version(adapter_version, ats=ats),
+            normalize_selector_version(selector_version, ats=ats),
+            normalize_reason_code(reason),
+        )
+        normalized_clusters[key] = normalized_clusters.get(key, 0) + int(count or 0)
+    bounded_clusters = sorted(
+        normalized_clusters.items(),
+        key=lambda item: (-item[1], *item[0]),
+    )[:50]
 
     return DashboardSummary(
         total_messages=total_messages,
@@ -260,12 +317,17 @@ async def dashboard_summary(db: Session = Depends(get_db)):
         score_distribution=score_distribution,
         operational_status=operations["status"],
         degraded_dependencies=degraded_dependencies,
-        last_successful_discovery=last_successful_discovery,
+        last_successful_discovery=(
+            last_successful_discovery.replace(tzinfo=UTC)
+            if last_successful_discovery is not None and last_successful_discovery.tzinfo is None
+            else last_successful_discovery
+        ),
         cv_routing_total=routing_total,
         cv_routing_abstention_rate=(routing_abstained / routing_total if routing_total else 0.0),
         application_outcomes={outcome: count for outcome, count in outcome_rows},
         selector_failure_clusters={
-            f"{version}:{reason}": count for version, reason, count in cluster_rows
+            f"{ats}:{version}:{selector}:{reason}": count
+            for (ats, version, selector, reason), count in bounded_clusters
         },
         browser_qualification_runs=db.query(BrowserQualificationRun).count(),
     )

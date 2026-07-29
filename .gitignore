@@ -75,6 +75,7 @@ employer_workflows.yaml
 # Browser/session exports and local control-plane device state are private.
 .browser_profiles/
 .browser_state/
+.browser-state/
 browser-data/
 browser-state/
 sessions/

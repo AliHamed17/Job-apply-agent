@@ -63,11 +63,19 @@ from llm.client import OllamaClient  # noqa: E402
 from llm.contracts import (  # noqa: E402
     FORM_RESOLUTION_PROMPT_VERSION,
     MATERIAL_PROMPT_VERSION,
+    DataClassification,
+    GenerationPurpose,
     LLMReasonCode,
     ModelIdentity,
     TypedGenerationError,
 )
-from llm.generation import generate_material_package  # noqa: E402
+from llm.generation import (  # noqa: E402
+    MaterialCompositionPlanV1,
+    MaterialPackageV1,
+    _finalize_material_package,
+    _prepare_material_generation_context,
+)
+from llm.ollama_runtime import OllamaRuntime  # noqa: E402
 from llm.qualification_registry import (  # noqa: E402
     QUALIFIED_MODEL_REGISTRY_PATH,
     QUALIFIED_OLLAMA_SERVER_VERSION,
@@ -126,6 +134,7 @@ _SOURCE_PATHS = {
     ROOT / "core" / "material_audit.py",
     ROOT / "core" / "sensitive_policy.py",
     ROOT / "core" / "submission_domain.py",
+    ROOT / "core" / "submission_truth.py",
     ROOT / "jobs" / "models.py",
     ROOT / "llm" / "claim_evidence.py",
     ROOT / "llm" / "client.py",
@@ -306,11 +315,32 @@ class _MaterialCaseV1(_FixtureModel):
     synthetic_label: Literal["complete_non_sensitive_input"]
 
 
+class _QualificationOllamaRuntime(OllamaRuntime):
+    """Evaluator-local identity policy; production runtime remains report-gated."""
+
+    def _identity_is_current(
+        self,
+        identity: ModelIdentity,
+        server_version: str,
+    ) -> bool:
+        return bool(
+            server_version == QUALIFIED_OLLAMA_SERVER_VERSION
+            and matches_qualified_local_model_registry(
+                provider=identity.provider,
+                model=identity.model,
+                local=identity.local,
+                digest=identity.digest,
+                explicit_digest=self.settings.ollama_expected_model_digest,
+            )
+        )
+
+
 class _InstrumentedOllamaClient(OllamaClient):
     """Count only bounded metadata while never retaining provider content."""
 
     def __init__(self) -> None:
         super().__init__()
+        self.runtime = _QualificationOllamaRuntime(self.settings)
         self.typed_invocations = 0
         self.provider_attempts = 0
         self.provider_payloads = 0
@@ -374,6 +404,72 @@ class _InstrumentedOllamaClient(OllamaClient):
             raise
         finally:
             self._active_calls -= 1
+
+
+def _qualification_material_package_is_provisionally_eligible(
+    package: MaterialPackageV1,
+    client: _InstrumentedOllamaClient,
+) -> bool:
+    """Apply the exact content predicate without granting production eligibility."""
+
+    identity = package.model_identity
+    return bool(
+        package.qualification_only
+        and not package.eligible
+        and package._meets_non_identity_eligibility_constraints()
+        and package.prompt_version == MATERIAL_PROMPT_VERSION
+        and identity == client.model_identity
+        and client.runtime.ollama_server_version == QUALIFIED_OLLAMA_SERVER_VERSION
+        and matches_qualified_local_model_registry(
+            provider=identity.provider,
+            model=identity.model,
+            local=identity.local,
+            digest=identity.digest,
+            explicit_digest=client.settings.ollama_expected_model_digest,
+        )
+    )
+
+
+async def _generate_qualification_material_package(
+    job: JobData,
+    profile: UserProfile,
+    *,
+    cv_artifact: CVArtifact,
+    profile_version: int,
+    client: _InstrumentedOllamaClient,
+) -> MaterialPackageV1:
+    """Exercise production prompt/schema/audit code on an evaluator-tainted package."""
+
+    context = _prepare_material_generation_context(
+        job,
+        profile,
+        cv_artifact=cv_artifact,
+        profile_version=profile_version,
+    )
+    generated = await client.generate_typed(
+        response_model=MaterialCompositionPlanV1,
+        prompt=context.prompt,
+        purpose=GenerationPurpose.COVER_LETTER,
+        prompt_version=MATERIAL_PROMPT_VERSION,
+        deadline=datetime.now(UTC)
+        + timedelta(seconds=client.settings.ollama_request_timeout_seconds),
+        data_classification=DataClassification.PRIVATE_APPLICATION,
+        system=context.system,
+        max_tokens=1600,
+        temperature=0.1,
+    )
+    package = _finalize_material_package(
+        profile,
+        cv_artifact=cv_artifact,
+        profile_version=profile_version,
+        context=context,
+        generated=generated,
+        expected_identity=client.model_identity,
+        qualification_only=True,
+    )
+    if package.eligible:
+        raise RuntimeError("qualification-only material became production eligible")
+    return package
 
 
 def _safe_reason(value: object) -> str:
@@ -813,18 +909,23 @@ def _decision_matches(
 
 
 def _progress(phase: str, completed: int, total: int, started: float) -> None:
-    print(
-        json.dumps(
-            {
-                "phase": phase,
-                "completed": completed,
-                "total": total,
-                "elapsed_seconds": round(time.perf_counter() - started, 1),
-            },
-            sort_keys=True,
-        ),
-        flush=True,
-    )
+    try:
+        print(
+            json.dumps(
+                {
+                    "phase": phase,
+                    "completed": completed,
+                    "total": total,
+                    "elapsed_seconds": round(time.perf_counter() - started, 1),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+    except (BrokenPipeError, OSError):
+        # Aggregate progress is optional telemetry. A detached caller or closed
+        # terminal must never invalidate an otherwise valid qualification run.
+        return
 
 
 def _suppress_application_logs() -> None:
@@ -1234,7 +1335,7 @@ async def _evaluate_materials(
             family_counts[row.family] += 1
             before = _inference_snapshot(client)
             try:
-                package = await generate_material_package(
+                package = await _generate_qualification_material_package(
                     row.job,
                     profile,
                     cv_artifact=artifact,
@@ -1248,7 +1349,11 @@ async def _evaluate_materials(
                 successful_generations += successes
                 provider_cases += int(attempts > 0)
                 successful_generation_cases += int(successes == 1)
-                if package.eligible:
+                provisionally_eligible = _qualification_material_package_is_provisionally_eligible(
+                    package,
+                    client,
+                )
+                if provisionally_eligible:
                     eligible += 1
                 else:
                     blocked += 1
@@ -1269,14 +1374,14 @@ async def _evaluate_materials(
                     # cannot hide it behind an empty denominator.
                     unsupported_claims += 1
                 unsupported_eligible += int(
-                    package.eligible
+                    provisionally_eligible
                     and (
                         "UNSUPPORTED_CLAIM" in package.eligibility_blockers
                         or any(not claim.supported for claim in package.claim_evidence)
                     )
                 )
                 sensitive_eligible += int(
-                    package.eligible
+                    provisionally_eligible
                     and "SENSITIVE_CLAIM_PROHIBITED" in package.eligibility_blockers
                 )
                 del package
@@ -1739,11 +1844,7 @@ async def evaluate_local_model(
 ) -> dict[str, Any]:
     """Run qualification inside the only context allowed before a report exists."""
 
-    with patch(
-        "llm.qualification_registry.qualified_model_report_is_current",
-        return_value=True,
-    ):
-        return await _evaluate_local_model_bootstrap(fixtures, progress=progress)
+    return await _evaluate_local_model_bootstrap(fixtures, progress=progress)
 
 
 def _require_exact_keys(

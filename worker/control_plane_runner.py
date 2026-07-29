@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import re
 import signal
 import sys
@@ -17,7 +18,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from core.config import Settings, get_settings
+from core.config import (
+    JOB_AGENT_ENV_FILE,
+    Settings,
+    get_settings,
+)
 from core.control_plane_review_permits import (
     ControlPlaneReviewGrantError,
     ReviewGrantProjection,
@@ -46,7 +51,11 @@ from db.models import (
     ControlPlaneCommandReceipt,
     SubmissionCommand,
 )
-from db.session import get_session_factory
+from db.session import (
+    create_engine_for_settings,
+    create_session_factory_for_engine,
+    get_session_factory,
+)
 from submitters.platforms import adapter_for_url
 from worker.control_plane_client import ControlPlaneClient, ControlPlaneClientConfig
 from worker.control_plane_event_outbox import (
@@ -173,8 +182,17 @@ class AcceptedControlCommand:
         )
 
 
-def _capabilities(settings: Settings) -> Mapping[str, object]:
-    return build_runtime_capabilities(settings, readiness_report(settings))
+def _capabilities(
+    settings: Settings,
+    *,
+    engine=None,
+) -> Mapping[str, object]:
+    return build_runtime_capabilities(
+        settings,
+        readiness_report(settings, engine=engine)
+        if engine is not None
+        else readiness_report(settings),
+    )
 
 
 def _client_release(capabilities: Mapping[str, object]) -> ClientReleaseIdentity:
@@ -403,6 +421,7 @@ class RunnerConfig:
     control_plane_audience: str
     private_key_path: Path
     control_plane_public_key_path: Path
+    runtime_env_path: Path | None = None
     poll_interval_seconds: float = 10.0
     heartbeat_interval_seconds: int = HEARTBEAT_INTERVAL_SECONDS
     offline_after_seconds: int = RUNNER_OFFLINE_AFTER_SECONDS
@@ -420,6 +439,11 @@ class RunnerConfig:
         project_root = Path(__file__).resolve().parents[1]
         if self.private_key_path.resolve().is_relative_to(project_root):
             raise ControlPlaneRunnerError("RUNNER_PRIVATE_KEY_PATH_NOT_EXTERNAL")
+        if self.runtime_env_path is not None:
+            if not self.runtime_env_path.is_absolute():
+                raise ControlPlaneRunnerError("RUNNER_ENV_PATH_NOT_ABSOLUTE")
+            if self.runtime_env_path.resolve().is_relative_to(project_root):
+                raise ControlPlaneRunnerError("RUNNER_ENV_PATH_NOT_EXTERNAL")
         if not 5 <= self.poll_interval_seconds <= HEARTBEAT_INTERVAL_SECONDS:
             raise ControlPlaneRunnerError("RUNNER_POLL_INTERVAL_INVALID")
         if self.heartbeat_interval_seconds != HEARTBEAT_INTERVAL_SECONDS:
@@ -434,6 +458,45 @@ class RunnerConfig:
             f"control_plane_url={self.control_plane_url!r}, "
             f"device_id={self.device_id!r})"
         )
+
+
+def _validated_runtime_env(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    try:
+        env_size = path.stat().st_size
+    except OSError as exc:
+        raise ControlPlaneRunnerError("RUNNER_ENV_UNAVAILABLE") from exc
+    if not path.is_file() or not 0 < env_size <= 64 * 1024:
+        raise ControlPlaneRunnerError("RUNNER_ENV_INVALID")
+    return path
+
+
+def activate_runner_runtime(path: Path | None) -> Settings:
+    """Activate one validated, authoritative settings source for this process."""
+
+    runtime_env_path = _validated_runtime_env(path)
+    if runtime_env_path is None:
+        raise ControlPlaneRunnerError("RUNNER_ENV_REQUIRED")
+    previous_selector = os.environ.get(JOB_AGENT_ENV_FILE)
+    try:
+        os.environ[JOB_AGENT_ENV_FILE] = str(runtime_env_path)
+        get_settings.cache_clear()
+        settings = get_settings()
+        settings.validate_runtime()
+    except (OSError, ValueError):
+        if previous_selector is None:
+            os.environ.pop(JOB_AGENT_ENV_FILE, None)
+        else:
+            os.environ[JOB_AGENT_ENV_FILE] = previous_selector
+        get_settings.cache_clear()
+        # Do not include validation input or file contents in runner output.
+        raise ControlPlaneRunnerError("RUNNER_ENV_UNSAFE") from None
+
+    # The validated instance remains cached for every subsequent global
+    # settings consumer in this process; later file edits cannot split the
+    # runner's engine/session/readiness configuration.
+    return settings
 
 
 def load_runner_config(path: Path) -> RunnerConfig:
@@ -464,6 +527,7 @@ def load_runner_config(path: Path) -> RunnerConfig:
         "control_plane_audience",
         "private_key_path",
         "control_plane_public_key_path",
+        "runtime_env_path",
         "poll_interval_seconds",
         "heartbeat_interval_seconds",
         "offline_after_seconds",
@@ -475,6 +539,7 @@ def load_runner_config(path: Path) -> RunnerConfig:
         "control_plane_audience",
         "private_key_path",
         "control_plane_public_key_path",
+        "runtime_env_path",
     }.issubset(values):
         raise ControlPlaneRunnerError("RUNNER_CONFIG_INVALID")
     forbidden = ("secret", "token", "password", "private_key_pem", "key_material")
@@ -486,13 +551,18 @@ def load_runner_config(path: Path) -> RunnerConfig:
         if unexpected:
             raise ControlPlaneRunnerError("RUNNER_CONFIG_CONTAINS_SECRET")
     try:
-        return RunnerConfig(
+        config = RunnerConfig(
             control_plane_url=str(values["control_plane_url"]),
             device_id=str(values["device_id"]),
             control_signing_key_id=str(values["control_signing_key_id"]),
             control_plane_audience=str(values["control_plane_audience"]),
             private_key_path=Path(str(values["private_key_path"])),
             control_plane_public_key_path=Path(str(values["control_plane_public_key_path"])),
+            runtime_env_path=(
+                Path(str(values["runtime_env_path"]))
+                if values.get("runtime_env_path") is not None
+                else None
+            ),
             poll_interval_seconds=float(values.get("poll_interval_seconds", 10.0)),
             heartbeat_interval_seconds=int(
                 values.get("heartbeat_interval_seconds", HEARTBEAT_INTERVAL_SECONDS)
@@ -501,6 +571,8 @@ def load_runner_config(path: Path) -> RunnerConfig:
                 values.get("offline_after_seconds", RUNNER_OFFLINE_AFTER_SECONDS)
             ),
         )
+        _validated_runtime_env(config.runtime_env_path)
+        return config
     except (KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, ControlPlaneRunnerError):
             raise
@@ -556,6 +628,7 @@ class ControlPlaneRunner:
         client: ControlPlaneClient | None = None,
         key_loader: Callable[[Path], bytes] = _read_private_path,
         settings: Settings | None = None,
+        session_factory: Callable[[], Any] | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ):
         self.config = config
@@ -563,7 +636,22 @@ class ControlPlaneRunner:
             ControlPlaneClientConfig(config.control_plane_url)
         )
         self._owns_client = client is None
-        self._settings = settings or get_settings()
+        if settings is None:
+            self._settings = activate_runner_runtime(config.runtime_env_path)
+        else:
+            try:
+                settings.validate_runtime()
+            except ValueError:
+                raise ControlPlaneRunnerError("RUNNER_ENV_UNSAFE") from None
+            self._settings = settings
+        try:
+            self._database_engine = create_engine_for_settings(self._settings)
+            self._session_factory = session_factory or create_session_factory_for_engine(
+                self._database_engine
+            )
+        except Exception:
+            # Driver/configuration failures are bounded and never echo a URL.
+            raise ControlPlaneRunnerError("RUNNER_DATABASE_CONFIG_INVALID") from None
         self._clock = clock
         self._protocol = _protocol_module()
         self._crypto = _crypto_module()
@@ -591,6 +679,26 @@ class ControlPlaneRunner:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def _open_database_session(self):
+        factory = getattr(self, "_session_factory", None)
+        if factory is None:
+            # Compatibility for narrowly constructed test doubles. A real
+            # runner always owns the factory created in ``__init__``.
+            factory = get_session_factory()
+        return factory()
+
+    def _runtime_readiness(self) -> Mapping[str, object]:
+        engine = getattr(self, "_database_engine", None)
+        if engine is None:
+            return readiness_report(self._settings)
+        return readiness_report(self._settings, engine=engine)
+
+    def _runtime_capabilities(self) -> Mapping[str, object]:
+        engine = getattr(self, "_database_engine", None)
+        if engine is None:
+            return _capabilities(self._settings)
+        return _capabilities(self._settings, engine=engine)
 
     def _signed_envelope(
         self,
@@ -693,7 +801,7 @@ class ControlPlaneRunner:
 
     async def _heartbeat(self, now: datetime) -> None:
         identity = get_runtime_identity()
-        readiness = readiness_report(self._settings)
+        readiness = self._runtime_readiness()
         status = "ready" if readiness.get("status") == "ready" else "degraded"
         payload = {
             "boot_id": self._boot_id,
@@ -721,7 +829,7 @@ class ControlPlaneRunner:
         await self.client.publish_review_grant(envelope)
 
     async def _publish_one_review_grant(self) -> bool:
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             claim = claim_review_grant_projection(
                 db,
@@ -732,7 +840,7 @@ class ControlPlaneRunner:
         if claim is None:
             return False
         grant_id, claim_token = claim
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             projection = load_claimed_review_grant_projection(
                 db,
@@ -753,7 +861,7 @@ class ControlPlaneRunner:
         try:
             await self.publish_review_grant(projection)
         except Exception:
-            db = get_session_factory()()
+            db = self._open_database_session()
             try:
                 release_review_grant_projection(
                     db,
@@ -763,7 +871,7 @@ class ControlPlaneRunner:
             finally:
                 db.close()
             raise
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             mark_review_grant_projected(
                 db,
@@ -793,7 +901,7 @@ class ControlPlaneRunner:
         await self.client.revoke_review_grant(envelope)
 
     async def _publish_one_review_grant_revocation(self) -> bool:
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             claim = claim_review_grant_revocation(
                 db,
@@ -804,7 +912,7 @@ class ControlPlaneRunner:
         if claim is None:
             return False
         grant_id, claim_token = claim
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             revocation = load_claimed_review_grant_revocation(
                 db,
@@ -824,7 +932,7 @@ class ControlPlaneRunner:
         try:
             await self.publish_review_grant_revocation(revocation)
         except Exception:
-            db = get_session_factory()()
+            db = self._open_database_session()
             try:
                 release_review_grant_revocation(
                     db,
@@ -834,7 +942,7 @@ class ControlPlaneRunner:
             finally:
                 db.close()
             raise
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             mark_review_grant_revocation_delivered(
                 db,
@@ -864,12 +972,13 @@ class ControlPlaneRunner:
         return commands[0]
 
     def _admit(self, command: VerifiedControlCommand) -> AcceptedControlCommand:
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             return accept_control_plane_command(
                 db,
                 command,
                 settings=self._settings,
+                capabilities=self._runtime_capabilities(),
                 clock=self._clock,
             )
         finally:
@@ -901,7 +1010,7 @@ class ControlPlaneRunner:
         )
 
     async def _drain_one_event(self) -> None:
-        db = get_session_factory()()
+        db = self._open_database_session()
         try:
             claimed = claim_control_plane_event(
                 db,
@@ -989,6 +1098,7 @@ class ControlPlaneRunner:
         finally:
             if self._owns_client:
                 await self.client.close()
+            self._database_engine.dispose()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1010,15 +1120,19 @@ async def _run_cli(command: str, config_path: Path) -> int:
     if command == "status":
         # Status validates configuration and external key-file availability
         # without exposing key bytes or contacting the control plane.
+        activate_runner_runtime(config.runtime_env_path)
         _read_private_path(config.private_key_path)
         _read_private_path(config.control_plane_public_key_path)
         print("configured")  # noqa: T201 - intentional bounded CLI output
         return 0
     runner = ControlPlaneRunner(config)
     if command == "once":
-        result = await runner.run_once()
-        if runner._owns_client:
-            await runner.client.close()
+        try:
+            result = await runner.run_once()
+        finally:
+            if runner._owns_client:
+                await runner.client.close()
+            runner._database_engine.dispose()
         print(result)  # noqa: T201 - intentional bounded CLI output
         return 0
 

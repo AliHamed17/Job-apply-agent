@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
+import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
@@ -17,6 +21,117 @@ from .crypto import (
 
 class ConfigurationError(RuntimeError):
     """Raised when the control plane cannot start safely."""
+
+
+_IDENTITY_ATTESTATION_CONTEXT = b"JobApplyAgent/control-identity-bundle/v2\0"
+_IDENTITY_VALUE_NAMES = (
+    "CONTROL_OPERATOR_TOKEN",
+    "CONTROL_SESSION_SECRET",
+    "CONTROL_CSRF_SECRET",
+    "CONTROL_SIGNING_PRIVATE_KEY_B64",
+    "CONTROL_SIGNING_KEY_ID",
+    "CONTROL_RUNNER_PUBLIC_KEY_B64",
+    "CONTROL_RUNNER_DEVICE_ID",
+)
+_VERCEL_PROJECT_ID_PATTERN = re.compile(r"prj_[A-Za-z0-9]{8,120}")
+_VERCEL_SCOPE_ID_PATTERN = re.compile(r"team_[A-Za-z0-9]{8,120}")
+
+
+@dataclass(frozen=True, slots=True)
+class VercelIdentityTarget:
+    """Expected Vercel deployment identity retained from the schema-v2 digest."""
+
+    environment: str
+    project_id: str
+    scope_id: str
+
+
+def _exact_vercel_id(value: str, *, pattern: re.Pattern[str], name: str) -> str:
+    if not pattern.fullmatch(value):
+        raise ConfigurationError(f"{name} must be an exact Vercel ID")
+    return value
+
+
+def build_identity_bundle_digest(
+    values: Mapping[str, str],
+    *,
+    version_id: UUID,
+    environment: str,
+    project_id: str,
+    scope_id: str,
+) -> str:
+    """Build the canonical all-or-nothing identity/target attestation."""
+
+    if environment not in {"production", "preview"}:
+        raise ConfigurationError("identity target environment is invalid")
+    exact_project = _exact_vercel_id(
+        project_id,
+        pattern=_VERCEL_PROJECT_ID_PATTERN,
+        name="identity project",
+    )
+    exact_scope = _exact_vercel_id(
+        scope_id,
+        pattern=_VERCEL_SCOPE_ID_PATTERN,
+        name="identity scope",
+    )
+    identity_values: dict[str, str] = {}
+    for name in _IDENTITY_VALUE_NAMES:
+        value = values.get(name)
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError(f"{name} is required for identity attestation")
+        identity_values[name] = value
+    canonical = json.dumps(
+        {
+            "identity": identity_values,
+            "schema_version": 2,
+            "target": {
+                "environment": environment,
+                "project_id": exact_project,
+                "scope_id": exact_scope,
+            },
+            "version_id": str(version_id),
+        },
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    digest = hashlib.sha256(_IDENTITY_ATTESTATION_CONTEXT + canonical).hexdigest()
+    return f"v2:{version_id}:{environment}:{exact_project}:{exact_scope}:{digest}"
+
+
+def _verify_identity_bundle_digest(
+    values: Mapping[str, str],
+) -> tuple[str, VercelIdentityTarget]:
+    supplied = _required(values, "CONTROL_IDENTITY_BUNDLE_DIGEST")
+    parts = supplied.split(":")
+    if len(parts) != 6 or parts[0] != "v2":
+        raise ConfigurationError("CONTROL_IDENTITY_BUNDLE_DIGEST is invalid")
+    _, raw_version, environment, project_id, scope_id, raw_digest = parts
+    try:
+        version_id = UUID(raw_version)
+    except ValueError as exc:
+        raise ConfigurationError("CONTROL_IDENTITY_BUNDLE_DIGEST is invalid") from exc
+    if str(version_id) != raw_version or not re.fullmatch(r"[0-9a-f]{64}", raw_digest):
+        raise ConfigurationError("CONTROL_IDENTITY_BUNDLE_DIGEST is invalid")
+    runtime_environment = _required(values, "VERCEL_ENV").lower()
+    runtime_project_id = _required(values, "VERCEL_PROJECT_ID")
+    if environment != runtime_environment or project_id != runtime_project_id:
+        raise ConfigurationError("control identity target does not match this deployment")
+    expected = build_identity_bundle_digest(
+        values,
+        version_id=version_id,
+        environment=environment,
+        project_id=project_id,
+        scope_id=scope_id,
+    )
+    if not secrets.compare_digest(expected, supplied):
+        raise ConfigurationError("control identity bundle is incomplete or mixed")
+    return supplied, VercelIdentityTarget(
+        environment=environment,
+        project_id=project_id,
+        scope_id=scope_id,
+    )
 
 
 def normalize_database_url(database_url: str) -> str:
@@ -86,6 +201,8 @@ class Settings:
     control_signing_key_id: UUID
     runner_device_id: UUID
     runner_verify_public_key: str
+    identity_bundle_digest: str | None = None
+    vercel_identity_target: VercelIdentityTarget | None = None
     deployment_origin: str | None = None
     session_ttl_seconds: int = 3_600
     runner_offline_seconds: int = 30
@@ -95,8 +212,25 @@ class Settings:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "database_url", normalize_database_url(self.database_url))
+        if self.vercel_env not in {"", "development", "production", "preview"}:
+            raise ConfigurationError("VERCEL_ENV is invalid")
+        if self.app_env == "production" and self.vercel_env not in {
+            "production",
+            "preview",
+        }:
+            raise ConfigurationError(
+                "production control plane requires VERCEL_ENV=production or preview"
+            )
         if self.vercel_env in {"production", "preview"} and self.app_env != "production":
             raise ConfigurationError("Vercel production and preview require APP_ENV=production")
+        if self.vercel_env in {"production", "preview"}:
+            target = self.vercel_identity_target
+            if (
+                target is None
+                or target.environment != self.vercel_env
+                or self.identity_bundle_digest is None
+            ):
+                raise ConfigurationError("Vercel runtime identity target is required")
         if self.app_env == "production" and not self.secure_cookies:
             raise ConfigurationError("production sessions require secure cookies")
         if self.app_env == "production":
@@ -113,6 +247,12 @@ class Settings:
         return (self.app_env == "production" and self.vercel_env == "production") or (
             self.app_env == "test" and self.test_dispatch_allowed
         )
+
+    @property
+    def requires_vercel_oidc(self) -> bool:
+        """Production and Preview Vercel requests require platform OIDC."""
+
+        return self.vercel_env in {"production", "preview"}
 
     @property
     def trusted_origins(self) -> tuple[str, ...]:
@@ -135,6 +275,12 @@ class Settings:
             raise ConfigurationError("APP_ENV must be development, test, or production")
 
         vercel_env = values.get("VERCEL_ENV", "").strip().lower()
+        if vercel_env not in {"", "development", "production", "preview"}:
+            raise ConfigurationError("VERCEL_ENV is invalid")
+        if app_env == "production" and vercel_env not in {"production", "preview"}:
+            raise ConfigurationError(
+                "production control plane requires VERCEL_ENV=production or preview"
+            )
         if vercel_env in {"production", "preview"} and app_env != "production":
             raise ConfigurationError("Vercel production and preview require APP_ENV=production")
         database_url = normalize_database_url(_required(values, "CONTROL_DATABASE_URL"))
@@ -193,6 +339,11 @@ class Settings:
         if control_key_id == runner_device_id:
             raise ConfigurationError("control and runner key identifiers must differ")
 
+        identity_bundle_digest: str | None = None
+        vercel_identity_target: VercelIdentityTarget | None = None
+        if vercel_env in {"production", "preview"}:
+            identity_bundle_digest, vercel_identity_target = _verify_identity_bundle_digest(values)
+
         if app_env == "production":
             _validate_postgres_tls(database_url)
             if not public_origin.startswith("https://"):
@@ -225,6 +376,8 @@ class Settings:
             control_signing_key_id=control_key_id,
             runner_device_id=runner_device_id,
             runner_verify_public_key=runner_key,
+            identity_bundle_digest=identity_bundle_digest,
+            vercel_identity_target=vercel_identity_target,
             deployment_origin=deployment_origin,
             session_ttl_seconds=session_ttl,
             runner_offline_seconds=offline_seconds,
@@ -233,4 +386,10 @@ class Settings:
         )
 
 
-__all__ = ["ConfigurationError", "Settings", "normalize_database_url"]
+__all__ = [
+    "ConfigurationError",
+    "Settings",
+    "VercelIdentityTarget",
+    "build_identity_bundle_digest",
+    "normalize_database_url",
+]

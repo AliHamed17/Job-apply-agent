@@ -834,9 +834,13 @@ class OllamaRuntime:
         temperature: float,
         response_format: str | dict[str, Any] | None,
         deadline: datetime,
-        require_ready_model: bool,
     ) -> str:
-        """Run one bounded inference and return only its unlogged response text."""
+        """Run one qualified, bounded inference and return unlogged response text.
+
+        Exact live identity and the current passing qualification report are a
+        transport invariant.  No caller can opt out, including legacy raw-text
+        and JSON entrypoints.
+        """
 
         assert_llm_generation_allowed()
         self.validate_local_configuration()
@@ -883,18 +887,17 @@ class OllamaRuntime:
             # A waiting caller must recheck after acquiring the cross-process
             # lease; a preceding caller may have opened the circuit.
             await self._ensure_circuit_closed_async(work_deadline)
-            if require_ready_model:
-                status = await self.readiness(
-                    deadline=work_deadline,
-                    record_failure=True,
-                    circuit_deadline=deadline,
+            status = await self.readiness(
+                deadline=work_deadline,
+                record_failure=True,
+                circuit_deadline=deadline,
+            )
+            if not status.ok:
+                raise TypedGenerationError(
+                    status.reason_code or LLMReasonCode.PROVIDER_UNAVAILABLE,
+                    "configured Ollama model is not ready",
                 )
-                if not status.ok:
-                    raise TypedGenerationError(
-                        status.reason_code or LLMReasonCode.PROVIDER_UNAVAILABLE,
-                        "configured Ollama model is not ready",
-                    )
-                verified_identity = status.model_identity
+            verified_identity = status.model_identity
 
             remaining = (work_deadline - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
@@ -934,24 +937,23 @@ class OllamaRuntime:
                 content = data.get("message", {}).get("content", "")
                 if not isinstance(content, str):
                     raise ValueError("invalid response shape")
-                if require_ready_model:
-                    final_status = await self.readiness(
-                        deadline=work_deadline,
-                        record_failure=True,
-                        circuit_deadline=deadline,
+                final_status = await self.readiness(
+                    deadline=work_deadline,
+                    record_failure=True,
+                    circuit_deadline=deadline,
+                )
+                if not final_status.ok or final_status.model_identity != verified_identity:
+                    if final_status.ok:
+                        recorded = await self._record_failure_async(deadline)
+                        if not recorded:
+                            raise TypedGenerationError(
+                                LLMReasonCode.PROVIDER_UNAVAILABLE,
+                                "distributed inference circuit update failed",
+                            )
+                    raise TypedGenerationError(
+                        final_status.reason_code or LLMReasonCode.MODEL_NOT_READY,
+                        "Ollama model identity changed during inference",
                     )
-                    if not final_status.ok or final_status.model_identity != verified_identity:
-                        if final_status.ok:
-                            recorded = await self._record_failure_async(deadline)
-                            if not recorded:
-                                raise TypedGenerationError(
-                                    LLMReasonCode.PROVIDER_UNAVAILABLE,
-                                    "distributed inference circuit update failed",
-                                )
-                        raise TypedGenerationError(
-                            final_status.reason_code or LLMReasonCode.MODEL_NOT_READY,
-                            "Ollama model identity changed during inference",
-                        )
                 if datetime.now(UTC) >= work_deadline:
                     recorded = await self._record_failure_async(deadline)
                     raise TypedGenerationError(

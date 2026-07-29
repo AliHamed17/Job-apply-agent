@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
+from dotenv import dotenv_values
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+JOB_AGENT_ENV_FILE = "JOB_AGENT_ENV_FILE"
 
 
 def is_allowed_local_ollama_endpoint(base_url: str) -> bool:
@@ -92,7 +96,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./job_agent.db"
 
     # ── Redis ───────────────────────────────────────────
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = "redis://127.0.0.1:6379/0"
 
     # ── LLM ─────────────────────────────────────────────
     llm_provider: Literal["openai", "anthropic", "ollama", "mock"] = "ollama"
@@ -368,7 +372,47 @@ class Settings(BaseSettings):
             return 9, 21
 
 
+def load_authoritative_settings(env_path: Path) -> Settings:
+    """Load one explicit env file without consulting inherited process values.
+
+    ``BaseSettings(_env_file=...)`` still gives operating-system environment
+    variables precedence over the file. That is useful for ordinary
+    deployments, but unsafe for the private runner: a stale parent shell must
+    not turn off dry-run mode or redirect its database after the external
+    runtime file has been reviewed. Direct model validation bypasses every
+    settings source while retaining Pydantic's validation and type coercion.
+    """
+
+    if not env_path.is_absolute():
+        raise ValueError(f"{JOB_AGENT_ENV_FILE} must be an absolute path")
+    try:
+        if not env_path.is_file() or not 0 < env_path.stat().st_size <= 64 * 1024:
+            raise OSError
+        raw_values = dotenv_values(
+            dotenv_path=env_path,
+            encoding="utf-8",
+            interpolate=False,
+        )
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"{JOB_AGENT_ENV_FILE} is unavailable or invalid") from exc
+
+    field_names = {name.casefold(): name for name in Settings.model_fields}
+    values: dict[str, str] = {}
+    for raw_name, raw_value in raw_values.items():
+        field_name = field_names.get(raw_name.casefold())
+        if field_name is not None and raw_value is not None:
+            values[field_name] = raw_value
+    return Settings.model_validate(values)
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Singleton accessor for application settings."""
-    return Settings()
+
+    configured = os.environ.get(JOB_AGENT_ENV_FILE, "").strip()
+    if not configured:
+        return Settings()
+    env_path = Path(configured)
+    if not env_path.is_absolute():
+        raise ValueError(f"{JOB_AGENT_ENV_FILE} must be an absolute path")
+    return load_authoritative_settings(env_path)
