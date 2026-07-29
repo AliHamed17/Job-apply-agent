@@ -113,6 +113,13 @@ path. The only accepted issuer is `https://oidc.vercel.com`, and the only JWKS
 request is `https://oidc.vercel.com/.well-known/jwks`. Retrieval does not follow
 redirects and is bounded by response, key-count, one-entry cache, TTL, and
 refresh limits.
+Vercel documents a one-hour lifetime for Preview and Production tokens. The
+verifier enforces that replay boundary as a one-hour maximum age from the
+signed `iat` claim, regardless of a later signed `exp`. It separately rejects
+declared lifetimes beyond Vercel's twelve-hour absolute token ceiling.
+Server-only diagnostics distinguish an overlong environment fallback from an
+overlong request token without logging either value; development-scoped tokens
+remain invalid.
 Do not create a persistent replacement token or configure a caller-supplied
 scope variable. OIDC authenticates the Vercel deployment, not the human
 operator; the operator session, Origin, and CSRF controls remain mandatory.
@@ -124,8 +131,14 @@ non-dispatching operator origin, so protected preview tests remain possible
 without a wildcard origin.
 
 Set the Vercel Project Root exactly to this `control_plane` directory. Its
-`requirements.txt` and `vercel.json` are authoritative; do not build the
-function from the parent application's dependency manifest.
+`requirements.txt`, `pyproject.toml`, and `vercel.json` are authoritative; do
+not build the function from the parent application's dependency manifest. The
+`[tool.vercel]` FastAPI entrypoint must remain on Vercel's current Python
+framework runtime. Legacy `builds`/`routes` manifests are prohibited because
+they bypass current framework request handling, including the request-scoped
+OIDC header required above. The repository-root fallback manifest declares the
+same `fastapi` framework and its explicit upload allowlist must include this
+directory's `pyproject.toml` and `vercel.json`.
 
 Use Preview only with isolated Preview data and identities. For an immutable
 production candidate, disable automatic production-domain assignment, run

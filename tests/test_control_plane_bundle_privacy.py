@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -34,7 +35,9 @@ ROOT_FALLBACK_BUNDLE_ENTRIES = frozenset(
     {
         "api",
         "job_control_plane",
+        "pyproject.toml",
         "requirements.txt",
+        "vercel.json",
     }
 )
 
@@ -130,43 +133,22 @@ def test_root_vercel_routes_only_to_isolated_control_plane() -> None:
 
     assert config == {
         "$schema": "https://openapi.vercel.sh/vercel.json",
-        "builds": [
-            {
-                "src": "control_plane/api/index.py",
-                "use": "@vercel/python",
-            }
-        ],
-        "routes": [
-            {
-                "src": "/(.*)",
-                "dest": "control_plane/api/index.py",
-            }
-        ],
+        "framework": "fastapi",
     }
-    assert (REPO_ROOT / config["builds"][0]["src"]).is_file()
+    assert (CONTROL_PLANE_ROOT / "api" / "index.py").is_file()
 
 
 def test_isolated_vercel_project_cannot_escape_its_own_root() -> None:
     config = json.loads((CONTROL_PLANE_ROOT / "vercel.json").read_text(encoding="utf-8"))
+    project = tomllib.loads((CONTROL_PLANE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert config == {
         "$schema": "https://openapi.vercel.sh/vercel.json",
-        "version": 2,
-        "builds": [
-            {
-                "src": "api/index.py",
-                "use": "@vercel/python",
-            }
-        ],
-        "routes": [
-            {
-                "src": "/(.*)",
-                "dest": "api/index.py",
-            }
-        ],
+        "framework": "fastapi",
     }
+    assert project["tool"]["vercel"]["entrypoint"] == "api.index:app"
     assert ".." not in json.dumps(config)
-    assert (CONTROL_PLANE_ROOT / config["builds"][0]["src"]).is_file()
+    assert (CONTROL_PLANE_ROOT / "api" / "index.py").is_file()
 
 
 def test_root_vercel_upload_is_an_explicit_allowlist() -> None:
@@ -180,7 +162,9 @@ def test_root_vercel_upload_is_an_explicit_allowlist() -> None:
         "!control_plane/api/**",
         "!control_plane/job_control_plane",
         "!control_plane/job_control_plane/**",
+        "!control_plane/pyproject.toml",
         "!control_plane/requirements.txt",
+        "!control_plane/vercel.json",
         "!vercel.json",
     }
     assert "control_plane/*" in lines

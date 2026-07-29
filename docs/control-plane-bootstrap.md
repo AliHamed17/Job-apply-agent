@@ -265,6 +265,19 @@ token from selecting a team-specific JWKS path: the verifier accepts only
 `https://oidc.vercel.com` and fetches only
 `https://oidc.vercel.com/.well-known/jwks`. Vercel then places its short-lived
 signed token in `x-vercel-oidc-token` on each function request.
+Vercel documents a one-hour lifetime for Preview and Production tokens. The
+verifier enforces that replay boundary as a one-hour maximum age from signed
+`iat`, regardless of a later `exp`, and rejects declared lifetimes beyond
+Vercel's twelve-hour absolute ceiling. Bounded server-only codes distinguish
+an overlong environment fallback from an overlong request token without
+logging token or claim material.
+The isolated project uses the `[tool.vercel]` FastAPI entrypoint and Vercel's
+current Python framework runtime. Do not reintroduce legacy `builds` or
+`routes` entries: those bypass current framework request handling and can
+prevent the request-scoped OIDC header from reaching the ASGI application.
+The repository-root CLI fallback must declare the same `fastapi` framework and
+allowlist the isolated `pyproject.toml` and `vercel.json`; otherwise Vercel
+silently falls back to the legacy root configuration during a CLI deployment.
 The control plane permits only minimal `GET`/`HEAD /health/live` without that
 attestation. Every login, dashboard, readiness, operator API, and runner API
 request verifies the RS256 signature against Vercel's bounded JWKS cache and
