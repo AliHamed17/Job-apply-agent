@@ -120,6 +120,16 @@ class IdentityProvisioningError(RuntimeError):
     """A stable provisioning failure that never includes secret material."""
 
 
+def _windows_dll(name: str) -> Any:
+    """Resolve a Windows DLL without requiring Windows-only ctypes stubs."""
+
+    loader = getattr(ctypes, "windll", None)
+    library = getattr(loader, name, None)
+    if library is None:
+        raise IdentityProvisioningError("WINDOWS_API_UNAVAILABLE")
+    return library
+
+
 class ClipboardController(Protocol):
     """Minimal native clipboard boundary used by the explicit copy command."""
 
@@ -210,8 +220,8 @@ def protect_with_dpapi(value: bytes) -> bytes:
 
     if os.name != "nt":
         raise IdentityProvisioningError("DPAPI_UNAVAILABLE")
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
+    crypt32 = _windows_dll("crypt32")
+    kernel32 = _windows_dll("kernel32")
     crypt32.CryptProtectData.argtypes = [
         ctypes.POINTER(_DataBlob),
         wintypes.LPCWSTR,
@@ -251,8 +261,8 @@ def unprotect_with_dpapi(value: bytes) -> bytes:
 
     if os.name != "nt":
         raise IdentityProvisioningError("DPAPI_UNAVAILABLE")
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
+    crypt32 = _windows_dll("crypt32")
+    kernel32 = _windows_dll("kernel32")
     crypt32.CryptUnprotectData.argtypes = [
         ctypes.POINTER(_DataBlob),
         ctypes.POINTER(wintypes.LPWSTR),
@@ -474,7 +484,7 @@ def _is_local_fixed_ntfs_path(path: Path) -> bool:
     anchor = path.anchor
     if not anchor or _is_unc(Path(anchor)):
         return False
-    kernel32 = ctypes.windll.kernel32
+    kernel32 = _windows_dll("kernel32")
     kernel32.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
     kernel32.GetDriveTypeW.restype = wintypes.UINT
     if int(kernel32.GetDriveTypeW(anchor)) != _DRIVE_FIXED:
@@ -556,7 +566,7 @@ def _windows_path_is_reparse_point(path: Path) -> bool:
 
     if os.name != "nt":
         return False
-    kernel32 = ctypes.windll.kernel32
+    kernel32 = _windows_dll("kernel32")
     kernel32.CreateFileW.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
@@ -1675,8 +1685,8 @@ class WindowsClipboard:
     def __init__(self) -> None:
         if os.name != "nt":
             raise IdentityProvisioningError("WINDOWS_REQUIRED")
-        self._user32 = ctypes.windll.user32
-        self._kernel32 = ctypes.windll.kernel32
+        self._user32 = _windows_dll("user32")
+        self._kernel32 = _windows_dll("kernel32")
         self._user32.CreateWindowExW.argtypes = [
             wintypes.DWORD,
             wintypes.LPCWSTR,
