@@ -241,7 +241,28 @@ Required variables are listed in
 use separate non-production values and cannot dispatch commands. Production
 and preview must never share a database, operator token, signing key, or runner
 identity. Enable Vercel system environment variables; startup requires the
-platform-supplied `VERCEL_PROJECT_ID` to match the schema-v2 bundle target.
+platform-supplied `VERCEL_PROJECT_ID` and `VERCEL_ENV` to match the schema-v2
+bundle target. `VERCEL_ORG_ID` is not a runtime system variable and must not be
+used as scope evidence. The expected scope remains bound inside the schema-v2
+digest.
+
+In the Vercel project's **Settings > Security**, enable
+**[Secure Backend Access with OIDC Federation](https://vercel.com/docs/oidc)**
+and select **Global issuer mode** before deploying either environment. Team
+issuer mode is not accepted. The fixed global mode prevents an unauthenticated
+token from selecting a team-specific JWKS path: the verifier accepts only
+`https://oidc.vercel.com` and fetches only
+`https://oidc.vercel.com/.well-known/jwks`. Vercel then places its short-lived
+signed token in `x-vercel-oidc-token` on each function request.
+The control plane permits only minimal `GET`/`HEAD /health/live` without that
+attestation. Every login, dashboard, readiness, operator API, and runner API
+request verifies the RS256 signature against Vercel's bounded JWKS cache and
+requires the signed `owner_id`, `project_id`, and `environment` to equal the
+schema-v2 target. It also validates issuer, audience, subject, and token times.
+If OIDC is disabled, unavailable, malformed, cross-project, cross-scope, or
+cross-environment, protected requests return a generic denial before database
+or command processing. Do not add a static `VERCEL_ORG_ID` or copy a build OIDC
+token into project secrets.
 
 ## 5. Verify before promotion
 

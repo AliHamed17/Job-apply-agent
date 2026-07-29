@@ -91,8 +91,28 @@ only if the clipboard is unchanged. See the repository-level bootstrap
 runbook for the exact commands.
 
 Enable Vercel system environment variables so `VERCEL_URL` and
-`VERCEL_PROJECT_ID` are available. The
-exact deployment hostname is trusted only for host validation and liveness
+`VERCEL_PROJECT_ID` are available. `VERCEL_ORG_ID` is not a Vercel runtime
+system variable and is neither required nor trusted. The expected scope ID
+comes from the schema-v2 identity digest.
+
+In Project Settings > Security, enable
+**[Secure Backend Access with OIDC Federation](https://vercel.com/docs/oidc)**
+and select **Global issuer mode**. At runtime Vercel places a short-lived token
+in the `x-vercel-oidc-token` request header. Every Production or Preview request
+except minimal `GET`/`HEAD /health/live` fails closed unless the control plane
+verifies the Vercel RS256 signature and exact issuer, audience, subject, time
+window, environment, project ID, and owner ID. The signed `owner_id` must equal
+the scope retained from the identity digest. Team issuer mode is intentionally
+rejected so an unauthenticated token cannot select a team-specific network
+path. The only accepted issuer is `https://oidc.vercel.com`, and the only JWKS
+request is `https://oidc.vercel.com/.well-known/jwks`. Retrieval does not follow
+redirects and is bounded by response, key-count, one-entry cache, TTL, and
+refresh limits.
+Do not create a persistent replacement token or configure a caller-supplied
+scope variable. OIDC authenticates the Vercel deployment, not the human
+operator; the operator session, Origin, and CSRF controls remain mandatory.
+
+The exact deployment hostname is trusted only for host validation and liveness
 checks in production; login, CSRF, and mutations remain restricted to
 `CONTROL_PUBLIC_ORIGIN`. In preview, the exact `VERCEL_URL` is the
 non-dispatching operator origin, so protected preview tests remain possible

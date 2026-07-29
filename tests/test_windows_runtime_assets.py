@@ -276,3 +276,50 @@ def test_stop_preserves_data_and_requires_exact_compose_ownership() -> None:
     assert "@('down', '--remove-orphans')" in stop_function
     assert "--volumes" not in stop_function
     assert "DataVolumesPreserved = $true" in stop_function
+    assert "Get-JobAgentIdentitySelection" not in stop_function
+    assert "RunnerConfigPath" not in stop_function
+    assert "Get-JobAgentTaskState" not in stop_function
+    assert "Get-JobAgentEmergencyTaskState" in stop_function
+    assert "Stop-JobAgentEmergencyRunnerTask" in stop_function
+    assert "Assert-JobAgentEmergencyTaskTarget" in stop_function
+    assert "RUNNER_TASK_TARGET_NOT_CANONICAL" in module
+    assert "'MarkerOwned'" in stop_function
+    assert stop_function.count("Get-JobAgentEmergencyTaskState") >= 3
+    assert stop_function.count("Get-JobAgentComposeContainers") >= 3
+    assert "RUNNER_TASK_STOP_UNCONFIRMED" in stop_function
+    assert "$finalTaskState -notin @('Ready', 'Disabled')" in stop_function
+    assert "COMPOSE_PROJECT_STOP_UNCONFIRMED" in stop_function
+    assert "$finalCompose.Classification -ne 'Absent'" in stop_function
+
+
+def test_emergency_stop_uses_only_task_marker_and_compose_labels() -> None:
+    module = MODULE.read_text(encoding="utf-8")
+    task_ownership = module.split(
+        "function Get-JobAgentEmergencyTaskOwnership",
+        maxsplit=1,
+    )[1].split("function ConvertFrom-JobAgentComposeLabels", maxsplit=1)[0]
+    task_stop = module.split(
+        "function Stop-JobAgentEmergencyRunnerTask",
+        maxsplit=1,
+    )[1].split("function Get-JobAgentLocalStatus", maxsplit=1)[0]
+    task_state = module.split(
+        "function Get-JobAgentEmergencyTaskState",
+        maxsplit=1,
+    )[1].split("function Stop-JobAgentEmergencyRunnerTask", maxsplit=1)[0]
+
+    assert "RunnerTaskOwnershipMarker" in task_ownership
+    assert "'MarkerOwned'" in task_ownership
+    assert "'Foreign'" in task_ownership
+    assert "Get-JobAgentIdentitySelection" not in task_ownership
+    assert "RunnerConfigPath" not in task_ownership
+    assert "Stop-ScheduledTask" in task_stop
+    assert "-InputObject $state.Task -ErrorAction Stop" in task_stop
+    assert "Get-JobAgentEmergencyTaskState" in task_stop
+    assert "Assert-JobAgentEmergencyTaskTarget" in task_stop
+    assert "Get-JobAgentIdentitySelection" not in task_stop
+    assert "Get-ScheduledTask -ErrorAction Stop" in task_state
+    assert "ErrorAction SilentlyContinue" not in task_state
+    assert "RunnerTaskName" in task_state
+    assert "RunnerTaskPath" in task_state
+    assert "RUNNER_TASK_QUERY_FAILED" in task_state
+    assert "RUNNER_TASK_PATH_NOT_CANONICAL" in task_state

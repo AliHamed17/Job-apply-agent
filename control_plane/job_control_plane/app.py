@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .auth import (
@@ -62,6 +63,11 @@ from .services import (
     require_current_schema,
     sha256_bytes,
     utc_now,
+)
+from .vercel_oidc import (
+    VERCEL_OIDC_HEADER,
+    VercelOidcVerificationError,
+    VercelOidcVerifier,
 )
 
 CURRENT_SCHEMA_REVISION = EXPECTED_SCHEMA_REVISION
@@ -143,10 +149,17 @@ def create_app(
     *,
     engine: Engine | None = None,
     initialize_schema: bool = False,
+    oidc_verifier: VercelOidcVerifier | None = None,
 ) -> FastAPI:
     runtime = settings or Settings.from_env()
     database = engine or build_engine(runtime)
     sessions = build_session_factory(database)
+    request_identity_verifier = oidc_verifier
+    if runtime.requires_vercel_oidc and request_identity_verifier is None:
+        identity_target = runtime.vercel_identity_target
+        if identity_target is None:
+            raise RuntimeError("Vercel runtime identity target is unavailable")
+        request_identity_verifier = VercelOidcVerifier(identity_target)
     if initialize_schema:
         Base.metadata.create_all(database)
 
@@ -159,6 +172,7 @@ def create_app(
     app.state.settings = runtime
     app.state.engine = database
     app.state.sessions = sessions
+    app.state.vercel_oidc_verifier = request_identity_verifier
     invalid_login_limiter = InvalidLoginLimiter()
     app.state.invalid_login_limiter = invalid_login_limiter
 
@@ -172,12 +186,35 @@ def create_app(
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
+        public_liveness = request.url.path == "/health/live" and request.method in {
+            "GET",
+            "HEAD",
+        }
         content_length = request.headers.get("content-length")
         request_too_large = bool(
             content_length and content_length.isdigit() and int(content_length) > 65_536
         )
-        if request_too_large:
-            response: Response = JSONResponse(
+        oidc_denied = False
+        if runtime.requires_vercel_oidc and not public_liveness:
+            oidc_headers = request.headers.getlist(VERCEL_OIDC_HEADER)
+            if len(oidc_headers) != 1 or request_identity_verifier is None:
+                oidc_denied = True
+            else:
+                try:
+                    await run_in_threadpool(
+                        request_identity_verifier.verify,
+                        oidc_headers[0],
+                    )
+                except VercelOidcVerificationError:
+                    oidc_denied = True
+        response: Response
+        if oidc_denied:
+            response = JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"code": "VERCEL_OIDC_ATTESTATION_FAILED"},
+            )
+        elif request_too_large:
+            response = JSONResponse(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 content={"code": "REQUEST_TOO_LARGE"},
             )

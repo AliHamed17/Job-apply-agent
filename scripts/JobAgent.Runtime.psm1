@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:ComposeProjectName = 'job-apply-agent'
 $script:RunnerTaskName = 'JobApplyAgent-PrivateRunner'
+$script:RunnerTaskPath = '\'
 $script:RunnerTaskOwnershipMarker = 'JobApplyAgent.ManagedPrivateRunner.v1'
 $script:RuntimeProtocolVersion = 'submission-control.v1'
 $script:RuntimeSchemaVersion = '1'
@@ -258,6 +259,7 @@ function Get-JobAgentRuntimeConstants {
     return [pscustomobject]@{
         ComposeProjectName = $script:ComposeProjectName
         RunnerTaskName = $script:RunnerTaskName
+        RunnerTaskPath = $script:RunnerTaskPath
         RunnerTaskOwnershipMarker = $script:RunnerTaskOwnershipMarker
         RuntimeProtocolVersion = $script:RuntimeProtocolVersion
         RuntimeSchemaVersion = $script:RuntimeSchemaVersion
@@ -1166,6 +1168,57 @@ function Get-JobAgentTaskOwnership {
     }
 }
 
+function Get-JobAgentEmergencyTaskOwnership {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Task
+    )
+
+    if ($null -eq $Task) {
+        return [pscustomobject]@{
+            Classification = 'Absent'
+            Owned = $false
+            MarkerMatched = $false
+        }
+    }
+    $description = if (
+        $null -ne $Task.PSObject.Properties['Description']
+    ) {
+        [string]$Task.Description
+    }
+    else {
+        ''
+    }
+    $owned = [string]::Equals(
+        $description.Trim(),
+        $script:RunnerTaskOwnershipMarker,
+        [System.StringComparison]::Ordinal
+    )
+    return [pscustomobject]@{
+        Classification = if ($owned) { 'MarkerOwned' } else { 'Foreign' }
+        Owned = $owned
+        MarkerMatched = $owned
+    }
+}
+
+function Assert-JobAgentEmergencyTaskTarget {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()]
+        [string]$TaskName
+    )
+
+    if (-not [string]::Equals(
+        $TaskName,
+        $script:RunnerTaskName,
+        [System.StringComparison]::Ordinal
+    )) {
+        throw 'RUNNER_TASK_TARGET_NOT_CANONICAL'
+    }
+    return $true
+}
+
 function ConvertFrom-JobAgentComposeLabels {
     [CmdletBinding()]
     param(
@@ -1204,7 +1257,7 @@ function Get-JobAgentComposeOwnership {
         [string]$ProjectName = $script:ComposeProjectName
     )
 
-    if (@($Containers).Count -eq 0) {
+    if ($null -eq $Containers -or @($Containers).Count -eq 0) {
         return [pscustomobject]@{
             Classification = 'Absent'
             Owned = $false
@@ -2830,6 +2883,101 @@ function Stop-JobAgentOwnedRunnerTask {
     return [pscustomobject]@{ Stopped = $false; State = 'WhatIf' }
 }
 
+function Get-JobAgentEmergencyTaskState {
+    [CmdletBinding()]
+    param(
+        [string]$TaskName = $script:RunnerTaskName
+    )
+
+    Assert-JobAgentEmergencyTaskTarget -TaskName $TaskName | Out-Null
+    try {
+        # Enumerate the scheduler with terminating errors, then perform literal
+        # name/path matching ourselves. This cleanly distinguishes a successful
+        # enumeration with no exact task from an unavailable scheduler, without
+        # sending wildcard-capable caller input to the ScheduledTasks module.
+        $scheduledTasks = @(
+            Get-ScheduledTask -ErrorAction Stop |
+                Where-Object { $null -ne $_ }
+        )
+    }
+    catch {
+        throw 'RUNNER_TASK_QUERY_FAILED'
+    }
+    $nameMatches = [System.Collections.Generic.List[object]]::new()
+    foreach ($candidate in $scheduledTasks) {
+        $nameProperty = $candidate.PSObject.Properties['TaskName']
+        $pathProperty = $candidate.PSObject.Properties['TaskPath']
+        if ($null -eq $nameProperty -or $null -eq $pathProperty) {
+            throw 'RUNNER_TASK_QUERY_RESULT_INVALID'
+        }
+        if ([string]::Equals(
+            [string]$nameProperty.Value,
+            $script:RunnerTaskName,
+            [System.StringComparison]::Ordinal
+        )) {
+            $nameMatches.Add($candidate)
+        }
+    }
+    $alternatePathMatches = @($nameMatches | Where-Object {
+        -not [string]::Equals(
+            [string]$_.TaskPath,
+            $script:RunnerTaskPath,
+            [System.StringComparison]::Ordinal
+        )
+    })
+    if ($alternatePathMatches.Count -gt 0) {
+        throw 'RUNNER_TASK_PATH_NOT_CANONICAL'
+    }
+    $exactMatches = @($nameMatches | Where-Object {
+        [string]::Equals(
+            [string]$_.TaskPath,
+            $script:RunnerTaskPath,
+            [System.StringComparison]::Ordinal
+        )
+    })
+    if ($exactMatches.Count -gt 1) {
+        throw 'RUNNER_TASK_QUERY_AMBIGUOUS'
+    }
+    $task = if ($exactMatches.Count -eq 1) {
+        $exactMatches[0]
+    }
+    else {
+        $null
+    }
+    return [pscustomobject]@{
+        Task = $task
+        Ownership = Get-JobAgentEmergencyTaskOwnership -Task $task
+    }
+}
+
+function Stop-JobAgentEmergencyRunnerTask {
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+    param(
+        [string]$TaskName = $script:RunnerTaskName
+    )
+
+    Assert-JobAgentEmergencyTaskTarget -TaskName $TaskName | Out-Null
+    # Emergency shutdown deliberately avoids the mutable identity pointer. The
+    # exact task name and install-time ownership marker authorize only the
+    # reversible Stop-ScheduledTask action; start, repair, and removal retain
+    # their full identity/action validation.
+    $state = Get-JobAgentEmergencyTaskState -TaskName $TaskName
+    if ($state.Ownership.Classification -eq 'Absent') {
+        return [pscustomobject]@{ Stopped = $false; State = 'NotInstalled' }
+    }
+    if ($state.Ownership.Classification -ne 'MarkerOwned') {
+        throw "RUNNER_TASK_NOT_OWNED_EXACT:$($state.Ownership.Classification)"
+    }
+    if ([string]$state.Task.State -ne 'Running') {
+        return [pscustomobject]@{ Stopped = $false; State = [string]$state.Task.State }
+    }
+    if ($PSCmdlet.ShouldProcess($TaskName, 'Stop marker-owned private runner task')) {
+        Stop-ScheduledTask -InputObject $state.Task -ErrorAction Stop
+        return [pscustomobject]@{ Stopped = $true; State = 'StopRequested' }
+    }
+    return [pscustomobject]@{ Stopped = $false; State = 'WhatIf' }
+}
+
 function Get-JobAgentLocalStatus {
     [CmdletBinding()]
     param(
@@ -3317,6 +3465,7 @@ function Invoke-JobAgentStop {
         [string]$TaskName = $script:RunnerTaskName
     )
 
+    Assert-JobAgentEmergencyTaskTarget -TaskName $TaskName | Out-Null
     $repository = ConvertTo-JobAgentCanonicalPath -LiteralPath $RepositoryPath -RequireExisting
     $layout = Get-JobAgentLayout -LocalAppDataRoot $LocalAppDataRoot
     Assert-JobAgentExternalLayout `
@@ -3325,50 +3474,92 @@ function Invoke-JobAgentStop {
         -RepositoryPath $repository | Out-Null
     $values = Read-JobAgentRuntimeEnvironment -Path $layout.RuntimeEnv
     Assert-JobAgentSafeRuntimeEnvironment -Values $values -Layout $layout | Out-Null
-    $selection = Get-JobAgentIdentitySelection -Layout $layout
-    if ($null -eq $selection) {
-        throw 'RUNNER_IDENTITY_UNAVAILABLE'
-    }
     if (-not $PSCmdlet.ShouldProcess(
         $script:ComposeProjectName,
-        'Stop only the exact owned runner task and Compose project'
+        'Stop only the marker-owned runner task and exact owned Compose project'
     )) {
         return [pscustomobject]@{ Stopped = $false; Reason = 'WhatIf' }
     }
 
     $mutex = Enter-JobAgentRuntimeMutex -RepositoryPath $repository
     try {
-        $taskState = Get-JobAgentTaskState `
-            -RepositoryPath $repository `
-            -PythonExecutable $PythonExecutable `
-            -ConfigPath $selection.RunnerConfigPath `
-            -TaskName $TaskName
-        if ($taskState.Ownership.Classification -notin @('Absent', 'OwnedExact')) {
-            throw "RUNNER_TASK_NOT_OWNED_EXACT:$($taskState.Ownership.Classification)"
+        $preflightTask = Get-JobAgentEmergencyTaskState -TaskName $TaskName
+        if ($preflightTask.Ownership.Classification -notin @('Absent', 'MarkerOwned')) {
+            throw "RUNNER_TASK_NOT_OWNED_EXACT:$($preflightTask.Ownership.Classification)"
         }
-        $containers = Get-JobAgentComposeContainers `
+        $preflightContainers = Get-JobAgentComposeContainers `
+            -RepositoryPath $repository `
+            -RuntimeEnvPath $layout.RuntimeEnv
+        $preflightCompose = Get-JobAgentComposeOwnership `
+            -Containers $preflightContainers `
+            -RepositoryPath $repository
+        if ($preflightCompose.Classification -notin @('Absent', 'OwnedExact')) {
+            throw "COMPOSE_PROJECT_NOT_OWNED_EXACT:$($preflightCompose.Classification)"
+        }
+
+        # Re-probe both resources after the preflight and validate the pair
+        # before mutating either one. An owned resource may have appeared while
+        # the stop command waited for the mutex; a foreign replacement must
+        # still fail closed.
+        $actionTask = Get-JobAgentEmergencyTaskState -TaskName $TaskName
+        $actionContainers = Get-JobAgentComposeContainers `
+            -RepositoryPath $repository `
+            -RuntimeEnvPath $layout.RuntimeEnv
+        $actionCompose = Get-JobAgentComposeOwnership `
+            -Containers $actionContainers `
+            -RepositoryPath $repository
+        if ($actionTask.Ownership.Classification -notin @('Absent', 'MarkerOwned')) {
+            throw "RUNNER_TASK_NOT_OWNED_EXACT:$($actionTask.Ownership.Classification)"
+        }
+        if ($actionCompose.Classification -notin @('Absent', 'OwnedExact')) {
+            throw "COMPOSE_PROJECT_NOT_OWNED_EXACT:$($actionCompose.Classification)"
+        }
+
+        # These action paths deliberately re-probe once more immediately before
+        # deciding whether to mutate. Never reuse an earlier Absent snapshot.
+        Stop-JobAgentEmergencyRunnerTask `
+            -TaskName $TaskName `
+            -Confirm:$false | Out-Null
+        $composeContainers = Get-JobAgentComposeContainers `
             -RepositoryPath $repository `
             -RuntimeEnvPath $layout.RuntimeEnv
         $compose = Get-JobAgentComposeOwnership `
-            -Containers $containers `
+            -Containers $composeContainers `
             -RepositoryPath $repository
         if ($compose.Classification -notin @('Absent', 'OwnedExact')) {
             throw "COMPOSE_PROJECT_NOT_OWNED_EXACT:$($compose.Classification)"
-        }
-
-        if ($taskState.Ownership.Classification -eq 'OwnedExact') {
-            Stop-JobAgentOwnedRunnerTask `
-                -RepositoryPath $repository `
-                -PythonExecutable $PythonExecutable `
-                -ConfigPath $selection.RunnerConfigPath `
-                -TaskName $TaskName `
-                -Confirm:$false | Out-Null
         }
         if ($compose.Classification -eq 'OwnedExact') {
             Invoke-JobAgentCompose `
                 -RepositoryPath $repository `
                 -RuntimeEnvPath $layout.RuntimeEnv `
                 -Arguments @('down', '--remove-orphans') | Out-Null
+        }
+
+        # A successful command invocation is not evidence that either resource
+        # stopped. Re-observe both resources and fail closed unless the task is
+        # absent/non-running and Compose down removed every exact container.
+        $finalTask = Get-JobAgentEmergencyTaskState -TaskName $TaskName
+        if ($finalTask.Ownership.Classification -notin @('Absent', 'MarkerOwned')) {
+            throw "RUNNER_TASK_NOT_OWNED_EXACT:$($finalTask.Ownership.Classification)"
+        }
+        if ($finalTask.Ownership.Classification -eq 'MarkerOwned') {
+            $finalTaskState = [string]$finalTask.Task.State
+            if ($finalTaskState -notin @('Ready', 'Disabled')) {
+                throw "RUNNER_TASK_STOP_UNCONFIRMED:$finalTaskState"
+            }
+        }
+        $finalContainers = Get-JobAgentComposeContainers `
+            -RepositoryPath $repository `
+            -RuntimeEnvPath $layout.RuntimeEnv
+        $finalCompose = Get-JobAgentComposeOwnership `
+            -Containers $finalContainers `
+            -RepositoryPath $repository
+        if ($finalCompose.Classification -notin @('Absent', 'OwnedExact')) {
+            throw "COMPOSE_PROJECT_NOT_OWNED_EXACT:$($finalCompose.Classification)"
+        }
+        if ($finalCompose.Classification -ne 'Absent') {
+            throw "COMPOSE_PROJECT_STOP_UNCONFIRMED:$($finalCompose.ContainerCount)"
         }
         return [pscustomobject]@{ Stopped = $true; DataVolumesPreserved = $true }
     }

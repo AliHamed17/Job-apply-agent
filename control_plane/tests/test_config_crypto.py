@@ -77,6 +77,11 @@ def test_production_settings_require_tls_distinct_secrets_and_exact_origin() -> 
         "https://job-agent-staged-a1b2c3.vercel.app",
     )
     assert settings.operator_origins == ("https://control.example",)
+    assert settings.vercel_identity_target is not None
+    assert settings.vercel_identity_target.scope_id == SCOPE_ID
+    assert settings.vercel_identity_target.project_id == PROJECT_ID
+    assert settings.vercel_identity_target.environment == "production"
+    assert settings.requires_vercel_oidc is True
 
     for unsafe_url in (
         "sqlite:///control.db",
@@ -161,6 +166,40 @@ def test_vercel_runtime_cannot_fall_back_to_development_security() -> None:
         Settings.from_env(dict(_production_env(), APP_ENV="development"))
 
 
+@pytest.mark.parametrize("vercel_env", [None, "", "development", "staging"])
+def test_production_cannot_disable_oidc_with_vercel_environment(
+    vercel_env: str | None,
+) -> None:
+    env = _production_env()
+    if vercel_env is None:
+        env.pop("VERCEL_ENV")
+    else:
+        env["VERCEL_ENV"] = vercel_env
+
+    with pytest.raises(ConfigurationError, match="VERCEL_ENV"):
+        Settings.from_env(env)
+
+
+@pytest.mark.parametrize("vercel_env", ["", "development"])
+def test_development_preserves_non_vercel_runtime(
+    vercel_env: str,
+) -> None:
+    env = _production_env()
+    env.update(
+        {
+            "APP_ENV": "development",
+            "VERCEL_ENV": vercel_env,
+            "CONTROL_DATABASE_URL": "sqlite:///control-plane-dev.sqlite",
+            "CONTROL_PUBLIC_ORIGIN": "http://127.0.0.1:8000",
+        }
+    )
+
+    settings = Settings.from_env(env)
+
+    assert settings.requires_vercel_oidc is False
+    assert settings.vercel_identity_target is None
+
+
 def test_vercel_identity_attestation_rejects_partial_or_cross_target_updates() -> None:
     env = _production_env()
     Settings.from_env(env)
@@ -180,6 +219,10 @@ def test_vercel_identity_attestation_rejects_partial_or_cross_target_updates() -
         Settings.from_env(
             {key: value for key, value in env.items() if key != "CONTROL_IDENTITY_BUNDLE_DIGEST"}
         )
+
+    ignored_cli_scope = Settings.from_env(dict(env, VERCEL_ORG_ID="team_deadbeef12345678"))
+    assert ignored_cli_scope.vercel_identity_target is not None
+    assert ignored_cli_scope.vercel_identity_target.scope_id == SCOPE_ID
 
 
 def test_ed25519_envelope_verifies_purpose_audience_time_and_signature() -> None:

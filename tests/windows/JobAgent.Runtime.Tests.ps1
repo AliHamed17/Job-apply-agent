@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $repository = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $modulePath = Join-Path $repository 'scripts\JobAgent.Runtime.psm1'
 Import-Module $modulePath -Force -ErrorAction Stop
+$runtimeModule = Get-Module JobAgent.Runtime -ErrorAction Stop
 
 function Assert-True {
     param(
@@ -466,13 +467,46 @@ try {
     Assert-True `
         -Condition ($stopStart -ge 0) `
         -Message 'Invoke-JobAgentStop exists for recoverable-shutdown coverage'
-    $stopBody = $moduleSource.Substring($stopStart)
+    $stopEnd = $moduleSource.IndexOf(
+        "`nExport-ModuleMember",
+        $stopStart,
+        [System.StringComparison]::Ordinal
+    )
+    Assert-True `
+        -Condition ($stopEnd -gt $stopStart) `
+        -Message 'Invoke-JobAgentStop has a bounded source range'
+    $stopBody = $moduleSource.Substring($stopStart, $stopEnd - $stopStart)
     Assert-True `
         -Condition (-not $stopBody.Contains(
             '-RequirePrivateValidation',
             [System.StringComparison]::Ordinal
         )) `
         -Message 'stop remains available when DPAPI or private identity is corrupt'
+    foreach ($identityDependency in @(
+        'Get-JobAgentIdentitySelection',
+        'RunnerConfigPath',
+        'Get-JobAgentTaskState'
+    )) {
+        Assert-True `
+            -Condition (-not $stopBody.Contains(
+                $identityDependency,
+                [System.StringComparison]::Ordinal
+            )) `
+            -Message "stop does not depend on $identityDependency"
+    }
+    foreach ($emergencyOwnershipContract in @(
+        'Get-JobAgentEmergencyTaskState',
+        'Stop-JobAgentEmergencyRunnerTask',
+        'MarkerOwned',
+        'Get-JobAgentComposeOwnership'
+    )) {
+        Assert-True `
+            -Condition $stopBody.Contains(
+                $emergencyOwnershipContract,
+                [System.StringComparison]::Ordinal
+            ) `
+            -Message "stop derives ownership through $emergencyOwnershipContract"
+    }
     foreach ($ownershipGuard in @(
         'RUNNER_TASK_NOT_OWNED_EXACT',
         'COMPOSE_PROJECT_NOT_OWNED_EXACT'
@@ -679,6 +713,723 @@ try {
             'Process'
         )
     }
+
+    $currentIdentityText = [System.IO.File]::ReadAllText(
+        $releaseLayout.IdentityCurrent,
+        [System.Text.Encoding]::UTF8
+    )
+    $identityManifestPath = Join-Path $identityBundle 'manifest.json'
+    $identityManifestText = [System.IO.File]::ReadAllText(
+        $identityManifestPath,
+        [System.Text.Encoding]::UTF8
+    )
+    $stopConstants = Get-JobAgentRuntimeConstants
+    $invokeMockedStop = {
+        param(
+            [string]$RepositoryPath,
+            [string]$LocalAppDataRoot,
+            [string]$TaskDescription,
+            [string]$ComposeClassification,
+            [pscustomobject]$InvocationState,
+            [string]$ComposeProjectName,
+            [AllowEmptyCollection()]
+            [string[]]$TaskSnapshots = @(),
+            [AllowEmptyCollection()]
+            [string[]]$ComposeSnapshots = @(),
+            [AllowEmptyString()]
+            [string]$RequestedTaskName = ''
+        )
+
+        if ($null -eq $InvocationState.PSObject.Properties['TaskProbes']) {
+            $InvocationState | Add-Member -NotePropertyName TaskProbes -NotePropertyValue 0
+        }
+        if ($null -eq $InvocationState.PSObject.Properties['ComposeProbes']) {
+            $InvocationState | Add-Member -NotePropertyName ComposeProbes -NotePropertyValue 0
+        }
+        if ($null -eq $InvocationState.PSObject.Properties['StoppedTaskName']) {
+            $InvocationState |
+                Add-Member -NotePropertyName StoppedTaskName -NotePropertyValue ''
+        }
+        if ($null -eq $InvocationState.PSObject.Properties['StoppedTaskPath']) {
+            $InvocationState |
+                Add-Member -NotePropertyName StoppedTaskPath -NotePropertyValue ''
+        }
+        & $runtimeModule {
+            param(
+                [string]$RepositoryPath,
+                [string]$LocalAppDataRoot,
+                [string]$TaskDescription,
+                [string]$ComposeClassification,
+                [pscustomobject]$InvocationState,
+                [string]$ComposeProjectName,
+                [AllowEmptyCollection()]
+                [string[]]$TaskSnapshots,
+                [AllowEmptyCollection()]
+                [string[]]$ComposeSnapshots,
+                [AllowEmptyString()]
+                [string]$RequestedTaskName
+            )
+
+            function Get-ScheduledTask {
+                param([object]$ErrorAction)
+
+                $probe = [int]$InvocationState.TaskProbes
+                $InvocationState.TaskProbes = $probe + 1
+                if ($TaskSnapshots.Count -gt 0) {
+                    $snapshot = $TaskSnapshots[
+                        [Math]::Min($probe, $TaskSnapshots.Count - 1)
+                    ]
+                    if ($snapshot -eq 'ProbeFailure') {
+                        throw 'mock scheduler unavailable'
+                    }
+                    if ($snapshot -eq 'Absent') {
+                        return $null
+                    }
+                    $description = if ($snapshot.StartsWith('MarkerOwned')) {
+                        $script:RunnerTaskOwnershipMarker
+                    }
+                    else {
+                        'foreign task'
+                    }
+                    $state = if ($snapshot.EndsWith('Ready')) {
+                        'Ready'
+                    }
+                    elseif ($snapshot.EndsWith('Queued')) {
+                        'Queued'
+                    }
+                    elseif ($snapshot.EndsWith('Unknown')) {
+                        'Unknown'
+                    }
+                    else {
+                        'Running'
+                    }
+                    $taskPath = if ($snapshot.StartsWith('AlternatePath')) {
+                        '\Foreign\'
+                    }
+                    else {
+                        $script:RunnerTaskPath
+                    }
+                    return [pscustomobject]@{
+                        TaskName = $script:RunnerTaskName
+                        TaskPath = $taskPath
+                        Description = $description
+                        State = $state
+                    }
+                }
+                return [pscustomobject]@{
+                    TaskName = $script:RunnerTaskName
+                    TaskPath = $script:RunnerTaskPath
+                    Description = $TaskDescription
+                    State = if ([int]$InvocationState.TaskStops -gt 0) {
+                        'Ready'
+                    }
+                    else {
+                        'Running'
+                    }
+                }
+            }
+
+            function Stop-ScheduledTask {
+                param(
+                    [object]$InputObject,
+                    [object]$ErrorAction
+                )
+
+                if (
+                    -not [string]::Equals(
+                        [string]$InputObject.TaskName,
+                        $script:RunnerTaskName,
+                        [System.StringComparison]::Ordinal
+                    ) -or
+                    -not [string]::Equals(
+                        [string]$InputObject.TaskPath,
+                        $script:RunnerTaskPath,
+                        [System.StringComparison]::Ordinal
+                    )
+                ) {
+                    throw 'MOCK_STOP_TARGET_NOT_EXACT'
+                }
+                $InvocationState.TaskStops = [int]$InvocationState.TaskStops + 1
+                $InvocationState.StoppedTaskName = [string]$InputObject.TaskName
+                $InvocationState.StoppedTaskPath = [string]$InputObject.TaskPath
+            }
+
+            function Get-JobAgentComposeContainers {
+                param(
+                    [string]$RepositoryPath,
+                    [string]$RuntimeEnvPath
+                )
+
+                $probe = [int]$InvocationState.ComposeProbes
+                $InvocationState.ComposeProbes = $probe + 1
+                $snapshot = if ($ComposeSnapshots.Count -gt 0) {
+                    $ComposeSnapshots[
+                        [Math]::Min($probe, $ComposeSnapshots.Count - 1)
+                    ]
+                }
+                elseif ([int]$InvocationState.ComposeStops -gt 0) {
+                    'Absent'
+                }
+                elseif ($ComposeClassification -eq 'OwnedExact') {
+                    'OwnedRunning'
+                }
+                else {
+                    'ForeignRunning'
+                }
+                if ($snapshot -eq 'Absent') {
+                    return @()
+                }
+                $containerProject = if ($snapshot.StartsWith('Owned')) {
+                    $ComposeProjectName
+                }
+                else {
+                    'foreign-compose-project'
+                }
+                $labels = @{
+                    'com.docker.compose.project' = $containerProject
+                    'com.docker.compose.project.working_dir' = $RepositoryPath
+                    'com.docker.compose.project.config_files' = (
+                        Join-Path $RepositoryPath 'docker-compose.yml'
+                    )
+                }
+                return [pscustomobject]@{
+                    Project = $containerProject
+                    Service = 'web-api'
+                    State = if ($snapshot.EndsWith('Exited')) {
+                        'exited'
+                    }
+                    else {
+                        'running'
+                    }
+                    Labels = $labels
+                }
+            }
+
+            function Invoke-JobAgentCompose {
+                param(
+                    [string]$RepositoryPath,
+                    [string]$RuntimeEnvPath,
+                    [string[]]$Arguments
+                )
+
+                $InvocationState.ComposeStops = [int]$InvocationState.ComposeStops + 1
+                $InvocationState.ComposeArguments = @($Arguments)
+                return @()
+            }
+
+            $stopArguments = @{
+                RepositoryPath = $RepositoryPath
+                LocalAppDataRoot = $LocalAppDataRoot
+                Confirm = $false
+            }
+            if (-not [string]::IsNullOrWhiteSpace($RequestedTaskName)) {
+                $stopArguments['TaskName'] = $RequestedTaskName
+            }
+            return Invoke-JobAgentStop @stopArguments
+        } `
+            $RepositoryPath `
+            $LocalAppDataRoot `
+            $TaskDescription `
+            $ComposeClassification `
+            $InvocationState `
+            $ComposeProjectName `
+            $TaskSnapshots `
+            $ComposeSnapshots `
+            $RequestedTaskName
+    }.GetNewClosure()
+    $assertTrueForStop = ${function:Assert-True}
+    $assertEqualForStop = ${function:Assert-Equal}
+    $expectedStopTaskName = $stopConstants.RunnerTaskName
+    $expectedStopTaskPath = $stopConstants.RunnerTaskPath
+    $assertSuccessfulStop = {
+        param(
+            [pscustomobject]$Result,
+            [pscustomobject]$InvocationState,
+            [string]$Scenario
+        )
+
+        & $assertTrueForStop `
+            -Condition $Result.Stopped `
+            -Message "$Scenario reports stopped"
+        & $assertEqualForStop `
+            $InvocationState.TaskStops `
+            1 `
+            "$Scenario stops the marker-owned task once"
+        & $assertEqualForStop `
+            $InvocationState.StoppedTaskName `
+            $expectedStopTaskName `
+            "$Scenario binds the stop to the canonical task name"
+        & $assertEqualForStop `
+            $InvocationState.StoppedTaskPath `
+            $expectedStopTaskPath `
+            "$Scenario binds the stop to the root task path"
+        & $assertEqualForStop `
+            $InvocationState.ComposeStops `
+            1 `
+            "$Scenario stops the exact Compose project once"
+        & $assertEqualForStop `
+            $InvocationState.ComposeArguments.Count `
+            2 `
+            "$Scenario uses the bounded Compose down command"
+        & $assertEqualForStop `
+            $InvocationState.ComposeArguments[0] `
+            'down' `
+            "$Scenario invokes Compose down"
+        & $assertEqualForStop `
+            $InvocationState.ComposeArguments[1] `
+            '--remove-orphans' `
+            "$Scenario removes only orphan containers"
+    }.GetNewClosure()
+    try {
+        [System.IO.File]::WriteAllText(
+            $releaseLayout.IdentityCurrent,
+            '{invalid identity selection',
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        $corruptIdentityState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        $corruptIdentityStop = & $invokeMockedStop `
+            $repository `
+            $releaseTestRoot `
+            $stopConstants.RunnerTaskOwnershipMarker `
+            'OwnedExact' `
+            $corruptIdentityState `
+            $stopConstants.ComposeProjectName
+        & $assertSuccessfulStop `
+            $corruptIdentityStop `
+            $corruptIdentityState `
+            'corrupt identity selection'
+
+        Remove-Item -LiteralPath $releaseLayout.IdentityCurrent -Force
+        $missingIdentityState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        $missingIdentityStop = & $invokeMockedStop `
+            $repository `
+            $releaseTestRoot `
+            $stopConstants.RunnerTaskOwnershipMarker `
+            'OwnedExact' `
+            $missingIdentityState `
+            $stopConstants.ComposeProjectName
+        & $assertSuccessfulStop `
+            $missingIdentityStop `
+            $missingIdentityState `
+            'missing identity selection'
+
+        [System.IO.File]::WriteAllText(
+            $releaseLayout.IdentityCurrent,
+            $currentIdentityText,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        [System.IO.File]::WriteAllText(
+            $identityManifestPath,
+            '{invalid public identity manifest',
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        $corruptManifestState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        $corruptManifestStop = & $invokeMockedStop `
+            $repository `
+            $releaseTestRoot `
+            $stopConstants.RunnerTaskOwnershipMarker `
+            'OwnedExact' `
+            $corruptManifestState `
+            $stopConstants.ComposeProjectName
+        & $assertSuccessfulStop `
+            $corruptManifestStop `
+            $corruptManifestState `
+            'corrupt public identity manifest'
+
+        $foreignTaskState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    $repository `
+                    $releaseTestRoot `
+                    'foreign task' `
+                    'OwnedExact' `
+                    $foreignTaskState `
+                    $stopConstants.ComposeProjectName | Out-Null
+            } `
+            -Pattern 'RUNNER_TASK_NOT_OWNED_EXACT:Foreign'
+        Assert-Equal `
+            $foreignTaskState.TaskStops `
+            0 `
+            'foreign task marker is never stopped'
+        Assert-Equal `
+            $foreignTaskState.ComposeStops `
+            0 `
+            'foreign task marker refuses before Compose shutdown'
+
+        $foreignComposeState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    $repository `
+                    $releaseTestRoot `
+                    $stopConstants.RunnerTaskOwnershipMarker `
+                    'Foreign' `
+                    $foreignComposeState `
+                    $stopConstants.ComposeProjectName | Out-Null
+            } `
+            -Pattern 'COMPOSE_PROJECT_NOT_OWNED_EXACT:Foreign'
+        Assert-Equal `
+            $foreignComposeState.TaskStops `
+            0 `
+            'foreign Compose labels refuse before task shutdown'
+        Assert-Equal `
+            $foreignComposeState.ComposeStops `
+            0 `
+            'foreign Compose project is never stopped'
+
+        $schedulerFailureState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    -RepositoryPath $repository `
+                    -LocalAppDataRoot $releaseTestRoot `
+                    -TaskDescription $stopConstants.RunnerTaskOwnershipMarker `
+                    -ComposeClassification 'OwnedExact' `
+                    -InvocationState $schedulerFailureState `
+                    -ComposeProjectName $stopConstants.ComposeProjectName `
+                    -TaskSnapshots @('ProbeFailure') | Out-Null
+            } `
+            -Pattern 'RUNNER_TASK_QUERY_FAILED'
+        Assert-Equal `
+            $schedulerFailureState.TaskProbes `
+            1 `
+            'scheduler failure is observed once and never converted to absence'
+        Assert-Equal `
+            $schedulerFailureState.ComposeProbes `
+            0 `
+            'scheduler failure refuses before probing Compose'
+        Assert-Equal `
+            $schedulerFailureState.TaskStops `
+            0 `
+            'scheduler failure never issues a task stop'
+        Assert-Equal `
+            $schedulerFailureState.ComposeStops `
+            0 `
+            'scheduler failure never mutates Compose'
+
+        foreach ($invalidTaskName in @(
+            '*',
+            'JobApplyAgent-*',
+            'JobApplyAgent-PrivateRunner-Alternate'
+        )) {
+            $invalidTargetState = [pscustomobject]@{
+                TaskStops = 0
+                ComposeStops = 0
+                ComposeArguments = @()
+            }
+            Assert-Throws `
+                -Action {
+                    & $invokeMockedStop `
+                        -RepositoryPath $repository `
+                        -LocalAppDataRoot $releaseTestRoot `
+                        -TaskDescription $stopConstants.RunnerTaskOwnershipMarker `
+                        -ComposeClassification 'OwnedExact' `
+                        -InvocationState $invalidTargetState `
+                        -ComposeProjectName $stopConstants.ComposeProjectName `
+                        -RequestedTaskName $invalidTaskName | Out-Null
+                } `
+                -Pattern 'RUNNER_TASK_TARGET_NOT_CANONICAL'
+            Assert-Equal `
+                $invalidTargetState.TaskProbes `
+                0 `
+                "invalid task target $invalidTaskName is never queried"
+            Assert-Equal `
+                $invalidTargetState.ComposeStops `
+                0 `
+                "invalid task target $invalidTaskName never mutates Compose"
+        }
+        Assert-Throws `
+            -Action {
+                & $runtimeModule {
+                    Get-JobAgentEmergencyTaskState -TaskName '*' | Out-Null
+                }
+            } `
+            -Pattern 'RUNNER_TASK_TARGET_NOT_CANONICAL'
+        Assert-Throws `
+            -Action {
+                & $runtimeModule {
+                    Stop-JobAgentEmergencyRunnerTask `
+                        -TaskName 'JobApplyAgent-PrivateRunner-Alternate' `
+                        -Confirm:$false | Out-Null
+                }
+            } `
+            -Pattern 'RUNNER_TASK_TARGET_NOT_CANONICAL'
+        Assert-Throws `
+            -Action {
+                & $runtimeModule {
+                    param(
+                        [string]$RepositoryPath,
+                        [string]$LocalAppDataRoot
+                    )
+
+                    Invoke-JobAgentStop `
+                        -RepositoryPath $RepositoryPath `
+                        -LocalAppDataRoot $LocalAppDataRoot `
+                        -TaskName '*' `
+                        -WhatIf | Out-Null
+                } $repository $releaseTestRoot
+            } `
+            -Pattern 'RUNNER_TASK_TARGET_NOT_CANONICAL'
+
+        $alternateTaskPathState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    -RepositoryPath $repository `
+                    -LocalAppDataRoot $releaseTestRoot `
+                    -TaskDescription $stopConstants.RunnerTaskOwnershipMarker `
+                    -ComposeClassification 'OwnedExact' `
+                    -InvocationState $alternateTaskPathState `
+                    -ComposeProjectName $stopConstants.ComposeProjectName `
+                    -TaskSnapshots @('AlternatePathRunning') | Out-Null
+            } `
+            -Pattern 'RUNNER_TASK_PATH_NOT_CANONICAL'
+        Assert-Equal `
+            $alternateTaskPathState.TaskStops `
+            0 `
+            'canonical task name at an alternate path is never stopped'
+        Assert-Equal `
+            $alternateTaskPathState.ComposeProbes `
+            0 `
+            'alternate task path refuses before probing Compose'
+        Assert-Equal `
+            $alternateTaskPathState.ComposeStops `
+            0 `
+            'alternate task path never mutates Compose'
+
+        $appearingResourcesState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        $taskAppearsAfterPreflight = @(
+            'Absent',
+            'MarkerOwnedRunning',
+            'MarkerOwnedRunning',
+            'MarkerOwnedReady'
+        )
+        $composeAppearsAfterPreflight = @(
+            'Absent',
+            'OwnedRunning',
+            'OwnedRunning',
+            'Absent'
+        )
+        $appearingResourcesStop = & $invokeMockedStop `
+            $repository `
+            $releaseTestRoot `
+            $stopConstants.RunnerTaskOwnershipMarker `
+            'OwnedExact' `
+            $appearingResourcesState `
+            $stopConstants.ComposeProjectName `
+            $taskAppearsAfterPreflight `
+            $composeAppearsAfterPreflight
+        & $assertSuccessfulStop `
+            $appearingResourcesStop `
+            $appearingResourcesState `
+            'resources appearing after preflight'
+        Assert-Equal `
+            $appearingResourcesState.TaskProbes `
+            4 `
+            'absent task is re-probed for action and final verification'
+        Assert-Equal `
+            $appearingResourcesState.ComposeProbes `
+            4 `
+            'absent Compose project is re-probed for action and final verification'
+
+        $taskTurnsForeignState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    $repository `
+                    $releaseTestRoot `
+                    $stopConstants.RunnerTaskOwnershipMarker `
+                    'OwnedExact' `
+                    $taskTurnsForeignState `
+                    $stopConstants.ComposeProjectName `
+                    @('MarkerOwnedRunning', 'ForeignRunning') `
+                    @('OwnedRunning', 'OwnedRunning') | Out-Null
+            } `
+            -Pattern 'RUNNER_TASK_NOT_OWNED_EXACT:Foreign'
+        Assert-Equal `
+            $taskTurnsForeignState.TaskStops `
+            0 `
+            'task that turns foreign at action time is never stopped'
+        Assert-Equal `
+            $taskTurnsForeignState.ComposeStops `
+            0 `
+            'task action-time refusal occurs before Compose shutdown'
+
+        $composeTurnsForeignState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    $repository `
+                    $releaseTestRoot `
+                    $stopConstants.RunnerTaskOwnershipMarker `
+                    'OwnedExact' `
+                    $composeTurnsForeignState `
+                    $stopConstants.ComposeProjectName `
+                    @('MarkerOwnedRunning', 'MarkerOwnedRunning') `
+                    @('OwnedRunning', 'ForeignRunning') | Out-Null
+            } `
+            -Pattern 'COMPOSE_PROJECT_NOT_OWNED_EXACT:Foreign'
+        Assert-Equal `
+            $composeTurnsForeignState.TaskStops `
+            0 `
+            'Compose action-time refusal occurs before task shutdown'
+        Assert-Equal `
+            $composeTurnsForeignState.ComposeStops `
+            0 `
+            'Compose project that turns foreign is never stopped'
+
+        $unconfirmedTaskState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    $repository `
+                    $releaseTestRoot `
+                    $stopConstants.RunnerTaskOwnershipMarker `
+                    'OwnedExact' `
+                    $unconfirmedTaskState `
+                    $stopConstants.ComposeProjectName `
+                    @(
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedRunning'
+                    ) `
+                    @(
+                        'OwnedRunning',
+                        'OwnedRunning',
+                        'OwnedRunning',
+                        'Absent'
+                    ) | Out-Null
+            } `
+            -Pattern 'RUNNER_TASK_STOP_UNCONFIRMED:Running'
+        Assert-Equal `
+            $unconfirmedTaskState.TaskStops `
+            1 `
+            'a stop request without a final stopped task observation is not success'
+
+        $unknownFinalTaskState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    $repository `
+                    $releaseTestRoot `
+                    $stopConstants.RunnerTaskOwnershipMarker `
+                    'OwnedExact' `
+                    $unknownFinalTaskState `
+                    $stopConstants.ComposeProjectName `
+                    @(
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedUnknown'
+                    ) `
+                    @(
+                        'OwnedRunning',
+                        'OwnedRunning',
+                        'OwnedRunning',
+                        'Absent'
+                    ) | Out-Null
+            } `
+            -Pattern 'RUNNER_TASK_STOP_UNCONFIRMED:Unknown'
+        Assert-Equal `
+            $unknownFinalTaskState.TaskStops `
+            1 `
+            'an Unknown scheduler state is never accepted as stopped'
+
+        $unconfirmedComposeState = [pscustomobject]@{
+            TaskStops = 0
+            ComposeStops = 0
+            ComposeArguments = @()
+        }
+        Assert-Throws `
+            -Action {
+                & $invokeMockedStop `
+                    $repository `
+                    $releaseTestRoot `
+                    $stopConstants.RunnerTaskOwnershipMarker `
+                    'OwnedExact' `
+                    $unconfirmedComposeState `
+                    $stopConstants.ComposeProjectName `
+                    @(
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedRunning',
+                        'MarkerOwnedReady'
+                    ) `
+                    @(
+                        'OwnedRunning',
+                        'OwnedRunning',
+                        'OwnedRunning',
+                        'OwnedExited'
+                    ) | Out-Null
+            } `
+            -Pattern 'COMPOSE_PROJECT_STOP_UNCONFIRMED:1'
+        Assert-Equal `
+            $unconfirmedComposeState.ComposeStops `
+            1 `
+            'Compose down without a final absent observation is not success'
+    }
+    finally {
+        [System.IO.File]::WriteAllText(
+            $releaseLayout.IdentityCurrent,
+            $currentIdentityText,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        [System.IO.File]::WriteAllText(
+            $identityManifestPath,
+            $identityManifestText,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
 }
 finally {
     if (Test-Path -LiteralPath $releaseTestRoot) {
@@ -727,6 +1478,22 @@ $owned = Get-JobAgentTaskOwnership `
     -ExpectedAction $expected `
     -ExpectedUser $principal.UserId
 Assert-Equal $owned.Classification 'OwnedExact' 'marker plus exact action is owned'
+$emergencyOwned = & $runtimeModule {
+    param([object]$Task)
+    Get-JobAgentEmergencyTaskOwnership -Task $Task
+} $ownedTask
+Assert-Equal `
+    $emergencyOwned.Classification `
+    'MarkerOwned' `
+    'emergency stop recognizes the exact install-time marker'
+$emergencyAbsent = & $runtimeModule {
+    param([AllowNull()][object]$Task)
+    Get-JobAgentEmergencyTaskOwnership -Task $Task
+} $null
+Assert-Equal `
+    $emergencyAbsent.Classification `
+    'Absent' `
+    'emergency stop tolerates an absent task'
 
 $legacyTask = [pscustomobject]@{
     Description = 'legacy task'
@@ -741,6 +1508,14 @@ $legacy = Get-JobAgentTaskOwnership `
     -ExpectedAction $expected `
     -ExpectedUser $principal.UserId
 Assert-Equal $legacy.Classification 'LegacyAdoptable' 'exact legacy task requires adoption'
+$emergencyForeign = & $runtimeModule {
+    param([object]$Task)
+    Get-JobAgentEmergencyTaskOwnership -Task $Task
+} $legacyTask
+Assert-Equal `
+    $emergencyForeign.Classification `
+    'Foreign' `
+    'emergency stop refuses a task without the ownership marker'
 
 $driftedTask = [pscustomobject]@{
     Description = $constants.RunnerTaskOwnershipMarker
@@ -761,6 +1536,14 @@ $drifted = Get-JobAgentTaskOwnership `
     -ExpectedAction $expected `
     -ExpectedUser $principal.UserId
 Assert-Equal $drifted.Classification 'OwnedDrifted' 'marker-owned task drift is explicit'
+$emergencyDrifted = & $runtimeModule {
+    param([object]$Task)
+    Get-JobAgentEmergencyTaskOwnership -Task $Task
+} $driftedTask
+Assert-Equal `
+    $emergencyDrifted.Classification `
+    'MarkerOwned' `
+    'emergency stop remains available when identity-bound action details drift'
 
 $settingsDriftTask = [pscustomobject]@{
     Description = $constants.RunnerTaskOwnershipMarker
@@ -853,6 +1636,17 @@ $composeOwnership = Get-JobAgentComposeOwnership `
     -Containers $containers `
     -RepositoryPath $repository
 Assert-Equal $composeOwnership.Classification 'OwnedExact' 'compose labels bind exact project'
+$absentCompose = Get-JobAgentComposeOwnership `
+    -Containers $null `
+    -RepositoryPath $repository
+Assert-Equal `
+    $absentCompose.Classification `
+    'Absent' `
+    'a no-output Compose probe is classified as absent'
+Assert-Equal `
+    $absentCompose.ContainerCount `
+    0 `
+    'an absent Compose probe has no containers'
 $foreignContainers = @(
     [pscustomobject]@{
         Project = $constants.ComposeProjectName
