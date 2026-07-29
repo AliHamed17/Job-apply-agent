@@ -664,13 +664,22 @@ def validate_external_root(root: Path, *, repository_root: Path) -> Path:
 
 
 def _write_new(path: Path, value: bytes, *, private: bool) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
     try:
-        os.write(descriptor, value)
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        try:
+            remaining = memoryview(value)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError(errno.EIO, "identity write made no progress")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
     if private:
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
