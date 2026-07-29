@@ -30,7 +30,6 @@ MAX_JWKS_BYTES = 262_144
 MAX_JWKS_KEYS = 16
 MAX_JSON_NESTING_DEPTH = 32
 MAX_CLOCK_SKEW_SECONDS = 30
-MAX_TOKEN_AGE_SECONDS = 3_600
 MAX_TOKEN_TTL_SECONDS = 12 * 60 * 60
 DEFAULT_JWKS_CACHE_TTL_SECONDS = 3_600
 DEFAULT_JWKS_REFRESH_COOLDOWN_SECONDS = 30
@@ -47,7 +46,6 @@ class VercelOidcDenialCode(StrEnum):
     BAD_ISSUER = "BAD_ISSUER"
     BAD_SIGNATURE = "BAD_SIGNATURE"
     BAD_TARGET = "BAD_TARGET"
-    BAD_TIME_AGE = "BAD_TIME_AGE"
     BAD_TIME_EXPIRED = "BAD_TIME_EXPIRED"
     BAD_TIME_IAT = "BAD_TIME_IAT"
     BAD_TIME_NBF = "BAD_TIME_NBF"
@@ -479,11 +477,6 @@ class VercelOidcVerifier:
                 "expiry claim is invalid",
                 code=VercelOidcDenialCode.BAD_TIME_EXPIRED,
             )
-        if issued_at < now - MAX_TOKEN_AGE_SECONDS - MAX_CLOCK_SKEW_SECONDS:
-            raise VercelOidcVerificationError(
-                "token age is invalid",
-                code=VercelOidcDenialCode.BAD_TIME_AGE,
-            )
         if expires_at <= issued_at:
             raise VercelOidcVerificationError(
                 "token lifetime is invalid",
@@ -570,7 +563,6 @@ __all__ = [
     "MAX_JSON_NESTING_DEPTH",
     "MAX_JWKS_BYTES",
     "MAX_JWKS_KEYS",
-    "MAX_TOKEN_AGE_SECONDS",
     "MAX_TOKEN_BYTES",
     "MAX_TOKEN_TTL_SECONDS",
     "VERCEL_OIDC_HEADER",

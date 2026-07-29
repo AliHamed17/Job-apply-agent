@@ -263,14 +263,15 @@ and select **Global issuer mode** before deploying either environment. Team
 issuer mode is not accepted. The fixed global mode prevents an unauthenticated
 token from selecting a team-specific JWKS path: the verifier accepts only
 `https://oidc.vercel.com` and fetches only
-`https://oidc.vercel.com/.well-known/jwks`. Vercel then places its short-lived
-signed token in `x-vercel-oidc-token` on each function request.
-Vercel documents a one-hour lifetime for Preview and Production tokens. The
-verifier enforces that replay boundary as a one-hour maximum age from signed
-`iat`, regardless of a later `exp`, and rejects declared lifetimes beyond
-Vercel's twelve-hour absolute ceiling. Bounded server-only codes distinguish
-an overlong environment fallback from an overlong request token without
-logging token or claim material.
+`https://oidc.vercel.com/.well-known/jwks`. Vercel then places its signed token
+in `x-vercel-oidc-token` on each function request. The verifier honors the
+signed expiry and rejects declared lifetimes beyond a twelve-hour absolute
+ceiling. This matches deployed Preview behavior, where Vercel can reuse a
+still-valid signed runtime token after its first hour, without accepting an
+expired or overlong token. Bounded server-only codes distinguish an overlong
+environment fallback from an overlong request token without logging token or
+claim material. OIDC is deployment attestation only; it never replaces the
+operator session or one-use command authority.
 The isolated project uses the `[tool.vercel]` FastAPI entrypoint and Vercel's
 current Python framework runtime. Do not reintroduce legacy `builds` or
 `routes` entries: those bypass current framework request handling and can
