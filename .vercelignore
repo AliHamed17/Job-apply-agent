@@ -9,7 +9,9 @@ control_plane/*
 !control_plane/api/**
 !control_plane/job_control_plane
 !control_plane/job_control_plane/**
+!control_plane/pyproject.toml
 !control_plane/requirements.txt
+!control_plane/vercel.json
 
 # Defence in depth: these paths stay excluded even if a future allowlist rule
 # is broadened. The public bundle must never contain candidate material,

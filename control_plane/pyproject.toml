@@ -24,6 +24,9 @@ dev = [
     "ruff>=0.12,<1",
 ]
 
+[tool.vercel]
+entrypoint = "api.index:app"
+
 [tool.setuptools.packages.find]
 include = ["job_control_plane*"]
 

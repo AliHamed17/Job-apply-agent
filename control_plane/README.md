@@ -124,8 +124,14 @@ non-dispatching operator origin, so protected preview tests remain possible
 without a wildcard origin.
 
 Set the Vercel Project Root exactly to this `control_plane` directory. Its
-`requirements.txt` and `vercel.json` are authoritative; do not build the
-function from the parent application's dependency manifest.
+`requirements.txt`, `pyproject.toml`, and `vercel.json` are authoritative; do
+not build the function from the parent application's dependency manifest. The
+`[tool.vercel]` FastAPI entrypoint must remain on Vercel's current Python
+framework runtime. Legacy `builds`/`routes` manifests are prohibited because
+they bypass current framework request handling, including the request-scoped
+OIDC header required above. The repository-root fallback manifest declares the
+same `fastapi` framework and its explicit upload allowlist must include this
+directory's `pyproject.toml` and `vercel.json`.
 
 Use Preview only with isolated Preview data and identities. For an immutable
 production candidate, disable automatic production-domain assignment, run
