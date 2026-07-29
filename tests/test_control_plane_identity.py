@@ -113,6 +113,52 @@ def _test_node_cli(tmp_path: Path) -> tuple[Path, str, Path, str]:
     )
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows text mode translates binary newlines")
+def test_binary_identity_writer_preserves_dpapi_ciphertext_bytes(tmp_path: Path) -> None:
+    payload = b"\x01\x00ciphertext\nwith\r\nbinary\x00bytes\xff"
+    destination = tmp_path / "control-secrets.dpapi"
+
+    identity_module._write_new(destination, payload, private=True)
+
+    assert destination.read_bytes() == payload
+
+
+def test_binary_identity_writer_completes_short_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"binary-identity-payload-with-several-write-chunks"
+    destination = tmp_path / "control-secrets.dpapi"
+    actual_write = os.write
+    write_sizes: list[int] = []
+
+    def short_write(descriptor: int, value: bytes | memoryview) -> int:
+        chunk = value[:5]
+        written = actual_write(descriptor, chunk)
+        write_sizes.append(written)
+        return written
+
+    monkeypatch.setattr(identity_module.os, "write", short_write)
+
+    identity_module._write_new(destination, payload, private=True)
+
+    assert destination.read_bytes() == payload
+    assert len(write_sizes) > 1
+
+
+def test_binary_identity_writer_removes_partial_file_without_write_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "control-secrets.dpapi"
+    monkeypatch.setattr(identity_module.os, "write", lambda _descriptor, _value: 0)
+
+    with pytest.raises(OSError, match="identity write made no progress"):
+        identity_module._write_new(destination, b"protected-identity", private=True)
+
+    assert not destination.exists()
+
+
 class _FakeClipboard:
     def __init__(self) -> None:
         self.value: str | None = None
