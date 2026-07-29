@@ -595,7 +595,7 @@ function Assert-JobAgentSafeRuntimeEnvironment {
         JOB_AGENT_TLS_DIR = $Layout.Tls
     }
     foreach ($entry in $expectedPaths.GetEnumerator()) {
-        $actual = ([string]$Values[$entry.Key]).Replace('/', '\')
+        $actual = [string]$Values[$entry.Key]
         if (-not [string]::Equals(
             (ConvertTo-JobAgentCanonicalPath -LiteralPath $actual),
             (ConvertTo-JobAgentCanonicalPath -LiteralPath ([string]$entry.Value)),

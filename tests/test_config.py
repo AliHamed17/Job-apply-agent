@@ -5,7 +5,8 @@ import pytest
 from core.config import JOB_AGENT_ENV_FILE, Settings, get_settings
 
 
-def test_new_defaults_present():
+def test_new_defaults_present(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("REDIS_URL", raising=False)
     s = Settings(_env_file=None)
     assert s.min_apply_score == 40.0
     assert s.linkedin_daily_cap == 45
