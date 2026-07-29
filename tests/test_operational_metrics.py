@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 from prometheus_client import REGISTRY, CollectorRegistry, generate_latest
-from sqlalchemy import BigInteger, create_engine
+from sqlalchemy import BigInteger, create_engine, func
 from sqlalchemy.orm import sessionmaker
 
 import core.operational_metrics as operational_metrics
@@ -45,7 +45,13 @@ def _sqlite_factory(path):
     return engine, sessionmaker(bind=engine)
 
 
-def _record_stage(db, dedup_key: str, *, occurred_at: datetime | None = None) -> bool:
+def _record_stage(
+    db,
+    dedup_key: str,
+    *,
+    occurred_at: datetime | None = None,
+    stage: str = "queued",
+) -> bool:
     return record_operational_event(
         db,
         dedup_key=dedup_key,
@@ -54,7 +60,7 @@ def _record_stage(db, dedup_key: str, *, occurred_at: datetime | None = None) ->
         ats="greenhouse",
         adapter_version="1.0.0",
         selector_version="greenhouse-candidate-v9",
-        stage="queued",
+        stage=stage,
         occurred_at=occurred_at,
         duration_seconds=2.5,
     )
@@ -174,6 +180,100 @@ def test_sqlite_concurrent_redelivery_increments_rollup_once(tmp_path):
         assert rollup.duration_le_5s == 1
         db.close()
     finally:
+        engine.dispose()
+
+
+def test_event_writes_defer_one_prune_until_outer_batch_commit(tmp_path, monkeypatch):
+    engine, factory = _sqlite_factory(tmp_path / "metric-batch-maintenance.db")
+    prune_calls = []
+
+    def observe_prune(db, *, now=None):
+        prune_calls.append((db, now))
+        return 0
+
+    monkeypatch.setattr(operational_metrics, "prune_operational_events", observe_prune)
+    db = factory()
+    try:
+        for index in range(200):
+            assert _record_stage(db, f"bounded-form-plan-event-{index}")
+
+        assert prune_calls == []
+        with db.begin_nested():
+            assert _record_stage(db, "bounded-form-plan-event-200")
+        assert prune_calls == []
+        assert db.query(OperationalMetricEvent).count() == 201
+        assert db.query(OperationalMetricRollup).one().event_count == 201
+
+        db.commit()
+        assert prune_calls == [(db, None)]
+        assert db.query(OperationalMetricEvent).count() == 201
+        assert db.query(OperationalMetricReceipt).count() == 201
+        assert db.query(OperationalMetricRollup).one().event_count == 201
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_rollback_and_dedup_only_commit_do_not_schedule_pruning(tmp_path, monkeypatch):
+    engine, factory = _sqlite_factory(tmp_path / "metric-maintenance-rollback.db")
+    prune_calls = []
+
+    def observe_prune(db, *, now=None):
+        prune_calls.append((db, now))
+        return 0
+
+    monkeypatch.setattr(operational_metrics, "prune_operational_events", observe_prune)
+    db = factory()
+    try:
+        assert _record_stage(db, "rolled-back-operational-event")
+        db.rollback()
+        db.commit()
+        assert prune_calls == []
+        assert db.query(OperationalMetricEvent).count() == 0
+        assert db.query(OperationalMetricReceipt).count() == 0
+        assert db.query(OperationalMetricRollup).count() == 0
+
+        assert _record_stage(db, "committed-operational-event")
+        db.commit()
+        assert prune_calls == [(db, None)]
+
+        prune_calls.clear()
+        assert not _record_stage(db, "committed-operational-event")
+        db.commit()
+        assert prune_calls == []
+        assert db.query(OperationalMetricEvent).count() == 1
+        assert db.query(OperationalMetricReceipt).count() == 1
+        assert db.query(OperationalMetricRollup).one().event_count == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_nested_rollback_discards_only_its_maintenance_request(tmp_path, monkeypatch):
+    engine, factory = _sqlite_factory(tmp_path / "metric-nested-rollback.db")
+    prune_calls = []
+
+    def observe_prune(db, *, now=None):
+        prune_calls.append((db, now))
+        return 0
+
+    monkeypatch.setattr(operational_metrics, "prune_operational_events", observe_prune)
+    db = factory()
+    try:
+        assert _record_stage(db, "outer-operational-event")
+        with pytest.raises(RuntimeError, match="rollback nested metric"):
+            with db.begin_nested():
+                assert _record_stage(db, "nested-rolled-back-operational-event")
+                raise RuntimeError("rollback nested metric")
+
+        assert prune_calls == []
+        db.commit()
+        assert prune_calls == [(db, None)]
+        assert db.query(OperationalMetricEvent).count() == 1
+        assert db.query(OperationalMetricReceipt).count() == 1
+        assert db.query(OperationalMetricRollup).one().event_count == 1
+    finally:
+        db.close()
         engine.dispose()
 
 
@@ -537,6 +637,135 @@ def test_postgres_concurrent_redelivery_increments_rollup_once():
         db.close()
     finally:
         engine.dispose()
+
+
+@pytest.mark.skipif(
+    not os.getenv("DATABASE_URL", "").startswith("postgresql"),
+    reason="PostgreSQL integration test",
+)
+def test_postgres_concurrent_batch_commits_leave_exact_detail_cap(monkeypatch):
+    engine = create_engine(os.environ["DATABASE_URL"])
+    factory = sessionmaker(bind=engine)
+    seed_time = datetime(1900, 1, 1)
+    recent_time = datetime.now(UTC).replace(tzinfo=None)
+    token_stages = {
+        f"postgres-prune-seed-a-{uuid4().hex}": "queued",
+        f"postgres-prune-seed-b-{uuid4().hex}": "inspecting",
+        f"postgres-prune-recent-a-{uuid4().hex}": "preparing",
+        f"postgres-prune-recent-b-{uuid4().hex}": "ready",
+    }
+    tokens = list(token_stages)
+    seed_tokens = tokens[:2]
+    recent_tokens = tokens[2:]
+
+    db = factory()
+    baseline = db.query(func.count(OperationalMetricEvent.id)).scalar() or 0
+    db.close()
+    monkeypatch.setattr(operational_metrics, "OPERATIONAL_EVENT_MAX_ROWS", baseline + 3)
+    monkeypatch.setattr(operational_metrics, "OPERATIONAL_EVENT_RETENTION_DAYS", 100_000)
+
+    try:
+        db = factory()
+        for offset, token in enumerate(seed_tokens):
+            assert _record_stage(
+                db,
+                token,
+                occurred_at=seed_time + timedelta(seconds=offset),
+                stage=token_stages[token],
+            )
+        db.commit()
+        db.close()
+
+        barrier = Barrier(2)
+
+        def record(token: str) -> bool:
+            writer = factory()
+            try:
+                barrier.wait()
+                inserted = _record_stage(
+                    writer,
+                    token,
+                    occurred_at=recent_time,
+                    stage=token_stages[token],
+                )
+                writer.commit()
+                return inserted
+            finally:
+                writer.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            inserted = list(pool.map(record, recent_tokens))
+        assert inserted == [True, True]
+
+        db = factory()
+        try:
+            assert db.query(OperationalMetricEvent).count() == baseline + 3
+            retained_keys = {
+                row.event_key
+                for row in db.query(OperationalMetricEvent.event_key)
+                .filter(
+                    OperationalMetricEvent.event_key.in_(
+                        [operational_metrics._digest("event", token) for token in tokens]
+                    )
+                )
+                .all()
+            }
+            assert retained_keys == {
+                operational_metrics._digest("event", token)
+                for token in (seed_tokens[1], *recent_tokens)
+            }
+            assert all(
+                db.get(
+                    OperationalMetricReceipt,
+                    operational_metrics._digest("event", token),
+                )
+                is not None
+                for token in tokens
+            )
+        finally:
+            db.close()
+    finally:
+        cleanup = factory()
+        try:
+            for token, stage in token_stages.items():
+                event_key = operational_metrics._digest("event", token)
+                receipt = cleanup.get(OperationalMetricReceipt, event_key)
+                if receipt is None:
+                    continue
+                cleanup.query(OperationalMetricEvent).filter(
+                    OperationalMetricEvent.event_key == event_key
+                ).delete(synchronize_session=False)
+                cleanup.delete(receipt)
+
+                labels = operational_metrics.OperationalLabels.normalize(
+                    metric_name="attempt_stage",
+                    ats="greenhouse",
+                    adapter_version="1.0.0",
+                    selector_version="greenhouse-candidate-v9",
+                    stage=stage,
+                )
+                rollup_query = cleanup.query(OperationalMetricRollup)
+                for name, value in labels.as_dict().items():
+                    rollup_query = rollup_query.filter(
+                        getattr(OperationalMetricRollup, name) == value
+                    )
+                rollup = rollup_query.one()
+                rollup.event_count -= 1
+                rollup.duration_count -= 1
+                rollup.duration_sum_ms -= 2_500
+                rollup.duration_le_5s -= 1
+                rollup.duration_le_15s -= 1
+                rollup.duration_le_60s -= 1
+                rollup.duration_le_300s -= 1
+                rollup.duration_le_900s -= 1
+                rollup.duration_le_inf -= 1
+                if rollup.event_count == 0:
+                    cleanup.delete(rollup)
+            cleanup.commit()
+            assert cleanup.query(OperationalMetricEvent).count() == baseline
+        finally:
+            cleanup.close()
+            engine.dispose()
 
 
 @pytest.mark.skipif(

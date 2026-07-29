@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session, SessionTransaction
 
 from core.application_state import (
     prepared_application_count,
@@ -71,6 +72,10 @@ _DURATION_BUCKETS_MS = (1_000, 5_000, 15_000, 60_000, 300_000, 900_000)
 OPERATIONAL_EVENT_RETENTION_DAYS = 90
 OPERATIONAL_EVENT_MAX_ROWS = 100_000
 _OPERATIONAL_PRUNE_LOCK_ID = 0x4A4F424D45545249
+_OPERATIONAL_PRUNE_PENDING_KEY = "job_agent_operational_prune_pending_v1"
+_OPERATIONAL_PRUNE_ACTIVE_KEY = "job_agent_operational_prune_active_v1"
+_OPERATIONAL_PRUNE_ROLLBACK_KEY = "job_agent_operational_prune_rollback_v1"
+_OPERATIONAL_PRUNE_LISTENER_MARKER = "_job_agent_operational_prune_listener_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +285,83 @@ def prune_operational_events(
     return removed
 
 
+def _schedule_operational_pruning(db: Session) -> None:
+    """Request one retention pass at this outer transaction's commit boundary."""
+
+    transaction = db.get_nested_transaction() or db.get_transaction()
+    if transaction is None:  # pragma: no cover - writes always autobegin
+        return
+    pending = db.info.setdefault(_OPERATIONAL_PRUNE_PENDING_KEY, {})
+    pending[transaction] = int(pending.get(transaction, 0)) + 1
+
+
+def _prune_operational_events_before_commit(db: Session) -> None:
+    """Run at most one retention pass for all events in an outer transaction."""
+
+    # ``before_commit`` also fires when a SAVEPOINT is released. Keep the
+    # request pending for the authoritative outer transaction so rolled-back
+    # work never makes retention maintenance commit independently.
+    if db.in_nested_transaction():
+        return
+    transaction = db.get_transaction()
+    pending = db.info.get(_OPERATIONAL_PRUNE_PENDING_KEY, {})
+    if transaction is None or not pending.get(transaction):
+        return
+    if db.info.get(_OPERATIONAL_PRUNE_ACTIVE_KEY):
+        return
+
+    db.info[_OPERATIONAL_PRUNE_ACTIVE_KEY] = True
+    try:
+        # Flush any ORM-backed fallback insert before counting. PostgreSQL and
+        # SQLite Core inserts are already visible in this transaction.
+        db.flush()
+        prune_operational_events(db)
+    finally:
+        db.info.pop(_OPERATIONAL_PRUNE_ACTIVE_KEY, None)
+
+
+def _mark_operational_pruning_rollback(db: Session) -> None:
+    """Remember which pending transaction is being rolled back."""
+
+    transaction = db.get_nested_transaction() or db.get_transaction()
+    if transaction is not None:
+        db.info.setdefault(_OPERATIONAL_PRUNE_ROLLBACK_KEY, set()).add(transaction)
+
+
+def _clear_operational_pruning_request(
+    db: Session,
+    transaction: SessionTransaction,
+) -> None:
+    """Promote committed SAVEPOINT work or discard rolled-back requests."""
+
+    if transaction.parent is not None:
+        pending = db.info.get(_OPERATIONAL_PRUNE_PENDING_KEY, {})
+        count = int(pending.pop(transaction, 0))
+        rolled_back = db.info.get(_OPERATIONAL_PRUNE_ROLLBACK_KEY, set())
+        was_rolled_back = transaction in rolled_back
+        rolled_back.discard(transaction)
+        if count and not was_rolled_back:
+            pending[transaction.parent] = int(pending.get(transaction.parent, 0)) + count
+        return
+    db.info.pop(_OPERATIONAL_PRUNE_PENDING_KEY, None)
+    db.info.pop(_OPERATIONAL_PRUNE_ACTIVE_KEY, None)
+    db.info.pop(_OPERATIONAL_PRUNE_ROLLBACK_KEY, None)
+
+
+def _register_operational_pruning_listeners() -> None:
+    """Install process-wide Session listeners once, including across imports."""
+
+    if getattr(Session, _OPERATIONAL_PRUNE_LISTENER_MARKER, False):
+        return
+    event.listen(Session, "before_commit", _prune_operational_events_before_commit)
+    event.listen(Session, "after_rollback", _mark_operational_pruning_rollback)
+    event.listen(Session, "after_transaction_end", _clear_operational_pruning_request)
+    setattr(Session, _OPERATIONAL_PRUNE_LISTENER_MARKER, True)
+
+
+_register_operational_pruning_listeners()
+
+
 def record_operational_event(
     db,
     *,
@@ -368,7 +450,7 @@ def record_operational_event(
                 setattr(row, name, getattr(row, name) + increment)
             row.updated_at = timestamp
         db.flush()
-        prune_operational_events(db)
+        _schedule_operational_pruning(db)
         return True
 
     excluded_updates = {
@@ -383,7 +465,7 @@ def record_operational_event(
             set_=excluded_updates,
         )
     )
-    prune_operational_events(db)
+    _schedule_operational_pruning(db)
     return True
 
 
