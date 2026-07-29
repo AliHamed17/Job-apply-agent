@@ -27,7 +27,6 @@ from job_control_plane.db import Base
 from job_control_plane.vercel_oidc import (
     MAX_JSON_NESTING_DEPTH,
     MAX_JWKS_KEYS,
-    MAX_TOKEN_AGE_SECONDS,
     MAX_TOKEN_BYTES,
     MAX_TOKEN_TTL_SECONDS,
     VERCEL_OIDC_GLOBAL_ISSUER,
@@ -228,6 +227,26 @@ def test_json_nesting_bound_is_exact_and_string_aware(
         verifier.verify(_signed_token(rsa_private_key, claims=otherwise_valid_over_depth))
 
 
+def test_signed_twelve_hour_token_remains_valid_after_one_hour(
+    rsa_private_key: RSAPrivateKey,
+) -> None:
+    issued_at = NOW - 4_000
+    verifier = _verifier(rsa_private_key)
+
+    verifier.verify(
+        _signed_token(
+            rsa_private_key,
+            claims=_claims(
+                overrides={
+                    "iat": issued_at,
+                    "nbf": issued_at,
+                    "exp": issued_at + MAX_TOKEN_TTL_SECONDS,
+                }
+            ),
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("override", "message"),
     [
@@ -245,14 +264,15 @@ def test_json_nesting_bound_is_exact_and_string_aware(
         ({"iat": NOW + 31}, "issued-at"),
         ({"nbf": NOW + 31}, "not-before"),
         ({"exp": NOW - 31}, "expiry"),
+        ({"exp": NOW + MAX_TOKEN_TTL_SECONDS + 1}, "token lifetime"),
         (
             {
-                "iat": NOW - MAX_TOKEN_AGE_SECONDS - 31,
-                "nbf": NOW - MAX_TOKEN_AGE_SECONDS - 31,
+                "iat": NOW - 4_000,
+                "nbf": NOW - 4_000,
+                "exp": NOW - 4_000 + MAX_TOKEN_TTL_SECONDS + 1,
             },
-            "token age",
+            "token lifetime",
         ),
-        ({"exp": NOW + MAX_TOKEN_TTL_SECONDS + 1}, "token lifetime"),
         ({"nbf": NOW - 31}, "time ordering"),
         ({"iat": float(NOW)}, "iat claim"),
     ],
@@ -589,7 +609,17 @@ def test_vercel_middleware_requires_attestation_before_database_access(
             assert malformed.json() == {"code": "VERCEL_OIDC_ATTESTATION_FAILED"}
             assert checkouts == 0
 
-            token = _signed_token(rsa_private_key)
+            issued_at = NOW - 4_000
+            token = _signed_token(
+                rsa_private_key,
+                claims=_claims(
+                    overrides={
+                        "iat": issued_at,
+                        "nbf": issued_at,
+                        "exp": issued_at + MAX_TOKEN_TTL_SECONDS,
+                    }
+                ),
+            )
             login_shell = client.get(
                 "/",
                 headers={VERCEL_OIDC_HEADER: token},
@@ -726,7 +756,6 @@ def test_verification_errors_expose_only_bounded_diagnostic_codes() -> None:
         "BAD_ISSUER",
         "BAD_SIGNATURE",
         "BAD_TARGET",
-        "BAD_TIME_AGE",
         "BAD_TIME_EXPIRED",
         "BAD_TIME_IAT",
         "BAD_TIME_NBF",
