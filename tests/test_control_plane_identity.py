@@ -1113,6 +1113,26 @@ def test_configure_vercel_selects_only_the_exact_record_when_both_scopes_exist(
             },
             "VERCEL_ENV_METADATA_UNSAFE",
         ),
+        *(
+            (
+                {
+                    "id": f"malformed_{field}",
+                    "key": "CONTROL_OPERATOR_TOKEN",
+                    "type": "sensitive",
+                    "target": ["preview"],
+                    "decrypted": False,
+                    "value": "",
+                    field: malformed_value,
+                },
+                "VERCEL_ENV_METADATA_INVALID",
+            )
+            for field, malformed_value in (
+                ("value", []),
+                ("legacyValue", {}),
+                ("vsmValue", []),
+                ("gitBranch", {}),
+            )
+        ),
     ],
 )
 def test_configure_vercel_rejects_ambiguous_or_decrypted_metadata_before_decrypt(

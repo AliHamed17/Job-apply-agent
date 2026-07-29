@@ -1701,11 +1701,15 @@ def _vercel_environment_inventory(
         name = raw_record.get("key")
         if name not in _IDENTITY_DERIVED_VERCEL_VARIABLES:
             continue
-        if (
-            raw_record.get("decrypted") is not False
-            or raw_record.get("value") not in {None, ""}
-            or raw_record.get("legacyValue") not in {None, ""}
-            or raw_record.get("vsmValue") not in {None, ""}
+        secret_metadata_values = tuple(
+            raw_record.get(field) for field in ("value", "legacyValue", "vsmValue")
+        )
+        if any(
+            value is not None and not isinstance(value, str) for value in secret_metadata_values
+        ):
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        if raw_record.get("decrypted") is not False or any(
+            value not in {None, ""} for value in secret_metadata_values
         ):
             raise IdentityProvisioningError("VERCEL_ENV_METADATA_UNSAFE")
         if raw_record.get("type") != "sensitive":
@@ -1718,10 +1722,13 @@ def _vercel_environment_inventory(
             targets = tuple(raw_target)
         else:
             raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
+        raw_git_branch = raw_record.get("gitBranch")
+        if raw_git_branch is not None and not isinstance(raw_git_branch, str):
+            raise IdentityProvisioningError("VERCEL_ENV_METADATA_INVALID")
         if (
             len(targets) != 1
             or targets[0] not in {"preview", "production"}
-            or raw_record.get("gitBranch") not in {None, ""}
+            or raw_git_branch not in {None, ""}
             or raw_record.get("customEnvironmentIds") not in (None, [], ())
         ):
             raise IdentityProvisioningError(f"VERCEL_ENV_TARGET_AMBIGUOUS_{name}")
