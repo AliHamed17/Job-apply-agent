@@ -1,11 +1,12 @@
 """Execution-time preparation readiness regression coverage."""
 
+from contextlib import contextmanager
 from profile.models import UserProfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from core.config import Settings
@@ -384,3 +385,80 @@ def test_profile_change_during_generation_requeues_exact_job(tmp_path):
     check.close()
     queued_rescore.delay.assert_called_once_with(job_id, True)
     queued_rescore.apply.assert_not_called()
+
+
+def test_material_commit_remains_inside_profile_write_transaction(tmp_path):
+    factory = _factory(tmp_path)
+    db = factory()
+    job = Job(
+        title="Profile commit serialization",
+        company="Example",
+        location="Israel",
+        employment_type="",
+        seniority="",
+        description="Keep the profile lock through the material commit.",
+        requirements="Python",
+        source_url="https://example.test/profile-commit-serialization",
+        apply_url="https://example.test/profile-commit-serialization",
+        status=JobStatus.DRAFT,
+        score=95.0,
+    )
+    db.add_all([job, UserProfileVersion(version=1, profile_yaml="{}")])
+    db.commit()
+    job_id = job.id
+    db.close()
+
+    lock_state = {"held": False}
+    commit_lock_states = []
+
+    @contextmanager
+    def observed_profile_transaction(_db):
+        assert lock_state["held"] is False
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    def observe_commit(session):
+        if session.new or session.dirty:
+            commit_lock_states.append(lock_state["held"])
+
+    event.listen(factory.class_, "before_commit", observe_commit)
+    settings = Settings(
+        _env_file=None,
+        auto_apply=True,
+        draft_only=True,
+        cv_routing_path="does-not-exist.yaml",
+    )
+    try:
+        with (
+            patch("worker.tasks.get_session_factory", return_value=factory),
+            patch("worker.tasks.get_settings", return_value=settings),
+            patch(
+                "profile.writer.profile_write_transaction",
+                side_effect=observed_profile_transaction,
+            ),
+            patch(
+                "llm.generation.generate_full_application",
+                new=AsyncMock(
+                    return_value=GeneratedApplication(
+                        cover_letter="serialized material",
+                    )
+                ),
+            ),
+        ):
+            from worker.tasks import generate_application_task
+
+            result = generate_application_task.apply(args=[job_id, 1, False], throw=True)
+            assert result.successful()
+    finally:
+        event.remove(factory.class_, "before_commit", observe_commit)
+
+    assert commit_lock_states == [True]
+    assert lock_state["held"] is False
+    check = factory()
+    application = check.query(Application).filter(Application.job_id == job_id).one()
+    assert application.cover_letter == "serialized material"
+    assert application.profile_version == 1
+    check.close()

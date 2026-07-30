@@ -750,6 +750,8 @@ def generate_application_task(
         # in place instead of blindly inserting, which used to raise
         # IntegrityError and burn a full (real, non-mock) LLM generation on
         # every retry without ever persisting the result.
+        from profile.writer import profile_write_transaction
+
         from core.application_mutations import (
             ApplicationMutationBlockedError,
             ApplicationMutationIntent,
@@ -757,49 +759,106 @@ def generate_application_task(
             lock_job_without_application_for_mutation,
         )
 
-        if expected_application_id is None:
-            try:
-                db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
-            except ApplicationMutationBlockedError as exc:
-                db.rollback()
-                logger.warning(
-                    "application_generation_write_blocked",
-                    job_id=job_id,
-                    reason_code=exc.reason_code,
-                )
-                return
-            app = Application(job_id=job_id)
-            db.add(app)
-        else:
-            try:
-                locked = lock_application_for_mutation(
+        # Acquire the same profile advisory transaction used by onboarding
+        # before any job/application row lock. Keep it through the immutable
+        # version check and material commit so a newer profile cannot appear
+        # in the final check-to-commit interval.
+        profile_changed = False
+        with profile_write_transaction(db):
+            if expected_application_id is None:
+                try:
+                    db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
+                except ApplicationMutationBlockedError as exc:
+                    db.rollback()
+                    logger.warning(
+                        "application_generation_write_blocked",
+                        job_id=job_id,
+                        reason_code=exc.reason_code,
+                    )
+                    return
+                app = Application(job_id=job_id)
+                db.add(app)
+            else:
+                try:
+                    locked = lock_application_for_mutation(
+                        db,
+                        application_id=expected_application_id,
+                        intent=ApplicationMutationIntent.CONTENT,
+                        expected_revision=expected_revision,
+                    )
+                except ApplicationMutationBlockedError as exc:
+                    db.rollback()
+                    logger.warning(
+                        "application_generation_write_blocked",
+                        application_id=expected_application_id,
+                        reason_code=exc.reason_code,
+                    )
+                    return
+                assert locked is not None and locked.job is not None
+                app = locked.application
+                db_job = locked.job
+                from core.application_revision import bump_application_revision
+
+                bump_application_revision(
                     db,
-                    application_id=expected_application_id,
-                    intent=ApplicationMutationIntent.CONTENT,
-                    expected_revision=expected_revision,
+                    app,
+                    reason_code="APPLICATION_REGENERATED",
                 )
-            except ApplicationMutationBlockedError as exc:
+
+            current_profile_version = latest_profile_version(db)
+            if current_profile_version != expected_profile_version:
                 db.rollback()
-                logger.warning(
-                    "application_generation_write_blocked",
-                    application_id=expected_application_id,
-                    reason_code=exc.reason_code,
+                profile_changed = True
+            else:
+                app.cover_letter = generated.cover_letter
+                app.recruiter_message = generated.recruiter_message
+                app.qa_answers = json.dumps(generated.qa_answers)
+                # A score can make an application eligible for a review batch, but
+                # never constitutes consent to send an employment application.
+                app.status = JobStatus.DRAFT
+                app.approved_at = None
+                app.approval_source = None
+                app.selected_cv_id = routing.selected_cv_id
+                app.cv_routing_confidence = routing.confidence
+                app.cv_routing_evidence = json.dumps(routing.matched_evidence)
+                app.cv_routing_fallback_reason = routing.fallback_reason
+                app.profile_version = expected_profile_version
+                from core.material_audit import (
+                    material_review_reason,
+                    persist_material_audit,
                 )
-                return
-            assert locked is not None and locked.job is not None
-            app = locked.application
-            db_job = locked.job
-            from core.application_revision import bump_application_revision
 
-            bump_application_revision(
-                db,
-                app,
-                reason_code="APPLICATION_REGENERATED",
-            )
+                material_blockers = persist_material_audit(app, generated, selected_cv)
+                app.needs_review_reason = material_review_reason(
+                    selected_cv_id=routing.selected_cv_id,
+                    routing_fallback_reason=routing.fallback_reason,
+                    blockers=material_blockers,
+                    placeholder_fields=generated.placeholder_fields,
+                )
+                db.flush()
 
-        current_profile_version = latest_profile_version(db)
-        if current_profile_version != expected_profile_version:
-            db.rollback()
+                db_job.status = JobStatus.DRAFT
+
+                from core.application_audit import record_application_event
+
+                record_application_event(
+                    db,
+                    app.id,
+                    "application_generated",
+                    actor="worker",
+                    details={
+                        "selected_cv_id": app.selected_cv_id,
+                        "selected_cv_hash": app.selected_cv_hash,
+                        "profile_version": app.profile_version,
+                        "material_eligible": app.material_eligible,
+                        "material_blockers": material_blockers,
+                        "state": "draft",
+                    },
+                )
+
+                db.commit()
+
+        if profile_changed:
             returned_to_score = _return_unprepared_job_to_scored(
                 db,
                 job_id=job_id,
@@ -812,51 +871,6 @@ def generate_application_task(
             if automatic_preparation and returned_to_score:
                 _dispatch_exact_rescore(job_id, settings)
             return
-
-        app.cover_letter = generated.cover_letter
-        app.recruiter_message = generated.recruiter_message
-        app.qa_answers = json.dumps(generated.qa_answers)
-        # A score can make an application eligible for a review batch, but
-        # never constitutes consent to send an employment application.
-        app.status = JobStatus.DRAFT
-        app.approved_at = None
-        app.approval_source = None
-        app.selected_cv_id = routing.selected_cv_id
-        app.cv_routing_confidence = routing.confidence
-        app.cv_routing_evidence = json.dumps(routing.matched_evidence)
-        app.cv_routing_fallback_reason = routing.fallback_reason
-        app.profile_version = expected_profile_version
-        from core.material_audit import material_review_reason, persist_material_audit
-
-        material_blockers = persist_material_audit(app, generated, selected_cv)
-        app.needs_review_reason = material_review_reason(
-            selected_cv_id=routing.selected_cv_id,
-            routing_fallback_reason=routing.fallback_reason,
-            blockers=material_blockers,
-            placeholder_fields=generated.placeholder_fields,
-        )
-        db.flush()
-
-        db_job.status = JobStatus.DRAFT
-
-        from core.application_audit import record_application_event
-
-        record_application_event(
-            db,
-            app.id,
-            "application_generated",
-            actor="worker",
-            details={
-                "selected_cv_id": app.selected_cv_id,
-                "selected_cv_hash": app.selected_cv_hash,
-                "profile_version": app.profile_version,
-                "material_eligible": app.material_eligible,
-                "material_blockers": material_blockers,
-                "state": "draft",
-            },
-        )
-
-        db.commit()
 
         logger.info(
             "application_generated",
