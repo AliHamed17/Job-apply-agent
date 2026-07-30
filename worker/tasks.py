@@ -83,6 +83,46 @@ def _preparation_readiness_at_execution(
         return False, ["PREPARATION_READINESS_UNAVAILABLE"]
 
 
+def _return_unprepared_job_to_scored(db, *, job_id: int) -> bool:
+    """Make an unmaterialized draft eligible for the bounded rescore path."""
+
+    from core.application_mutations import (
+        ApplicationMutationBlockedError,
+        lock_job_without_application_for_mutation,
+    )
+
+    db.rollback()
+    try:
+        job = lock_job_without_application_for_mutation(db, job_id=job_id)
+    except ApplicationMutationBlockedError:
+        db.rollback()
+        return False
+    if job.status != JobStatus.DRAFT:
+        db.rollback()
+        return False
+    job.status = JobStatus.SCORED
+    db.commit()
+    return True
+
+
+def _dispatch_exact_rescore(job_id: int, settings) -> bool:
+    """Best-effort one-job rescore after a stale generation handoff."""
+
+    try:
+        if settings.tasks_always_eager:
+            score_job_task.apply(args=[job_id, True])
+        else:
+            score_job_task.delay(job_id, True)
+    except Exception:
+        logger.warning(
+            "stale_generation_rescore_failed",
+            job_id=job_id,
+            reason_code="PREPARATION_QUEUE_UNAVAILABLE",
+        )
+        return False
+    return True
+
+
 # ── Task 1: Process a message ─────────────────────────────
 
 
@@ -444,9 +484,9 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
 
         # Chain to LLM generation
         if settings.tasks_always_eager:
-            generate_application_task.apply(args=[job_id, scoring_profile_version])
+            generate_application_task.apply(args=[job_id, scoring_profile_version, True])
         else:
-            generate_application_task.delay(job_id, scoring_profile_version)
+            generate_application_task.delay(job_id, scoring_profile_version, True)
 
         logger.info(
             "job_scored_and_queued",
@@ -471,6 +511,7 @@ def generate_application_task(
     self,
     job_id: int,
     expected_profile_version: int | None = None,
+    automatic_preparation: bool = False,
 ):
     """Generate cover letter, recruiter message, and Q&A answers via LLM."""
     from profile.versioned_snapshot import (
@@ -483,6 +524,7 @@ def generate_application_task(
 
     db = _get_db()
     try:
+        settings = get_settings()
         db_job = db.query(Job).filter(Job.id == job_id).first()
         if not db_job:
             return
@@ -500,6 +542,23 @@ def generate_application_task(
         expected_application_id = app.id if app is not None else None
         expected_revision = int(app.revision or 1) if app is not None else None
 
+        if automatic_preparation:
+            preparation_ready, preparation_reasons = _preparation_readiness_at_execution(
+                settings,
+                db,
+                requested=True,
+            )
+            db.rollback()
+            if not preparation_ready:
+                _return_unprepared_job_to_scored(db, job_id=job_id)
+                logger.warning(
+                    "application_generation_blocked",
+                    job_id=job_id,
+                    reason_code=preparation_reasons[0],
+                    reason_codes=preparation_reasons,
+                )
+                return
+
         requested_profile_version = expected_profile_version
         profile_snapshot = load_versioned_profile_snapshot(
             db,
@@ -511,30 +570,17 @@ def generate_application_task(
             requested_profile_version is not None
             and latest_profile_version(db) != requested_profile_version
         ):
-            db.rollback()
-            if expected_application_id is None:
-                from core.application_mutations import (
-                    ApplicationMutationBlockedError,
-                    lock_job_without_application_for_mutation,
-                )
-
-                try:
-                    stale_job = lock_job_without_application_for_mutation(
-                        db,
-                        job_id=job_id,
-                    )
-                    if stale_job.status == JobStatus.DRAFT:
-                        stale_job.status = JobStatus.SCORED
-                        db.commit()
-                    else:
-                        db.rollback()
-                except ApplicationMutationBlockedError:
-                    db.rollback()
+            returned_to_score = _return_unprepared_job_to_scored(
+                db,
+                job_id=job_id,
+            )
             logger.warning(
                 "application_generation_blocked",
                 job_id=job_id,
                 reason_code="PROFILE_VERSION_CHANGED",
             )
+            if automatic_preparation and returned_to_score:
+                _dispatch_exact_rescore(job_id, settings)
             return
 
         job_data = JobData(
@@ -548,8 +594,6 @@ def generate_application_task(
             apply_url=db_job.apply_url,
             source_url=db_job.source_url,
         )
-
-        settings = get_settings()
 
         from pathlib import Path
         from profile.cv_routing import (
@@ -748,11 +792,17 @@ def generate_application_task(
         current_profile_version = latest_profile_version(db)
         if current_profile_version != expected_profile_version:
             db.rollback()
+            returned_to_score = _return_unprepared_job_to_scored(
+                db,
+                job_id=job_id,
+            )
             logger.warning(
                 "application_generation_write_blocked",
                 job_id=job_id,
                 reason_code="PROFILE_VERSION_CHANGED",
             )
+            if automatic_preparation and returned_to_score:
+                _dispatch_exact_rescore(job_id, settings)
             return
 
         app.cover_letter = generated.cover_letter
