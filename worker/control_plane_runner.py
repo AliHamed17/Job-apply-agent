@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from core.automation_readiness import current_automation_readiness
 from core.config import (
     JOB_AGENT_ENV_FILE,
     Settings,
@@ -186,12 +187,21 @@ def _capabilities(
     settings: Settings,
     *,
     engine=None,
+    db=None,
 ) -> Mapping[str, object]:
-    return build_runtime_capabilities(
-        settings,
+    report = (
         readiness_report(settings, engine=engine)
         if engine is not None
-        else readiness_report(settings),
+        else readiness_report(settings)
+    )
+    return build_runtime_capabilities(
+        settings,
+        report,
+        automation_readiness=current_automation_readiness(
+            settings=settings,
+            dependency_report=report,
+            db=db,
+        ),
     )
 
 
@@ -694,11 +704,11 @@ class ControlPlaneRunner:
             return readiness_report(self._settings)
         return readiness_report(self._settings, engine=engine)
 
-    def _runtime_capabilities(self) -> Mapping[str, object]:
+    def _runtime_capabilities(self, db=None) -> Mapping[str, object]:
         engine = getattr(self, "_database_engine", None)
         if engine is None:
-            return _capabilities(self._settings)
-        return _capabilities(self._settings, engine=engine)
+            return _capabilities(self._settings, db=db)
+        return _capabilities(self._settings, engine=engine, db=db)
 
     def _signed_envelope(
         self,
@@ -978,7 +988,7 @@ class ControlPlaneRunner:
                 db,
                 command,
                 settings=self._settings,
-                capabilities=self._runtime_capabilities(),
+                capabilities=self._runtime_capabilities(db),
                 clock=self._clock,
             )
         finally:

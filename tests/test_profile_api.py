@@ -1,8 +1,10 @@
 import io
 from profile.loader import set_profile
 from profile.models import Personal, Preferences, UserProfile
+from profile.writer import save_profile
 from unittest.mock import patch
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -75,7 +77,7 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
             locations=["Israel", "Worldwide Remote"],
         ),
     )
-    set_profile(current)
+    save_profile(current, profile_path, db=None)
     settings = Settings(
         _env_file=None,
         user_profile_path=str(profile_path),
@@ -90,6 +92,7 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
                 "primary_email": "candidate@domain.test",
                 "phone": "+972 50 000 0000",
                 "location": "Israel",
+                "search_locations": ["Israel", "Worldwide Remote"],
                 "work_authorization": "Confirmed by operator",
                 "sponsorship": "Confirmed by operator",
                 "citizenship": "",
@@ -108,6 +111,7 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
 
         stored = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
         assert stored["personal"]["name"] == "Confirmed Candidate"
+        assert stored["preferences"]["locations"] == ["Israel", "Worldwide Remote"]
         assert "work_authorization" not in stored["personal"]
         assert stored["evidence"]["user_confirmed"] == {
             "gender": "Prefer not to say",
@@ -124,14 +128,12 @@ def test_local_onboarding_rejects_placeholder_identity_without_writing(tmp_path)
     from core.config import Settings, get_settings
 
     profile_path = tmp_path / "user_profile.yaml"
-    set_profile(
-        UserProfile(
-            preferences=Preferences(
-                roles=["Software Engineer"],
-                locations=["Israel"],
-            )
-        )
+    save_profile(
+        UserProfile(preferences=Preferences(roles=["Software Engineer"], locations=["Israel"])),
+        profile_path,
+        db=None,
     )
+    original_profile = profile_path.read_text(encoding="utf-8")
     app.dependency_overrides[get_settings] = lambda: Settings(
         _env_file=None,
         user_profile_path=str(profile_path),
@@ -145,6 +147,7 @@ def test_local_onboarding_rejects_placeholder_identity_without_writing(tmp_path)
                 "primary_email": "jane@example.com",
                 "phone": "+972 50 000 0000",
                 "location": "Israel",
+                "search_locations": ["Israel"],
                 "work_authorization": "Confirmed",
                 "sponsorship": "Confirmed",
                 "nationality": "Confirmed",
@@ -153,7 +156,93 @@ def test_local_onboarding_rejects_placeholder_identity_without_writing(tmp_path)
 
         assert response.status_code == 422
         assert response.json()["detail"]["code"] == "PROFILE_NAME_PLACEHOLDER"
-        assert not profile_path.exists()
+        assert profile_path.read_text(encoding="utf-8") == original_profile
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        set_profile(UserProfile())
+
+
+@pytest.mark.parametrize("phone", ["-------", "()()()()", "+() - ()"])
+def test_local_onboarding_rejects_phone_without_enough_digits(
+    tmp_path,
+    phone,
+):
+    from core.config import Settings, get_settings
+
+    profile_path = tmp_path / "user_profile.yaml"
+    save_profile(
+        UserProfile(
+            preferences=Preferences(
+                roles=["Software Engineer"],
+                locations=["Israel"],
+            )
+        ),
+        profile_path,
+        db=None,
+    )
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
+        user_profile_path=str(profile_path),
+    )
+    try:
+        response = client.put(
+            "/api/profile/onboarding",
+            headers=_auth(),
+            json={
+                "legal_name": "Confirmed Candidate",
+                "primary_email": "candidate@domain.test",
+                "phone": phone,
+                "location": "Israel",
+                "search_locations": ["Israel"],
+                "work_authorization": "Confirmed",
+                "sponsorship": "Confirmed",
+                "nationality": "Confirmed",
+            },
+        )
+
+        assert response.status_code == 422
+        assert yaml.safe_load(profile_path.read_text(encoding="utf-8"))["personal"]["name"] == ""
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        set_profile(UserProfile())
+
+
+def test_local_onboarding_rejects_placeholder_search_locations(tmp_path):
+    from core.config import Settings, get_settings
+
+    profile_path = tmp_path / "user_profile.yaml"
+    save_profile(
+        UserProfile(
+            preferences=Preferences(
+                roles=["Software Engineer"],
+                locations=["Your preferred location"],
+            )
+        ),
+        profile_path,
+        db=None,
+    )
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
+        user_profile_path=str(profile_path),
+    )
+    try:
+        response = client.put(
+            "/api/profile/onboarding",
+            headers=_auth(),
+            json={
+                "legal_name": "Confirmed Candidate",
+                "primary_email": "candidate@domain.test",
+                "phone": "+972 50 000 0000",
+                "location": "Israel",
+                "search_locations": ["Your preferred location"],
+                "work_authorization": "Confirmed",
+                "sponsorship": "Confirmed",
+                "nationality": "Confirmed",
+            },
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "PROFILE_SEARCH_LOCATIONS_PLACEHOLDER"
     finally:
         app.dependency_overrides.pop(get_settings, None)
         set_profile(UserProfile())

@@ -166,6 +166,10 @@ def _capabilities() -> dict[str, object]:
             "protocol_version": identity.protocol_version,
             "boot_id": identity.boot_id,
         },
+        "automation": {
+            "submission_ready": True,
+            "stages": {"submission": {"ready": True, "reason_codes": []}},
+        },
         "submission": {"allowed": True, "reasons": []},
         "llm": {
             "provider": "ollama",
@@ -480,6 +484,36 @@ def test_admission_rejects_unqualified_runtime_model_digest(tmp_path):
         _admit(factory, reviewed, capabilities=capabilities)
 
     assert exc_info.value.reason_code == "RUNTIME_NOT_READY"
+    db = factory()
+    assert db.query(Submission).count() == 0
+    assert db.query(SubmissionCommand).count() == 0
+    db.close()
+
+
+def test_admission_rejects_missing_or_blocked_automation_readiness(tmp_path):
+    factory = _factory(tmp_path)
+    reviewed = _reviewed_application(factory)
+    missing = _capabilities()
+    missing.pop("automation")
+
+    with pytest.raises(SubmissionAdmissionError) as missing_error:
+        _admit(factory, reviewed, capabilities=missing)
+    assert missing_error.value.reason_code == "AUTOMATION_SUBMISSION_NOT_READY"
+
+    blocked = _capabilities()
+    blocked["automation"] = {
+        "submission_ready": False,
+        "stages": {
+            "submission": {
+                "ready": False,
+                "reason_codes": ["PROFILE_EMAIL_PLACEHOLDER"],
+            }
+        },
+    }
+    with pytest.raises(SubmissionAdmissionError) as blocked_error:
+        _admit(factory, reviewed, capabilities=blocked)
+    assert blocked_error.value.reason_code == "PROFILE_EMAIL_PLACEHOLDER"
+
     db = factory()
     assert db.query(Submission).count() == 0
     assert db.query(SubmissionCommand).count() == 0

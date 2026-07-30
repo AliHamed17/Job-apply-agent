@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from profile.loader import set_profile
@@ -63,6 +64,16 @@ def _acquire_database_write_lock(db) -> None:
             sql_text("SELECT pg_advisory_xact_lock(:lock_id)"),
             {"lock_id": _PROFILE_VERSION_LOCK_ID},
         )
+
+
+@contextmanager
+def profile_write_transaction(db=None):
+    """Serialize a complete profile read-modify-write across threads/processes."""
+
+    with _PROFILE_WRITE_LOCK:
+        if db is not None:
+            _acquire_database_write_lock(db)
+        yield
 
 
 def _persist_version(db, profile_yaml: str, yaml_path: Path) -> int:

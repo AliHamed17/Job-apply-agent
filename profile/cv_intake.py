@@ -8,9 +8,9 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from profile.builder import build_profile_from_pdf
-from profile.loader import load_profile
+from profile.loader import load_profile_snapshot
 from profile.models import UserProfile
-from profile.writer import save_profile
+from profile.writer import profile_write_transaction, save_profile
 
 import structlog
 
@@ -131,12 +131,7 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
     async with _ingest_lock:
         try:
             _validate_pdf(tmp_pdf, max_bytes)
-            existing = (
-                load_profile(settings.profile_path) if settings.profile_path.exists() else None
-            )
             profile = await build_profile_from_pdf(str(tmp_pdf))
-            if existing is not None:
-                profile = _merge_operator_profile_state(profile, existing)
         except CVIngestError:
             tmp_pdf.unlink(missing_ok=True)
             raise
@@ -145,24 +140,43 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
             logger.warning("cv_ingest_parse_failed", error=type(exc).__name__)
             raise CVIngestError("PARSE_FAILED", "Could not build a profile from the CV.") from exc
 
-        final_pdf = settings.resume_path
-        final_pdf.parent.mkdir(parents=True, exist_ok=True)
-        old_pdf = final_pdf.read_bytes() if final_pdf.exists() else None
-        old_yaml = settings.profile_path.read_bytes() if settings.profile_path.exists() else None
-        profile.resume.pdf_path = str(final_pdf)
-        os.replace(tmp_pdf, final_pdf)
-        try:
-            version = save_profile(profile, settings.profile_path, db=db)
-        except Exception:
-            if old_pdf is None:
-                final_pdf.unlink(missing_ok=True)
-            else:
-                final_pdf.write_bytes(old_pdf)
-            if old_yaml is None:
-                settings.profile_path.unlink(missing_ok=True)
-            else:
-                settings.profile_path.write_bytes(old_yaml)
-            raise
+        with profile_write_transaction(db):
+            try:
+                existing = (
+                    load_profile_snapshot(settings.profile_path)
+                    if settings.profile_path.exists()
+                    else None
+                )
+            except Exception as exc:
+                tmp_pdf.unlink(missing_ok=True)
+                logger.warning("cv_ingest_profile_load_failed", error=type(exc).__name__)
+                raise CVIngestError(
+                    "PARSE_FAILED",
+                    "Could not read the current profile safely.",
+                ) from exc
+            if existing is not None:
+                profile = _merge_operator_profile_state(profile, existing)
+
+            final_pdf = settings.resume_path
+            final_pdf.parent.mkdir(parents=True, exist_ok=True)
+            old_pdf = final_pdf.read_bytes() if final_pdf.exists() else None
+            old_yaml = (
+                settings.profile_path.read_bytes() if settings.profile_path.exists() else None
+            )
+            profile.resume.pdf_path = str(final_pdf)
+            os.replace(tmp_pdf, final_pdf)
+            try:
+                version = save_profile(profile, settings.profile_path, db=db)
+            except Exception:
+                if old_pdf is None:
+                    final_pdf.unlink(missing_ok=True)
+                else:
+                    final_pdf.write_bytes(old_pdf)
+                if old_yaml is None:
+                    settings.profile_path.unlink(missing_ok=True)
+                else:
+                    settings.profile_path.write_bytes(old_yaml)
+                raise
         rescored = rescore_pending_jobs(db, profile) if db is not None else 0
         logger.info("cv_ingested", version=version, rescored=rescored)
         return {

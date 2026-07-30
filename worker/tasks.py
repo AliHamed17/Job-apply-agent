@@ -217,7 +217,7 @@ def process_url_task(self, url_id: int):
 
 
 @shared_task(name="worker.tasks.score_job_task", bind=True, max_retries=1)
-def score_job_task(self, job_id: int):
+def score_job_task(self, job_id: int, preparation_ready: bool = True):
     """Score a job against the user profile and decide the action."""
     from profile.loader import get_profile
 
@@ -343,6 +343,17 @@ def score_job_task(self, job_id: int):
                 title=job_title,
                 score=breakdown.total,
                 reason=breakdown.skip_reason,
+            )
+            return
+
+        if not preparation_ready:
+            db_job.status = JobStatus.SCORED
+            db.commit()
+            logger.info(
+                "job_scored_preparation_blocked",
+                title=job_title,
+                score=breakdown.total,
+                reason_code="PREPARATION_NOT_READY",
             )
             return
 

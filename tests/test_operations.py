@@ -50,6 +50,32 @@ def test_production_configuration_accepts_safe_dry_run(
     settings.validate_runtime()
 
 
+def test_production_auto_prepare_alias_does_not_require_live_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda **_kwargs: True,
+    )
+    settings = Settings(
+        app_env="production",
+        secret_key="s" * 32,
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
+        cors_origins="https://jobs.example.test",
+        draft_only=True,
+        auto_apply=True,
+        dry_run=True,
+        portal_final_submit_enabled=False,
+        live_automation_acknowledged=False,
+        application_data_dir=str(tmp_path),
+        llm_provider="ollama",
+        tasks_always_eager=False,
+    )
+
+    settings.validate_runtime()
+
+
 @pytest.mark.parametrize(
     "origin",
     [

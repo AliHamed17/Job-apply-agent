@@ -33,6 +33,7 @@ _BUILD_ENV_KEYS = (
 _SAFE_RELEASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _SOURCE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_REASON_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _READINESS_COMPONENTS = (
     "database",
     "migration",
@@ -88,6 +89,7 @@ class SubmissionBlockReason(StrEnum):
     SUBMIT_COMMAND_UNAVAILABLE = "SUBMIT_COMMAND_UNAVAILABLE"
     DATABASE_SERIALIZATION_REQUIRED = "DATABASE_SERIALIZATION_REQUIRED"
     OPERATOR_AUTH_REQUIRED = "OPERATOR_AUTH_REQUIRED"
+    AUTOMATION_SUBMISSION_NOT_READY = "AUTOMATION_SUBMISSION_NOT_READY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,6 +353,7 @@ def build_runtime_capabilities(
     identity: RuntimeIdentity | None = None,
     *,
     current_source_digest: str | None = None,
+    automation_readiness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the redacted capability response and fail-closed send decision."""
 
@@ -457,7 +460,30 @@ def build_runtime_capabilities(
     if not SUBMIT_COMMAND_PROTOCOL_AVAILABLE:
         reasons.append(SubmissionBlockReason.SUBMIT_COMMAND_UNAVAILABLE)
 
-    return {
+    automation_submission_ready = False
+    automation_reasons: list[str] = [SubmissionBlockReason.AUTOMATION_SUBMISSION_NOT_READY.value]
+    if automation_readiness is not None:
+        automation_submission_ready = automation_readiness.get("submission_ready") is True
+        automation_reasons = []
+        if not automation_submission_ready:
+            stages = automation_readiness.get("stages")
+            submission_stage = stages.get("submission") if isinstance(stages, Mapping) else None
+            raw_reasons = (
+                submission_stage.get("reason_codes")
+                if isinstance(submission_stage, Mapping)
+                else ()
+            )
+            if isinstance(raw_reasons, (list, tuple)):
+                automation_reasons = [
+                    reason
+                    for reason in raw_reasons
+                    if isinstance(reason, str) and _REASON_CODE_RE.fullmatch(reason)
+                ]
+            if not automation_reasons:
+                automation_reasons = [SubmissionBlockReason.AUTOMATION_SUBMISSION_NOT_READY.value]
+
+    reason_values = list(dict.fromkeys([reason.value for reason in reasons] + automation_reasons))
+    capabilities = {
         "release": {
             "build_sha": release.build_sha,
             "ui_asset_digest": release.ui_asset_digest,
@@ -488,8 +514,9 @@ def build_runtime_capabilities(
                 and worker_compatible
                 and SUBMIT_COMMAND_PROTOCOL_AVAILABLE
                 and settings.db_is_postgres
+                and automation_submission_ready
             ),
-            "reasons": [reason.value for reason in reasons],
+            "reasons": reason_values,
         },
         "worker": {
             "build_sha": worker_build,
@@ -500,3 +527,6 @@ def build_runtime_capabilities(
         },
         "llm": llm_capabilities,
     }
+    if automation_readiness is not None:
+        capabilities["automation"] = dict(automation_readiness)
+    return capabilities

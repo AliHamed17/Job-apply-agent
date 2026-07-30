@@ -125,11 +125,11 @@
     "schema_version": "qualified-local-model-v1"
   },
   "runtime": {
-    "total_seconds": 1691.591
+    "total_seconds": 1630.473
   },
   "schema_version": "v4-local-model-qualification-v4",
   "source_integrity": {
-    "combined_sha256": "0b0c5ea042f54e8be0a33eed6228aca042028b2403a15046c8f115c498b26699",
+    "combined_sha256": "743c1b7c8248235f568c0515a8171cc2a8c0162b6f2bee05a51a3fff3fe7b726",
     "files": {
       "config/qualified_local_model.json": {
         "file": "config/qualified_local_model.json",
@@ -141,7 +141,7 @@
       },
       "core/config.py": {
         "file": "core/config.py",
-        "sha256": "eb680677fb5f7361f0180910156e27ccae8559252b919eee4393fd70cc3e0c80"
+        "sha256": "86fdcbe2418a521d62ff0b0926e6dc6e9082eac7d44db6d3e52f7154d31c4fab"
       },
       "core/form_plan_evidence.py": {
         "file": "core/form_plan_evidence.py",
@@ -288,7 +288,7 @@
       "reason_counts": {
         "llm_abstained": 14
       },
-      "runtime_seconds": 130.329,
+      "runtime_seconds": 119.548,
       "successful_generation_cases": 22,
       "successful_generations": 22,
       "threshold": {
@@ -333,7 +333,7 @@
         "UNSUPPORTED_CLAIM": 63
       },
       "resolved_synthesis": 57,
-      "runtime_seconds": 652.108,
+      "runtime_seconds": 651.942,
       "sensitive_automatic_eligible": 0,
       "sensitive_provider_attempts": 0,
       "successful_generation_cases": 80,
@@ -374,16 +374,16 @@
       },
       "generation_failed": 0,
       "precision": 1.0,
-      "precision_denominator": 188,
+      "precision_denominator": 192,
       "provider_attempts": 40,
       "provider_cases": 40,
       "provider_payloads": 40,
       "reason_counts": {},
-      "runtime_seconds": 907.45,
+      "runtime_seconds": 857.017,
       "sensitive_eligible": 0,
       "successful_generation_cases": 40,
       "successful_generations": 40,
-      "supported_claims": 188,
+      "supported_claims": 192,
       "threshold": {
         "actual": {
           "coverage": 1.0,
@@ -395,7 +395,7 @@
           "sensitive_eligible": 0,
           "successful_generation_cases": 40,
           "supported_claim_precision": 1.0,
-          "supported_claims": 188,
+          "supported_claims": 192,
           "unsupported_claims": 0,
           "unsupported_eligible": 0
         },
@@ -426,7 +426,7 @@
         "UNTRUSTED_INPUT_BLOCKED": 6,
         "llm_input_rejected": 6
       },
-      "runtime_seconds": 0.048,
+      "runtime_seconds": 0.087,
       "semantic_prompt_injection_cases": 18,
       "semantic_prompt_injections_blocked": 18,
       "successful_generations": 0,
@@ -502,7 +502,7 @@
         "sensitive_eligible": 0,
         "successful_generation_cases": 40,
         "supported_claim_precision": 1.0,
-        "supported_claims": 188,
+        "supported_claims": 192,
         "unsupported_claims": 0,
         "unsupported_eligible": 0
       },

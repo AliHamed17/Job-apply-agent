@@ -303,6 +303,10 @@ def _admit(factory, seeded, key: str):
                     "protocol_version": identity.protocol_version,
                     "boot_id": identity.boot_id,
                 },
+                "automation": {
+                    "submission_ready": True,
+                    "stages": {"submission": {"ready": True, "reason_codes": []}},
+                },
                 "submission": {"allowed": True, "reasons": []},
                 "llm": {
                     "provider": "ollama",

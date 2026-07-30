@@ -1169,6 +1169,7 @@ const ONBOARDING_FIELDS = Object.freeze({
     primary_email: 'onboarding-primary-email',
     phone: 'onboarding-phone',
     location: 'onboarding-location',
+    search_locations: 'onboarding-search-locations',
     work_authorization: 'onboarding-work-authorization',
     sponsorship: 'onboarding-sponsorship',
     citizenship: 'onboarding-citizenship',
@@ -1229,7 +1230,11 @@ function populateOnboardingForm(data) {
     if (!data || state.onboardingDirty) return;
     Object.entries(ONBOARDING_FIELDS).forEach(([field, id]) => {
         const input = $(id);
-        if (input) input.value = data[field] || '';
+        if (input) {
+            input.value = field === 'search_locations'
+                ? (data[field] || []).join(', ')
+                : data[field] || '';
+        }
     });
     state.onboardingProfile = data;
     renderProfileReadiness(data.readiness);
@@ -1241,6 +1246,7 @@ function populateOnboardingForm(data) {
         reason.startsWith('PROFILE_NAME_')
         || reason.startsWith('PROFILE_EMAIL_')
         || reason.startsWith('PROFILE_PHONE_')
+        || reason.startsWith('PROFILE_SEARCH_LOCATIONS_')
         || reason.includes('AUTHORIZATION_UNCONFIRMED')
         || reason.includes('SPONSORSHIP_UNCONFIRMED')
         || reason.includes('CITIZENSHIP_OR_NATIONALITY_UNCONFIRMED')
@@ -1258,12 +1264,15 @@ async function saveOnboardingProfile() {
     const form = $('onboarding-form');
     const button = $('btn-save-onboarding');
     if (!form || !button || !form.reportValidity()) return;
-    const payload = Object.fromEntries(
-        Object.entries(ONBOARDING_FIELDS).map(([field, id]) => [
+    const payload = Object.fromEntries(Object.entries(ONBOARDING_FIELDS).map(([field, id]) => {
+        const value = ($(id)?.value || '').trim();
+        return [
             field,
-            ($(id)?.value || '').trim(),
-        ])
-    );
+            field === 'search_locations'
+                ? value.split(',').map(item => item.trim()).filter(Boolean)
+                : value,
+        ];
+    }));
     if (!payload.citizenship && !payload.nationality) {
         showToast('Confirm citizenship or nationality before saving', 'warning');
         return;

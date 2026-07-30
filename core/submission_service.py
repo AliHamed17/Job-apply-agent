@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from core.application_audit import record_application_event
 from core.application_revision import preparation_is_current
+from core.automation_readiness import current_automation_readiness
 from core.config import Settings, get_settings
 from core.operational_metrics import record_attempt_stage, record_retry
 from core.operations import readiness_report
@@ -180,10 +181,16 @@ def _default_session_checker(
         return False
 
 
-def _runtime_capabilities(settings: Settings) -> Mapping[str, object]:
+def _runtime_capabilities(settings: Settings, db) -> Mapping[str, object]:
+    report = readiness_report(settings)
     return build_runtime_capabilities(
         settings,
-        readiness_report(settings),
+        report,
+        automation_readiness=current_automation_readiness(
+            settings=settings,
+            dependency_report=report,
+            db=db,
+        ),
     )
 
 
@@ -214,6 +221,24 @@ def _require_runtime(capabilities: Mapping[str, object]) -> str:
         reason = next(
             (str(item) for item in reasons if isinstance(item, str) and 1 <= len(item) <= 64),
             "RUNTIME_NOT_READY",
+        )
+        raise SubmissionAdmissionError(reason)
+    automation = capabilities.get("automation")
+    if not isinstance(automation, Mapping) or automation.get("submission_ready") is not True:
+        stages = automation.get("stages") if isinstance(automation, Mapping) else None
+        submission_stage = stages.get("submission") if isinstance(stages, Mapping) else None
+        reasons = (
+            submission_stage.get("reason_codes") if isinstance(submission_stage, Mapping) else ()
+        )
+        reason = next(
+            (
+                item
+                for item in reasons
+                if isinstance(item, str)
+                and 1 <= len(item) <= 64
+                and item.replace("_", "").isalnum()
+            ),
+            "AUTOMATION_SUBMISSION_NOT_READY",
         )
         raise SubmissionAdmissionError(reason)
     release = _runtime_release(capabilities)
@@ -670,7 +695,7 @@ def create_submission_commands(
         raise SubmissionAdmissionError("OPERATOR_AUTH_REQUIRED")
     if db.bind.dialect.name != "postgresql" and resolved_settings.app_env != "test":
         raise SubmissionAdmissionError("DATABASE_SERIALIZATION_REQUIRED")
-    resolved_capabilities = capabilities or _runtime_capabilities(resolved_settings)
+    resolved_capabilities = capabilities or _runtime_capabilities(resolved_settings, db)
     timestamp = now or datetime.now(UTC).replace(tzinfo=None)
     results: list[CreatedSubmissionCommand] = []
     try:

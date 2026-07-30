@@ -71,6 +71,8 @@ def test_dashboard_separates_discovery_preparation_and_qualified_autopilot() -> 
     assert "mode.qualified_autopilot_enabled" in APP_JS
     assert "automation.submission_ready === true" in APP_JS
     assert 'id="onboarding-form"' in INDEX_HTML
+    assert 'id="onboarding-search-locations"' in INDEX_HTML
+    assert "search_locations: 'onboarding-search-locations'" in APP_JS
     assert "/api/profile/onboarding" in APP_JS
     assert "Saved only on the local runner" in INDEX_HTML
 

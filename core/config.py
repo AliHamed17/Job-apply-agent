@@ -321,12 +321,7 @@ class Settings(BaseSettings):
         ]
         if unsafe_cors_origins:
             errors.append("CORS_ORIGINS must contain exact HTTPS or loopback HTTP origins")
-        live_requested = (
-            self.auto_apply
-            or not self.draft_only
-            or not self.dry_run
-            or self.portal_final_submit_enabled
-        )
+        live_requested = not self.draft_only or not self.dry_run or self.portal_final_submit_enabled
         if live_requested and not self.live_automation_acknowledged:
             errors.append(
                 "LIVE_AUTOMATION_ACKNOWLEDGED=true is required for non-dry-run automation"

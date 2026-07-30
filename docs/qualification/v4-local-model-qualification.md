@@ -21,7 +21,7 @@ Qualification status: **PASSED**.
 - Real qwen typed calls: 142; provider attempts: 142.
 - Form unsupported eligible: 0; automatic sensitive eligible: 0; sensitive provider attempts: 0.
 - Material unsupported eligible: 0; sensitive eligible: 0.
-- Material supported-claim precision: 188/188 audited claim units; package coverage is reported separately.
+- Material supported-claim precision: 192/192 audited claim units; package coverage is reported separately.
 - Malformed-boundary provider attempts: 0.
 
 ## Bounded reason counts

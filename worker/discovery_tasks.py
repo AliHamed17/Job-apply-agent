@@ -27,7 +27,9 @@ def discover_jobs_task() -> int:
         profile_discovery_readiness_issues,
     )
 
+    from core.automation_readiness import current_automation_readiness  # noqa: PLC0415
     from core.operational_metrics import record_discovery_result  # noqa: PLC0415
+    from core.operations import readiness_report  # noqa: PLC0415
     from db.models import DiscoveryRun  # noqa: PLC0415
     from db.session import get_session_factory  # noqa: PLC0415
     from discovery.ingest import ingest_discovered_jobs  # noqa: PLC0415
@@ -75,6 +77,24 @@ def discover_jobs_task() -> int:
                 )
             return 0
 
+        try:
+            dependency_report = readiness_report(settings)
+            automation = current_automation_readiness(
+                settings=settings,
+                dependency_report=dependency_report,
+                db=db,
+            )
+            preparation_ready = automation["preparation_ready"] is True
+            preparation_reasons = automation["stages"]["preparation"]["reason_codes"]
+        except Exception:
+            preparation_ready = False
+            preparation_reasons = ["PREPARATION_READINESS_UNAVAILABLE"]
+        if not preparation_ready:
+            logger.info(
+                "automatic_preparation_blocked",
+                reason_codes=preparation_reasons,
+            )
+
         if settings.public_discovery_enabled:
             cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(
                 hours=max(1, settings.public_discovery_interval_h)
@@ -97,6 +117,7 @@ def discover_jobs_task() -> int:
                         source="remotive",
                         easy_apply=False,
                         tasks_always_eager=settings.tasks_always_eager,
+                        preparation_ready=preparation_ready,
                     )
                     inserted += public_count
                     finish_run(public_run, "success", public_count)
@@ -115,7 +136,15 @@ def discover_jobs_task() -> int:
             return inserted
 
         try:
-            linkedin_count = run_async(run_discovery(db, profile, settings, gov))
+            linkedin_count = run_async(
+                run_discovery(
+                    db,
+                    profile,
+                    settings,
+                    gov,
+                    preparation_ready=preparation_ready,
+                )
+            )
             inserted += linkedin_count
             in_cooldown = bool(gov.status().get("in_cooldown"))
             finish_run(

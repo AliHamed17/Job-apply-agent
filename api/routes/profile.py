@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import re
 from profile.cv_intake import CVIngestError, ingest_cv_from_temp, stream_to_temp
-from profile.loader import get_profile
+from profile.loader import get_profile, load_profile_snapshot
 from profile.models import Personal, ProfileEvidence, UserProfile
 from profile.readiness import (
     profile_discovery_readiness_issues,
     profile_preparation_readiness_issues,
     profile_submission_readiness_issues,
 )
-from profile.writer import save_profile
+from profile.writer import profile_write_transaction, save_profile
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
@@ -25,7 +25,7 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_PHONE_RE = re.compile(r"^[+0-9().\-\s]{7,40}$")
+_PHONE_RE = re.compile(r"^\+?[0-9().\-\s]{7,40}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -38,6 +38,7 @@ class OnboardingProfileUpdate(BaseModel):
     primary_email: str = Field(min_length=3, max_length=320)
     phone: str = Field(min_length=7, max_length=40)
     location: str = Field(min_length=2, max_length=200)
+    search_locations: list[str] = Field(min_length=1, max_length=20)
     work_authorization: str = Field(min_length=1, max_length=300)
     sponsorship: str = Field(min_length=1, max_length=300)
     citizenship: str = Field(default="", max_length=200)
@@ -71,9 +72,26 @@ class OnboardingProfileUpdate(BaseModel):
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, value: str) -> str:
-        if not _PHONE_RE.fullmatch(value):
+        digit_count = sum(character.isdigit() for character in value)
+        if not _PHONE_RE.fullmatch(value) or not 7 <= digit_count <= 15:
             raise ValueError("enter a valid international phone number")
         return value
+
+    @field_validator("search_locations")
+    @classmethod
+    def validate_search_locations(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            clean = str(value).strip()
+            if not 2 <= len(clean) <= 200:
+                raise ValueError("each search location must contain 2 to 200 characters")
+            if _CONTROL_RE.search(clean):
+                raise ValueError("control characters are not allowed")
+            if clean not in normalized:
+                normalized.append(clean)
+        if not normalized:
+            raise ValueError("confirm at least one search location")
+        return normalized
 
     @model_validator(mode="after")
     def require_citizenship_or_nationality(self):
@@ -100,6 +118,7 @@ def _onboarding_payload(profile: UserProfile) -> dict[str, object]:
         "primary_email": profile.personal.email,
         "phone": profile.personal.phone,
         "location": profile.personal.location,
+        "search_locations": list(profile.preferences.locations),
         "work_authorization": confirmed.get("work_authorization", ""),
         "sponsorship": confirmed.get("visa_sponsorship", ""),
         "citizenship": confirmed.get("citizenship", ""),
@@ -176,57 +195,69 @@ async def update_onboarding_profile(
 ):
     """Persist exact operator-confirmed facts as a new immutable profile version."""
 
-    current = get_profile()
-    evidence = ProfileEvidence.model_validate(current.evidence.model_dump())
-    confirmed = dict(evidence.user_confirmed)
-    confirmed.update(
-        {
-            "work_authorization": payload.work_authorization,
-            "visa_sponsorship": payload.sponsorship,
-        }
-    )
-    for key in (
-        "citizenship",
-        "nationality",
-        "gender",
-        "disability",
-        "ethnicity",
-        "veteran_status",
-    ):
-        value = getattr(payload, key)
-        if value is not None:
-            if value:
-                confirmed[key] = value
-            else:
-                confirmed.pop(key, None)
-    evidence.user_confirmed = confirmed
-    updated = UserProfile.model_validate(
-        {
-            **current.model_dump(),
-            "personal": Personal(
-                name=payload.legal_name,
-                email=payload.primary_email,
-                phone=payload.phone,
-                location=payload.location,
-            ).model_dump(),
-            "evidence": evidence.model_dump(),
-        }
-    )
-    invalid_identity = [
-        reason
-        for reason in profile_preparation_readiness_issues(updated)
-        if reason in {"PROFILE_NAME_PLACEHOLDER", "PROFILE_EMAIL_PLACEHOLDER"}
-    ]
-    if invalid_identity:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": invalid_identity[0],
-                "message": "Replace placeholder identity values with confirmed values.",
-            },
-        )
     try:
-        version = save_profile(updated, settings.profile_path, db=db)
+        with profile_write_transaction(db):
+            current = load_profile_snapshot(settings.profile_path)
+            evidence = ProfileEvidence.model_validate(current.evidence.model_dump())
+            confirmed = dict(evidence.user_confirmed)
+            confirmed.update(
+                {
+                    "work_authorization": payload.work_authorization,
+                    "visa_sponsorship": payload.sponsorship,
+                }
+            )
+            for key in (
+                "citizenship",
+                "nationality",
+                "gender",
+                "disability",
+                "ethnicity",
+                "veteran_status",
+            ):
+                value = getattr(payload, key)
+                if value is not None:
+                    if value:
+                        confirmed[key] = value
+                    else:
+                        confirmed.pop(key, None)
+            evidence.user_confirmed = confirmed
+            preferences = current.preferences.model_copy(deep=True)
+            preferences.locations = payload.search_locations
+            updated = UserProfile.model_validate(
+                {
+                    **current.model_dump(),
+                    "personal": Personal(
+                        name=payload.legal_name,
+                        email=payload.primary_email,
+                        phone=payload.phone,
+                        location=payload.location,
+                    ).model_dump(),
+                    "preferences": preferences.model_dump(),
+                    "evidence": evidence.model_dump(),
+                }
+            )
+            onboarding_issues = [
+                reason
+                for reason in profile_preparation_readiness_issues(updated)
+                if reason
+                in {
+                    "PROFILE_NAME_PLACEHOLDER",
+                    "PROFILE_EMAIL_PLACEHOLDER",
+                    "PROFILE_SEARCH_LOCATIONS_MISSING",
+                    "PROFILE_SEARCH_LOCATIONS_PLACEHOLDER",
+                }
+            ]
+            if onboarding_issues:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": onboarding_issues[0],
+                        "message": "Replace placeholder onboarding values with confirmed values.",
+                    },
+                )
+            version = save_profile(updated, settings.profile_path, db=db)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("profile_onboarding_save_failed")
         raise HTTPException(

@@ -6,6 +6,7 @@ import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from profile.cv_routing import load_routing_config
+from profile.loader import get_profile, load_profile_snapshot
 from profile.models import UserProfile
 from profile.readiness import (
     profile_discovery_readiness_issues,
@@ -143,3 +144,50 @@ def build_automation_readiness(
         "submission_ready": stages["submission"]["ready"],
         "stages": stages,
     }
+
+
+def current_automation_readiness(
+    *,
+    settings: Settings,
+    dependency_report: Mapping[str, Any],
+    db=None,
+    adapters: Iterable[AdapterDescriptor] | None = None,
+) -> dict[str, Any]:
+    """Build readiness from the latest durable profile version and exact YAML."""
+
+    from db.models import UserProfileVersion  # noqa: PLC0415
+    from db.session import get_session_factory  # noqa: PLC0415
+
+    owns_session = db is None
+    session = db if db is not None else get_session_factory()()
+    try:
+        try:
+            latest_profile = (
+                session.query(UserProfileVersion.version)
+                .order_by(UserProfileVersion.version.desc())
+                .first()
+            )
+            profile_version = int(latest_profile[0]) if latest_profile is not None else None
+        except Exception:
+            session.rollback()
+            profile_version = None
+    finally:
+        if owns_session:
+            session.close()
+
+    try:
+        profile = (
+            load_profile_snapshot(settings.profile_path)
+            if settings.profile_path.is_file()
+            else get_profile()
+        )
+    except (OSError, ValueError):
+        profile = UserProfile()
+
+    return build_automation_readiness(
+        settings=settings,
+        dependency_report=dependency_report,
+        profile=profile,
+        profile_version=profile_version,
+        adapters=adapters,
+    )

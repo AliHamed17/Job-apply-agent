@@ -136,13 +136,17 @@ async def get_runtime_capabilities() -> RuntimeCapabilitiesResponse:
 
     settings = get_settings()
     report = await run_in_threadpool(readiness_report, settings)
-    capabilities = build_runtime_capabilities(settings, report)
     profile, profile_version = await run_in_threadpool(_current_profile_context)
-    capabilities["automation"] = build_automation_readiness(
+    automation = build_automation_readiness(
         settings=settings,
         dependency_report=report,
         profile=profile,
         profile_version=profile_version,
+    )
+    capabilities = build_runtime_capabilities(
+        settings,
+        report,
+        automation_readiness=automation,
     )
     checks = report.get("checks")
     llm = checks.get("llm") if isinstance(checks, Mapping) else None

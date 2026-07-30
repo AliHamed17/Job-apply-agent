@@ -111,11 +111,20 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
         calls["public"] += 1
         return []
 
-    async def fake_linkedin(_db, _profile, _settings, _governor):
+    async def fake_linkedin(
+        _db,
+        _profile,
+        _settings,
+        _governor,
+        *,
+        preparation_ready,
+    ):
+        assert preparation_ready is False
         calls["linkedin"] += 1
         return 0
 
     def fake_ingest(_db, _jobs, **kwargs):
+        assert kwargs["preparation_ready"] is False
         return 2 if kwargs["source"] == "remotive" else 0
 
     class CooldownGovernor:
@@ -129,6 +138,22 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
     monkeypatch.setattr(linkedin_module, "run_discovery", fake_linkedin)
     monkeypatch.setattr(ingest_module, "ingest_discovered_jobs", fake_ingest)
     monkeypatch.setattr(profile_module, "get_profile", _profile)
+    monkeypatch.setattr(
+        "core.operations.readiness_report",
+        lambda _settings: {"status": "degraded", "checks": {}},
+    )
+    monkeypatch.setattr(
+        "core.automation_readiness.current_automation_readiness",
+        lambda **_kwargs: {
+            "preparation_ready": False,
+            "stages": {
+                "preparation": {
+                    "ready": False,
+                    "reason_codes": ["PROFILE_NAME_PLACEHOLDER"],
+                }
+            },
+        },
+    )
     monkeypatch.setattr(discovery_tasks, "get_governor", lambda: CooldownGovernor())
 
     assert discovery_tasks.discover_jobs_task() == 2

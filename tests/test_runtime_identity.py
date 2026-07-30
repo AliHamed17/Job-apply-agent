@@ -181,6 +181,7 @@ def test_capabilities_allow_ready_command_protocol_runtime() -> None:
         _live_settings(),
         _ready_report(),
         _identity(),
+        automation_readiness=_automation_ready(),
     )
 
     assert result["mode"] == {
@@ -218,6 +219,7 @@ def test_local_model_outage_denies_submission() -> None:
         _live_settings(),
         readiness,
         _identity(),
+        automation_readiness=_automation_ready(),
     )
 
     assert result["submission"]["allowed"] is False
@@ -244,7 +246,12 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         "detail": "person@example.com",
     }
 
-    result = build_runtime_capabilities(settings, readiness, _identity())
+    result = build_runtime_capabilities(
+        settings,
+        readiness,
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
 
     assert result["submission"]["allowed"] is False
     assert result["submission"]["reasons"] == [
@@ -271,7 +278,12 @@ def test_development_default_secret_never_allows_live_submission() -> None:
         }
     )
 
-    result = build_runtime_capabilities(settings, _ready_report(), _identity())
+    result = build_runtime_capabilities(
+        settings,
+        _ready_report(),
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
 
     assert result["mode"]["name"] == "blocked_auth"
     assert result["mode"]["live_submit_enabled"] is False
@@ -282,13 +294,51 @@ def test_development_default_secret_never_allows_live_submission() -> None:
 def test_legacy_auto_apply_is_only_an_auto_prepare_alias() -> None:
     settings = _live_settings().model_copy(update={"auto_apply": True})
 
-    result = build_runtime_capabilities(settings, _ready_report(), _identity())
+    result = build_runtime_capabilities(
+        settings,
+        _ready_report(),
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
 
     assert result["mode"]["auto_prepare_enabled"] is True
     assert result["mode"]["legacy_auto_apply_alias"] is True
     assert result["mode"]["qualified_autopilot_enabled"] is False
     assert result["mode"]["live_submit_enabled"] is True
     assert "UNATTENDED_AUTOMATION_ENABLED" not in result["submission"]["reasons"]
+
+
+def test_submission_admission_includes_automation_readiness() -> None:
+    automation = _automation_ready()
+    automation["submission_ready"] = False
+    automation["stages"]["submission"] = {
+        "ready": False,
+        "reason_codes": ["PROFILE_NAME_PLACEHOLDER"],
+    }
+
+    result = build_runtime_capabilities(
+        _live_settings(),
+        _ready_report(),
+        _identity(),
+        automation_readiness=automation,
+    )
+
+    assert result["automation"] == automation
+    assert result["submission"]["allowed"] is False
+    assert result["submission"]["reasons"] == ["PROFILE_NAME_PLACEHOLDER"]
+
+
+def test_submission_admission_fails_closed_without_automation_readiness() -> None:
+    result = build_runtime_capabilities(
+        _live_settings(),
+        _ready_report(),
+        _identity(),
+    )
+
+    assert result["submission"] == {
+        "allowed": False,
+        "reasons": ["AUTOMATION_SUBMISSION_NOT_READY"],
+    }
 
 
 def test_same_git_build_with_different_backend_source_is_incompatible() -> None:
@@ -300,7 +350,12 @@ def test_same_git_build_with_different_backend_source_is_incompatible() -> None:
         release_id=worker_identity.release_id,
     )
 
-    result = build_runtime_capabilities(_live_settings(), readiness, api_identity)
+    result = build_runtime_capabilities(
+        _live_settings(),
+        readiness,
+        api_identity,
+        automation_readiness=_automation_ready(),
+    )
 
     assert result["submission"]["allowed"] is False
     assert result["submission"]["reasons"] == ["BUILD_MISMATCH"]
@@ -328,6 +383,7 @@ def test_source_mutation_after_identity_creation_denies_submission(tmp_path: Pat
         readiness,
         identity,
         current_source_digest=compute_source_digest(tmp_path),
+        automation_readiness=_automation_ready(),
     )
 
     assert result["submission"]["allowed"] is False
@@ -340,6 +396,7 @@ def test_unknown_build_identity_never_enables_submission() -> None:
         _live_settings(),
         _ready_report(worker_build="unknown"),
         unknown_identity,
+        automation_readiness=_automation_ready(),
     )
 
     assert result["submission"] == {
@@ -359,6 +416,7 @@ def test_runtime_capabilities_preserve_only_bounded_ollama_server_version() -> N
         _live_settings(),
         report,
         _identity(),
+        automation_readiness=_automation_ready(),
     )
     assert result["llm"]["ollama_server_version"] == "0.31.1"
 
@@ -367,6 +425,7 @@ def test_runtime_capabilities_preserve_only_bounded_ollama_server_version() -> N
         _live_settings(),
         report,
         _identity(),
+        automation_readiness=_automation_ready(),
     )
     assert result["llm"]["ollama_server_version"] is None
 
@@ -422,16 +481,18 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
     from api.main import app
     from api.routes import runtime as runtime_route
 
-    expected = build_runtime_capabilities(_live_settings(), _ready_report(), _identity())
-    expected["automation"] = _automation_ready()
+    expected = build_runtime_capabilities(
+        _live_settings(),
+        _ready_report(),
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
     monkeypatch.setattr(runtime_route, "get_settings", _live_settings)
     monkeypatch.setattr(runtime_route, "readiness_report", lambda _settings: _ready_report())
     monkeypatch.setattr(
         runtime_route,
         "build_runtime_capabilities",
-        lambda _settings, _report: {
-            key: value for key, value in expected.items() if key != "automation"
-        },
+        lambda _settings, _report, **_kwargs: expected,
     )
     monkeypatch.setattr(
         runtime_route,
