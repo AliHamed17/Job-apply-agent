@@ -73,6 +73,17 @@ def test_discovery_requires_real_roles_locations_and_workplace_preference():
     ]
 
 
+def test_discovery_rejects_placeholder_mixed_with_real_location():
+    profile = UserProfile(
+        preferences=Preferences(
+            roles=["Software Engineer"],
+            locations=["Your preferred location", "Israel"],
+        )
+    )
+
+    assert profile_discovery_readiness_issues(profile) == ["PROFILE_SEARCH_LOCATIONS_PLACEHOLDER"]
+
+
 def test_submission_requires_operator_confirmed_identity_and_legal_facts():
     profile = UserProfile(
         personal=Personal(

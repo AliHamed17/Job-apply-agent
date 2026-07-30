@@ -75,7 +75,7 @@ def profile_discovery_readiness_issues(profile: UserProfile) -> list[str]:
     }
     if not locations:
         issues.append("PROFILE_SEARCH_LOCATIONS_MISSING")
-    elif locations <= _PLACEHOLDER_LOCATIONS:
+    elif locations & _PLACEHOLDER_LOCATIONS:
         issues.append("PROFILE_SEARCH_LOCATIONS_PLACEHOLDER")
     if not (
         profile.preferences.remote_ok

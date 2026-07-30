@@ -259,6 +259,10 @@ def process_url_task(self, url_id: int):
 def score_job_task(self, job_id: int, preparation_ready: bool = True):
     """Score a job against the user profile and decide the action."""
     from profile.loader import load_profile_snapshot
+    from profile.versioned_snapshot import (
+        latest_profile_version,
+        load_versioned_profile_snapshot,
+    )
 
     from jobs.models import JobData
 
@@ -284,7 +288,13 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
         expected_job_status = db_job.status
         job_title = db_job.title
 
-        profile = load_profile_snapshot(settings.profile_path)
+        profile_snapshot = load_versioned_profile_snapshot(db)
+        scoring_profile_version = profile_snapshot.version
+        profile = (
+            load_profile_snapshot(settings.profile_path)
+            if scoring_profile_version is None and settings.profile_path.is_file()
+            else profile_snapshot.profile
+        )
 
         # Convert DB model to JobData for scoring
         job_data = JobData(
@@ -319,6 +329,17 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
             db,
             requested=bool(preparation_ready),
         )
+        current_profile_version = latest_profile_version(db)
+        if scoring_profile_version is None:
+            preparation_ready = False
+            preparation_reasons = list(
+                dict.fromkeys(["PROFILE_VERSION_MISSING", *preparation_reasons])
+            )
+        elif current_profile_version != scoring_profile_version:
+            preparation_ready = False
+            preparation_reasons = list(
+                dict.fromkeys(["PROFILE_VERSION_CHANGED", *preparation_reasons])
+            )
         # The readiness probe reads durable profile-version state. Release that
         # transaction before taking the application/job mutation lock.
         db.rollback()
@@ -361,59 +382,71 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
             )
             return
 
-        try:
-            db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
-        except ApplicationMutationBlockedError as exc:
-            db.rollback()
-            logger.warning(
-                "job_scoring_write_blocked",
-                job_id=job_id,
-                reason_code=exc.reason_code,
-            )
-            return
-        if db_job.status != expected_job_status:
-            db.rollback()
-            logger.warning(
-                "job_scoring_write_blocked",
-                job_id=job_id,
-                reason_code="JOB_STATUS_CHANGED",
-            )
-            return
+        from profile.writer import profile_write_transaction
 
-        db_job.score = breakdown.total
+        # Hold the same cross-process profile lock used by onboarding while
+        # rechecking the version and committing the score transition. This
+        # prevents a newer immutable profile from appearing between the final
+        # comparison and the generation handoff.
+        with profile_write_transaction(db):
+            try:
+                db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
+            except ApplicationMutationBlockedError as exc:
+                db.rollback()
+                logger.warning(
+                    "job_scoring_write_blocked",
+                    job_id=job_id,
+                    reason_code=exc.reason_code,
+                )
+                return
+            if db_job.status != expected_job_status:
+                db.rollback()
+                logger.warning(
+                    "job_scoring_write_blocked",
+                    job_id=job_id,
+                    reason_code="JOB_STATUS_CHANGED",
+                )
+                return
+            if latest_profile_version(db) != scoring_profile_version:
+                preparation_ready = False
+                preparation_reasons = list(
+                    dict.fromkeys(["PROFILE_VERSION_CHANGED", *preparation_reasons])
+                )
 
-        if action == Action.SKIP:
-            db_job.status = JobStatus.SKIPPED
+            db_job.score = breakdown.total
+
+            if not preparation_ready:
+                db_job.status = JobStatus.SCORED
+                db.commit()
+                logger.info(
+                    "job_scored_preparation_blocked",
+                    title=job_title,
+                    score=breakdown.total,
+                    reason_code=preparation_reasons[0],
+                    reason_codes=preparation_reasons,
+                )
+                return
+
+            if action == Action.SKIP:
+                db_job.status = JobStatus.SKIPPED
+                db.commit()
+                logger.info(
+                    "job_skipped",
+                    title=job_title,
+                    score=breakdown.total,
+                    reason=breakdown.skip_reason,
+                )
+                return
+
+            # Create application draft
+            db_job.status = JobStatus.DRAFT
             db.commit()
-            logger.info(
-                "job_skipped",
-                title=job_title,
-                score=breakdown.total,
-                reason=breakdown.skip_reason,
-            )
-            return
-
-        if not preparation_ready:
-            db_job.status = JobStatus.SCORED
-            db.commit()
-            logger.info(
-                "job_scored_preparation_blocked",
-                title=job_title,
-                score=breakdown.total,
-                reason_code=preparation_reasons[0],
-                reason_codes=preparation_reasons,
-            )
-            return
-
-        # Create application draft
-        db_job.status = JobStatus.DRAFT
-        db.commit()
 
         # Chain to LLM generation
         if settings.tasks_always_eager:
-            generate_application_task.apply(args=[job_id])
+            generate_application_task.apply(args=[job_id, scoring_profile_version])
         else:
-            generate_application_task.delay(job_id)
+            generate_application_task.delay(job_id, scoring_profile_version)
 
         logger.info(
             "job_scored_and_queued",
@@ -434,9 +467,16 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
 
 
 @shared_task(name="worker.tasks.generate_application_task", bind=True, max_retries=2)
-def generate_application_task(self, job_id: int):
+def generate_application_task(
+    self,
+    job_id: int,
+    expected_profile_version: int | None = None,
+):
     """Generate cover letter, recruiter message, and Q&A answers via LLM."""
-    from profile.versioned_snapshot import load_versioned_profile_snapshot
+    from profile.versioned_snapshot import (
+        latest_profile_version,
+        load_versioned_profile_snapshot,
+    )
 
     from jobs.models import JobData
     from llm.generation import generate_full_application
@@ -460,11 +500,42 @@ def generate_application_task(self, job_id: int):
         expected_application_id = app.id if app is not None else None
         expected_revision = int(app.revision or 1) if app is not None else None
 
-        from db.models import UserProfileVersion
-
-        profile_snapshot = load_versioned_profile_snapshot(db)
+        requested_profile_version = expected_profile_version
+        profile_snapshot = load_versioned_profile_snapshot(
+            db,
+            version=requested_profile_version,
+        )
         expected_profile_version = profile_snapshot.version
         profile = profile_snapshot.profile
+        if (
+            requested_profile_version is not None
+            and latest_profile_version(db) != requested_profile_version
+        ):
+            db.rollback()
+            if expected_application_id is None:
+                from core.application_mutations import (
+                    ApplicationMutationBlockedError,
+                    lock_job_without_application_for_mutation,
+                )
+
+                try:
+                    stale_job = lock_job_without_application_for_mutation(
+                        db,
+                        job_id=job_id,
+                    )
+                    if stale_job.status == JobStatus.DRAFT:
+                        stale_job.status = JobStatus.SCORED
+                        db.commit()
+                    else:
+                        db.rollback()
+                except ApplicationMutationBlockedError:
+                    db.rollback()
+            logger.warning(
+                "application_generation_blocked",
+                job_id=job_id,
+                reason_code="PROFILE_VERSION_CHANGED",
+            )
+            return
 
         job_data = JobData(
             title=db_job.title,
@@ -674,10 +745,7 @@ def generate_application_task(self, job_id: int):
                 reason_code="APPLICATION_REGENERATED",
             )
 
-        latest_profile = (
-            db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
-        )
-        current_profile_version = latest_profile.version if latest_profile else None
+        current_profile_version = latest_profile_version(db)
         if current_profile_version != expected_profile_version:
             db.rollback()
             logger.warning(
