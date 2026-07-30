@@ -1246,6 +1246,7 @@ function populateOnboardingForm(data) {
         reason.startsWith('PROFILE_NAME_')
         || reason.startsWith('PROFILE_EMAIL_')
         || reason.startsWith('PROFILE_PHONE_')
+        || reason.startsWith('PROFILE_CURRENT_LOCATION_')
         || reason.startsWith('PROFILE_SEARCH_LOCATIONS_')
         || reason.includes('AUTHORIZATION_UNCONFIRMED')
         || reason.includes('SPONSORSHIP_UNCONFIRMED')

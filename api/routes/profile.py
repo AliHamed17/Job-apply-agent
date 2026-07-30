@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from core.config import Settings, get_settings
 from db.session import get_db
+from worker.rescore import auto_prepare_scored_jobs_if_ready
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -243,6 +244,8 @@ async def update_onboarding_profile(
                 in {
                     "PROFILE_NAME_PLACEHOLDER",
                     "PROFILE_EMAIL_PLACEHOLDER",
+                    "PROFILE_CURRENT_LOCATION_MISSING",
+                    "PROFILE_CURRENT_LOCATION_PLACEHOLDER",
                     "PROFILE_SEARCH_LOCATIONS_MISSING",
                     "PROFILE_SEARCH_LOCATIONS_PLACEHOLDER",
                 }
@@ -268,9 +271,11 @@ async def update_onboarding_profile(
             },
         ) from exc
 
+    auto_prepared = auto_prepare_scored_jobs_if_ready(db, settings)
     logger.info("profile_onboarding_saved", profile_version=version)
     response.headers["Cache-Control"] = "no-store"
     return {
         "profile_version": version,
+        "auto_prepared": auto_prepared,
         **_onboarding_payload(updated),
     }

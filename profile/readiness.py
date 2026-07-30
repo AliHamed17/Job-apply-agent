@@ -14,6 +14,8 @@ _PLACEHOLDER_NAMES = {"jane doe", "john doe", "your name", "example user"}
 _PLACEHOLDER_DOMAINS = {"example.com", "example.org", "example.net"}
 _PLACEHOLDER_LOCATIONS = {
     "city, country",
+    "your city",
+    "your current location",
     "your location",
     "your preferred location",
     "location",
@@ -62,10 +64,16 @@ def profile_discovery_readiness_issues(profile: UserProfile) -> list[str]:
 def profile_preparation_readiness_issues(profile: UserProfile) -> list[str]:
     """Return profile blockers for CV routing and material preparation."""
 
-    return [
+    issues = [
         *profile_discovery_readiness_issues(profile),
         *_identity_issues(profile),
     ]
+    current_location = profile.personal.location.strip().casefold()
+    if not current_location:
+        issues.append("PROFILE_CURRENT_LOCATION_MISSING")
+    elif current_location in _PLACEHOLDER_LOCATIONS:
+        issues.append("PROFILE_CURRENT_LOCATION_PLACEHOLDER")
+    return issues
 
 
 def profile_submission_readiness_issues(profile: UserProfile) -> list[str]:

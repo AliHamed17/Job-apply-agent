@@ -92,6 +92,7 @@ async def test_cv_ingest_preserves_operator_identity_and_evidence(tmp_path):
             },
             "links": {"linkedin": "https://example.test/operator"},
             "preferences": {
+                "locations": ["Israel", "Worldwide Remote"],
                 "remote_ok": False,
                 "salary": {"min": 100, "max": 200, "currency": "USD"},
                 "blacklist_companies": ["Blocked Co"],
@@ -116,6 +117,7 @@ async def test_cv_ingest_preserves_operator_identity_and_evidence(tmp_path):
             "links": {"linkedin": "https://example.test/cv"},
             "preferences": {
                 "roles": ["Backend Engineer"],
+                "locations": ["CV-derived location"],
                 "keywords": ["FastAPI"],
             },
             "evidence": {
@@ -156,6 +158,7 @@ async def test_cv_ingest_preserves_operator_identity_and_evidence(tmp_path):
     assert merged.evidence.facts_for_cv("b" * 64) == {"backend_framework": "FastAPI"}
     assert merged.evidence.cv_extracted == {"backend_framework": "FastAPI"}
     assert merged.preferences.roles == ["Backend Engineer"]
+    assert merged.preferences.locations == ["Israel", "Worldwide Remote"]
     assert merged.preferences.remote_ok is False
     assert merged.preferences.salary.min == 100
     assert merged.preferences.blacklist_companies == ["Blocked Co"]
@@ -231,5 +234,6 @@ async def test_cv_ingest_merges_onboarding_saved_during_pdf_parse(tmp_path):
         assert stored.personal.email == "candidate@domain.test"
         assert stored.evidence.user_confirmed["work_authorization"] == "Confirmed"
         assert stored.preferences.roles == ["Machine Learning Engineer"]
+        assert stored.preferences.locations == ["Israel", "Worldwide Remote"]
     finally:
         set_profile(UserProfile())

@@ -89,6 +89,7 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
     monkeypatch.setenv("PUBLIC_DISCOVERY_ENABLED", "true")
     monkeypatch.setenv("PUBLIC_DISCOVERY_INTERVAL_H", "6")
     monkeypatch.setenv("TASKS_ALWAYS_EAGER", "true")
+    monkeypatch.setenv("AUTO_APPLY", "false")
 
     import profile.loader as profile_module
 
@@ -145,11 +146,11 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
     monkeypatch.setattr(
         "core.automation_readiness.current_automation_readiness",
         lambda **_kwargs: {
-            "preparation_ready": False,
+            "preparation_ready": True,
             "stages": {
                 "preparation": {
-                    "ready": False,
-                    "reason_codes": ["PROFILE_NAME_PLACEHOLDER"],
+                    "ready": True,
+                    "reason_codes": [],
                 }
             },
         },

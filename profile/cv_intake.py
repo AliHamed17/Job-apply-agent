@@ -14,7 +14,7 @@ from profile.writer import profile_write_transaction, save_profile
 
 import structlog
 
-from worker.rescore import rescore_pending_jobs
+from worker.rescore import auto_prepare_scored_jobs_if_ready, rescore_pending_jobs
 
 logger = structlog.get_logger(__name__)
 _ingest_lock = asyncio.Lock()
@@ -54,6 +54,7 @@ def _merge_operator_profile_state(
     merged.cover_letter = existing.cover_letter.model_copy(deep=True)
     merged.attachments = [item.model_copy(deep=True) for item in existing.attachments]
     for field_name in (
+        "locations",
         "remote_ok",
         "hybrid_ok",
         "onsite_ok",
@@ -178,6 +179,7 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
                     settings.profile_path.write_bytes(old_yaml)
                 raise
         rescored = rescore_pending_jobs(db, profile) if db is not None else 0
+        auto_prepared = auto_prepare_scored_jobs_if_ready(db, settings) if db is not None else 0
         logger.info("cv_ingested", version=version, rescored=rescored)
         return {
             "version": version,
@@ -185,4 +187,5 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
             "roles": profile.preferences.roles,
             "keywords_count": len(profile.preferences.keywords),
             "rescored": rescored,
+            "auto_prepared": auto_prepared,
         }

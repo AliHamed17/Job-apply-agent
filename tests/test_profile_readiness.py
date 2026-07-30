@@ -14,7 +14,11 @@ from profile.readiness import (
 
 def test_placeholder_profile_is_blocked():
     profile = UserProfile(
-        personal=Personal(name="Jane Doe", email="jane.doe@example.com"),
+        personal=Personal(
+            name="Jane Doe",
+            email="jane.doe@example.com",
+            location="Israel",
+        ),
         resume=Resume(text="Experienced engineer. " * 20),
         preferences=Preferences(roles=["Software Engineer"], locations=["Israel"]),
     )
@@ -27,7 +31,11 @@ def test_placeholder_profile_is_blocked():
 
 def test_real_minimum_profile_is_ready():
     profile = UserProfile(
-        personal=Personal(name="Candidate Name", email="candidate@domain.test"),
+        personal=Personal(
+            name="Candidate Name",
+            email="candidate@domain.test",
+            location="Israel",
+        ),
         resume=Resume(text="Experienced engineer. " * 20),
         preferences=Preferences(roles=["Software Engineer"], locations=["Israel"]),
     )
@@ -87,3 +95,28 @@ def test_submission_requires_operator_confirmed_identity_and_legal_facts():
     )
 
     assert profile_submission_readiness_issues(profile) == []
+
+
+def test_placeholder_current_location_blocks_preparation_and_submission():
+    profile = UserProfile(
+        personal=Personal(
+            name="Candidate Name",
+            email="candidate@domain.test",
+            phone="+972 50 000 0000",
+            location="City, Country",
+        ),
+        preferences=Preferences(
+            roles=["Software Engineer"],
+            locations=["Israel"],
+        ),
+        evidence=ProfileEvidence(
+            user_confirmed={
+                "work_authorization": "Confirmed",
+                "visa_sponsorship": "Confirmed",
+                "nationality": "Confirmed",
+            }
+        ),
+    )
+
+    assert "PROFILE_CURRENT_LOCATION_PLACEHOLDER" in profile_readiness_issues(profile)
+    assert "PROFILE_CURRENT_LOCATION_PLACEHOLDER" in (profile_submission_readiness_issues(profile))

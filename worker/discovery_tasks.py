@@ -35,6 +35,7 @@ def discover_jobs_task() -> int:
     from discovery.ingest import ingest_discovered_jobs  # noqa: PLC0415
     from discovery.linkedin_search import run_discovery  # noqa: PLC0415
     from discovery.public_sources import fetch_remotive_jobs  # noqa: PLC0415
+    from worker.rescore import requeue_scored_jobs_for_preparation  # noqa: PLC0415
 
     settings = get_settings()
     if not settings.discovery_enabled:
@@ -84,8 +85,10 @@ def discover_jobs_task() -> int:
                 dependency_report=dependency_report,
                 db=db,
             )
-            preparation_ready = automation["preparation_ready"] is True
+            preparation_ready = settings.auto_apply and automation["preparation_ready"] is True
             preparation_reasons = automation["stages"]["preparation"]["reason_codes"]
+            if not settings.auto_apply:
+                preparation_reasons = ["AUTO_PREPARE_DISABLED"]
         except Exception:
             preparation_ready = False
             preparation_reasons = ["PREPARATION_READINESS_UNAVAILABLE"]
@@ -93,6 +96,11 @@ def discover_jobs_task() -> int:
             logger.info(
                 "automatic_preparation_blocked",
                 reason_codes=preparation_reasons,
+            )
+        else:
+            requeue_scored_jobs_for_preparation(
+                db,
+                tasks_always_eager=settings.tasks_always_eager,
             )
 
         if settings.public_discovery_enabled:

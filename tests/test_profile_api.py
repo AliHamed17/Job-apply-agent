@@ -84,27 +84,33 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
     )
     app.dependency_overrides[get_settings] = lambda: settings
     try:
-        response = client.put(
-            "/api/profile/onboarding",
-            headers=_auth(),
-            json={
-                "legal_name": "Confirmed Candidate",
-                "primary_email": "candidate@domain.test",
-                "phone": "+972 50 000 0000",
-                "location": "Israel",
-                "search_locations": ["Israel", "Worldwide Remote"],
-                "work_authorization": "Confirmed by operator",
-                "sponsorship": "Confirmed by operator",
-                "citizenship": "",
-                "nationality": "Confirmed by operator",
-                "gender": "Prefer not to say",
-            },
-        )
+        with patch(
+            "api.routes.profile.auto_prepare_scored_jobs_if_ready",
+            return_value=2,
+        ) as requeue:
+            response = client.put(
+                "/api/profile/onboarding",
+                headers=_auth(),
+                json={
+                    "legal_name": "Confirmed Candidate",
+                    "primary_email": "candidate@domain.test",
+                    "phone": "+972 50 000 0000",
+                    "location": "Israel",
+                    "search_locations": ["Israel", "Worldwide Remote"],
+                    "work_authorization": "Confirmed by operator",
+                    "sponsorship": "Confirmed by operator",
+                    "citizenship": "",
+                    "nationality": "Confirmed by operator",
+                    "gender": "Prefer not to say",
+                },
+            )
 
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
         body = response.json()
         assert body["profile_version"] >= 1
+        assert body["auto_prepared"] == 2
+        requeue.assert_called_once()
         assert body["readiness"]["discovery"]["ready"] is True
         assert body["readiness"]["preparation"]["ready"] is True
         assert body["readiness"]["submission"]["ready"] is True
@@ -243,6 +249,49 @@ def test_local_onboarding_rejects_placeholder_search_locations(tmp_path):
 
         assert response.status_code == 422
         assert response.json()["detail"]["code"] == "PROFILE_SEARCH_LOCATIONS_PLACEHOLDER"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        set_profile(UserProfile())
+
+
+def test_local_onboarding_rejects_placeholder_current_location(tmp_path):
+    from core.config import Settings, get_settings
+
+    profile_path = tmp_path / "user_profile.yaml"
+    save_profile(
+        UserProfile(
+            preferences=Preferences(
+                roles=["Software Engineer"],
+                locations=["Israel"],
+            )
+        ),
+        profile_path,
+        db=None,
+    )
+    original_profile = profile_path.read_text(encoding="utf-8")
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
+        user_profile_path=str(profile_path),
+    )
+    try:
+        response = client.put(
+            "/api/profile/onboarding",
+            headers=_auth(),
+            json={
+                "legal_name": "Confirmed Candidate",
+                "primary_email": "candidate@domain.test",
+                "phone": "+972 50 000 0000",
+                "location": "City, Country",
+                "search_locations": ["Israel"],
+                "work_authorization": "Confirmed",
+                "sponsorship": "Confirmed",
+                "nationality": "Confirmed",
+            },
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == ("PROFILE_CURRENT_LOCATION_PLACEHOLDER")
+        assert profile_path.read_text(encoding="utf-8") == original_profile
     finally:
         app.dependency_overrides.pop(get_settings, None)
         set_profile(UserProfile())
