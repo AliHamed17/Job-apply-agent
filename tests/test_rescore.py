@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.config import Settings
-from db.models import Application, Base, Job, JobStatus
+from db.models import Application, Base, Job, JobStatus, UserProfileVersion
 from worker.rescore import (
     auto_prepare_scored_jobs_if_ready,
     requeue_scored_jobs_for_preparation,
@@ -61,6 +61,53 @@ def test_rescore_updates_scores():
     n = rescore_pending_jobs(_DB(jobs), prof)
     assert n == 1
     assert jobs[0].score is not None
+
+
+def test_version_bound_rescore_rejects_superseded_profile(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'version-bound-rescore.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    job = Job(
+        title="RF Engineer",
+        company="Example",
+        source_url="https://example.test/version-bound-rescore",
+        status=JobStatus.SCORED,
+    )
+    db.add_all(
+        [
+            job,
+            UserProfileVersion(version=2, profile_yaml="{}"),
+        ]
+    )
+    db.commit()
+    job_id = job.id
+
+    stale_profile = UserProfile()
+    stale_profile.preferences.roles = ["RF Engineer"]
+    assert (
+        rescore_pending_jobs(
+            db,
+            stale_profile,
+            expected_profile_version=1,
+        )
+        == 0
+    )
+    assert db.get(Job, job_id).score is None
+
+    current_profile = UserProfile()
+    current_profile.preferences.roles = ["RF Engineer"]
+    assert (
+        rescore_pending_jobs(
+            db,
+            current_profile,
+            expected_profile_version=2,
+        )
+        == 1
+    )
+    assert db.get(Job, job_id).score is not None
+    db.close()
+    engine.dispose()
 
 
 def test_requeue_scored_jobs_excludes_rows_with_an_application(tmp_path):

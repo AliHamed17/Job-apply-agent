@@ -17,8 +17,7 @@ logger = structlog.get_logger(__name__)
 _RESCORE_STATUSES = (JobStatus.EXTRACTED, JobStatus.SCORED, JobStatus.DRAFT)
 
 
-def rescore_pending_jobs(db, profile) -> int:
-    """Re-score not-yet-submitted jobs; returns the number updated."""
+def _rescore_pending_jobs(db, profile) -> int:
     rows = db.query(Job).filter(Job.status.in_(_RESCORE_STATUSES)).all()
     updated = 0
     for j in rows:
@@ -40,6 +39,33 @@ def rescore_pending_jobs(db, profile) -> int:
     db.commit()
     logger.info("rescored_pending_jobs", count=updated)
     return updated
+
+
+def rescore_pending_jobs(
+    db,
+    profile,
+    *,
+    expected_profile_version: int | None = None,
+) -> int:
+    """Re-score pending jobs against one exact immutable profile revision."""
+
+    if expected_profile_version is None:
+        return _rescore_pending_jobs(db, profile)
+
+    from profile.versioned_snapshot import latest_profile_version  # noqa: PLC0415
+    from profile.writer import profile_write_transaction  # noqa: PLC0415
+
+    with profile_write_transaction(db):
+        current_profile_version = latest_profile_version(db)
+        if current_profile_version != expected_profile_version:
+            db.rollback()
+            logger.info(
+                "pending_job_rescore_superseded",
+                expected_profile_version=expected_profile_version,
+                current_profile_version=current_profile_version,
+            )
+            return 0
+        return _rescore_pending_jobs(db, profile)
 
 
 def requeue_scored_jobs_for_preparation(

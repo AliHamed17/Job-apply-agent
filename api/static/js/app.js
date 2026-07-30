@@ -1232,7 +1232,7 @@ function populateOnboardingForm(data) {
         const input = $(id);
         if (input) {
             input.value = field === 'search_locations'
-                ? (data[field] || []).join(', ')
+                ? (data[field] || []).join('\n')
                 : data[field] || '';
         }
     });
@@ -1270,7 +1270,7 @@ async function saveOnboardingProfile() {
         return [
             field,
             field === 'search_locations'
-                ? value.split(',').map(item => item.trim()).filter(Boolean)
+                ? value.split(/\r?\n/).map(item => item.trim()).filter(Boolean)
                 : value,
         ];
     }));

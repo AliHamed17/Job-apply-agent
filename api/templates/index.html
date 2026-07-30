@@ -244,10 +244,11 @@
                                            autocomplete="address-level2" maxlength="200" required>
                                 </label>
                                 <label>
-                                    Search locations (comma-separated)
-                                    <input id="onboarding-search-locations" class="form-input"
-                                           autocomplete="off" maxlength="1000"
-                                           placeholder="Israel, Worldwide Remote" required>
+                                    Search locations (one per line)
+                                    <textarea id="onboarding-search-locations" class="form-input"
+                                              autocomplete="off" maxlength="1000" rows="3"
+                                              placeholder="Tel Aviv, Israel&#10;Worldwide Remote"
+                                              required></textarea>
                                 </label>
                                 <label>
                                     Work authorization

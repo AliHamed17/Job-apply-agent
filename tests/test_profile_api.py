@@ -84,10 +84,16 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
     )
     app.dependency_overrides[get_settings] = lambda: settings
     try:
-        with patch(
-            "api.routes.profile.auto_prepare_scored_jobs_if_ready",
-            return_value=2,
-        ) as requeue:
+        with (
+            patch(
+                "api.routes.profile.rescore_pending_jobs",
+                return_value=3,
+            ) as rescore,
+            patch(
+                "api.routes.profile.auto_prepare_scored_jobs_if_ready",
+                return_value=2,
+            ) as requeue,
+        ):
             response = client.put(
                 "/api/profile/onboarding",
                 headers=_auth(),
@@ -96,7 +102,7 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
                     "primary_email": "candidate@domain.test",
                     "phone": "+972 50 000 0000",
                     "location": "Israel",
-                    "search_locations": ["Israel", "Worldwide Remote"],
+                    "search_locations": ["Tel Aviv, Israel", "Worldwide Remote"],
                     "work_authorization": "Confirmed by operator",
                     "sponsorship": "Confirmed by operator",
                     "citizenship": "",
@@ -109,7 +115,10 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
         assert response.headers["cache-control"] == "no-store"
         body = response.json()
         assert body["profile_version"] >= 1
+        assert body["rescored"] == 3
         assert body["auto_prepared"] == 2
+        rescore.assert_called_once()
+        assert rescore.call_args.kwargs["expected_profile_version"] == body["profile_version"]
         requeue.assert_called_once()
         assert body["readiness"]["discovery"]["ready"] is True
         assert body["readiness"]["preparation"]["ready"] is True
@@ -117,7 +126,10 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
 
         stored = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
         assert stored["personal"]["name"] == "Confirmed Candidate"
-        assert stored["preferences"]["locations"] == ["Israel", "Worldwide Remote"]
+        assert stored["preferences"]["locations"] == [
+            "Tel Aviv, Israel",
+            "Worldwide Remote",
+        ]
         assert "work_authorization" not in stored["personal"]
         assert stored["evidence"]["user_confirmed"] == {
             "gender": "Prefer not to say",

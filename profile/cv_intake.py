@@ -178,7 +178,15 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
                 else:
                     settings.profile_path.write_bytes(old_yaml)
                 raise
-        rescored = rescore_pending_jobs(db, profile) if db is not None else 0
+        rescored = (
+            rescore_pending_jobs(
+                db,
+                profile,
+                expected_profile_version=version,
+            )
+            if db is not None
+            else 0
+        )
         auto_prepared = auto_prepare_scored_jobs_if_ready(db, settings) if db is not None else 0
         logger.info("cv_ingested", version=version, rescored=rescored)
         return {

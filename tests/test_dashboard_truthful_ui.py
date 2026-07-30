@@ -73,6 +73,10 @@ def test_dashboard_separates_discovery_preparation_and_qualified_autopilot() -> 
     assert 'id="onboarding-form"' in INDEX_HTML
     assert 'id="onboarding-search-locations"' in INDEX_HTML
     assert "search_locations: 'onboarding-search-locations'" in APP_JS
+    assert "Search locations (one per line)" in INDEX_HTML
+    assert "(data[field] || []).join('\\n')" in APP_JS
+    assert "value.split(/\\r?\\n/)" in APP_JS
+    assert "value.split(',')" not in APP_JS
     assert "/api/profile/onboarding" in APP_JS
     assert "Saved only on the local runner" in INDEX_HTML
 
