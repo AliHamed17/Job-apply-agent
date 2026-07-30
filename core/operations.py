@@ -130,8 +130,15 @@ def readiness_report(
     settings: Settings | None = None,
     *,
     engine: Engine | None = None,
+    require_storage_write: bool = True,
 ) -> dict[str, Any]:
-    """Return bounded dependency status without exposing connection details."""
+    """Return bounded dependency status without exposing connection details.
+
+    API/onboarding processes require writable private storage. Worker and Beat
+    processes intentionally mount the same candidate data read-only and pass
+    ``require_storage_write=False`` because preparation only reads profiles and
+    CV artifacts.
+    """
     cfg = settings or get_settings()
     checks: dict[str, dict[str, Any]] = {}
 
@@ -160,7 +167,8 @@ def readiness_report(
         checks["beat"] = {"ok": False, "detail": "unavailable"}
 
     data_dir = cfg.data_dir
-    checks["shared_storage"] = {"ok": data_dir.exists() and os.access(data_dir, os.R_OK | os.W_OK)}
+    storage_mode = os.R_OK | (os.W_OK if require_storage_write else 0)
+    checks["shared_storage"] = {"ok": data_dir.is_dir() and os.access(data_dir, storage_mode)}
     try:
         checks["browser"] = _heartbeat_status("browser", cfg)
     except Exception:

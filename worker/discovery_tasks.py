@@ -79,7 +79,10 @@ def discover_jobs_task() -> int:
             return 0
 
         try:
-            dependency_report = readiness_report(settings)
+            dependency_report = readiness_report(
+                settings,
+                require_storage_write=False,
+            )
             automation = current_automation_readiness(
                 settings=settings,
                 dependency_report=dependency_report,

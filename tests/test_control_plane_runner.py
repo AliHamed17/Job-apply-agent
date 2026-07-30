@@ -910,7 +910,7 @@ async def test_heartbeat_uses_readiness_report_status(
     runner._signed_envelope = signed_envelope
     monkeypatch.setattr(
         "worker.control_plane_runner.readiness_report",
-        lambda _settings: {
+        lambda _settings, **_kwargs: {
             "status": readiness_status,
             "checks": {"database": {"ok": readiness_status == "ready"}},
         },

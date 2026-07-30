@@ -63,7 +63,10 @@ def _preparation_readiness_at_execution(
     try:
         automation = current_automation_readiness(
             settings=settings,
-            dependency_report=readiness_report(settings),
+            dependency_report=readiness_report(
+                settings,
+                require_storage_write=False,
+            ),
             db=db,
         )
         if not isinstance(automation, dict):

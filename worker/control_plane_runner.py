@@ -190,9 +190,13 @@ def _capabilities(
     db=None,
 ) -> Mapping[str, object]:
     report = (
-        readiness_report(settings, engine=engine)
+        readiness_report(
+            settings,
+            engine=engine,
+            require_storage_write=False,
+        )
         if engine is not None
-        else readiness_report(settings)
+        else readiness_report(settings, require_storage_write=False)
     )
     return build_runtime_capabilities(
         settings,
@@ -701,8 +705,15 @@ class ControlPlaneRunner:
     def _runtime_readiness(self) -> Mapping[str, object]:
         engine = getattr(self, "_database_engine", None)
         if engine is None:
-            return readiness_report(self._settings)
-        return readiness_report(self._settings, engine=engine)
+            return readiness_report(
+                self._settings,
+                require_storage_write=False,
+            )
+        return readiness_report(
+            self._settings,
+            engine=engine,
+            require_storage_write=False,
+        )
 
     def _runtime_capabilities(self, db=None) -> Mapping[str, object]:
         engine = getattr(self, "_database_engine", None)

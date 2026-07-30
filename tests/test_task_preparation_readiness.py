@@ -120,7 +120,10 @@ def test_scoring_rechecks_preparation_readiness_at_execution(
     check.close()
 
     if auto_apply:
-        dependency_probe.assert_called_once()
+        dependency_probe.assert_called_once_with(
+            settings,
+            require_storage_write=False,
+        )
         automation_probe.assert_called_once()
     else:
         dependency_probe.assert_not_called()

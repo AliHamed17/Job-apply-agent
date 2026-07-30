@@ -102,7 +102,10 @@ def auto_prepare_scored_jobs_if_ready(db, settings) -> int:
     from core.operations import readiness_report  # noqa: PLC0415
 
     try:
-        report = readiness_report(settings)
+        report = readiness_report(
+            settings,
+            require_storage_write=False,
+        )
         automation = current_automation_readiness(
             settings=settings,
             dependency_report=report,
