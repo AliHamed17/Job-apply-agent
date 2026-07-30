@@ -22,7 +22,7 @@ def discover_jobs_task() -> int:
         logger.info("discovery_skipped", reason=reason)
         return 0
 
-    from profile.loader import get_profile  # noqa: PLC0415
+    from profile.loader import load_profile_snapshot  # noqa: PLC0415
     from profile.readiness import (  # noqa: PLC0415
         profile_discovery_readiness_issues,
     )
@@ -42,7 +42,7 @@ def discover_jobs_task() -> int:
         logger.info("discovery_skipped", reason="DISCOVERY_DISABLED")
         return 0
     db = get_session_factory()()
-    profile = get_profile()
+    profile = load_profile_snapshot(settings.profile_path)
     inserted = 0
 
     def start_run(source: str) -> DiscoveryRun:

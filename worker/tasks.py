@@ -44,6 +44,45 @@ def _validated_submit_command_available(_db, _application_id: int) -> bool:
     return False
 
 
+def _preparation_readiness_at_execution(
+    settings,
+    db,
+    *,
+    requested: bool,
+) -> tuple[bool, list[str]]:
+    """Re-evaluate the canonical preparation stage immediately before use."""
+
+    if not requested:
+        return False, ["PREPARATION_NOT_REQUESTED"]
+    if not settings.auto_apply:
+        return False, ["AUTO_PREPARE_DISABLED"]
+
+    from core.automation_readiness import current_automation_readiness
+    from core.operations import readiness_report
+
+    try:
+        automation = current_automation_readiness(
+            settings=settings,
+            dependency_report=readiness_report(settings),
+            db=db,
+        )
+        if not isinstance(automation, dict):
+            return False, ["PREPARATION_READINESS_UNAVAILABLE"]
+        if automation.get("preparation_ready") is True:
+            return True, []
+        stages = automation.get("stages")
+        stage = stages.get("preparation") if isinstance(stages, dict) else None
+        reason_codes = stage.get("reason_codes") if isinstance(stage, dict) else ()
+        if not isinstance(reason_codes, (list, tuple)):
+            reason_codes = ()
+        bounded_reasons = [
+            reason for reason in reason_codes if isinstance(reason, str) and reason.strip()
+        ]
+        return False, bounded_reasons or ["PREPARATION_NOT_READY"]
+    except Exception:
+        return False, ["PREPARATION_READINESS_UNAVAILABLE"]
+
+
 # ── Task 1: Process a message ─────────────────────────────
 
 
@@ -219,7 +258,7 @@ def process_url_task(self, url_id: int):
 @shared_task(name="worker.tasks.score_job_task", bind=True, max_retries=1)
 def score_job_task(self, job_id: int, preparation_ready: bool = True):
     """Score a job against the user profile and decide the action."""
-    from profile.loader import get_profile
+    from profile.loader import load_profile_snapshot
 
     from jobs.models import JobData
 
@@ -245,7 +284,7 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
         expected_job_status = db_job.status
         job_title = db_job.title
 
-        profile = get_profile()
+        profile = load_profile_snapshot(settings.profile_path)
 
         # Convert DB model to JobData for scoring
         job_data = JobData(
@@ -275,6 +314,14 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
             skip_reason=breakdown.skip_reason,
             min_apply_score=settings.min_apply_score,
         )
+        preparation_ready, preparation_reasons = _preparation_readiness_at_execution(
+            settings,
+            db,
+            requested=bool(preparation_ready),
+        )
+        # The readiness probe reads durable profile-version state. Release that
+        # transaction before taking the application/job mutation lock.
+        db.rollback()
 
         from core.application_mutations import (
             ApplicationMutationBlockedError,
@@ -353,7 +400,8 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
                 "job_scored_preparation_blocked",
                 title=job_title,
                 score=breakdown.total,
-                reason_code="PREPARATION_NOT_READY",
+                reason_code=preparation_reasons[0],
+                reason_codes=preparation_reasons,
             )
             return
 

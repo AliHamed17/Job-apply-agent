@@ -138,7 +138,19 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
     monkeypatch.setattr(public_module, "fetch_remotive_jobs", fake_public)
     monkeypatch.setattr(linkedin_module, "run_discovery", fake_linkedin)
     monkeypatch.setattr(ingest_module, "ingest_discovered_jobs", fake_ingest)
-    monkeypatch.setattr(profile_module, "get_profile", _profile)
+    snapshot_calls = 0
+
+    def latest_profile(_path):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        return _profile()
+
+    monkeypatch.setattr(profile_module, "load_profile_snapshot", latest_profile)
+    monkeypatch.setattr(
+        profile_module,
+        "get_profile",
+        lambda: (_ for _ in ()).throw(AssertionError("cached profile used")),
+    )
     monkeypatch.setattr(
         "core.operations.readiness_report",
         lambda _settings: {"status": "degraded", "checks": {}},
@@ -160,6 +172,7 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
     assert discovery_tasks.discover_jobs_task() == 2
     assert discovery_tasks.discover_jobs_task() == 0
     assert calls == {"public": 1, "linkedin": 0}
+    assert snapshot_calls == 2
 
     db = session_module.get_session_factory()()
     try:

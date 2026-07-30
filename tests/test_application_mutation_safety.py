@@ -970,7 +970,7 @@ def test_scoring_rechecks_application_revision_before_job_write(tmp_path):
     with (
         patch("worker.tasks.get_session_factory", return_value=factory),
         patch("worker.tasks.get_settings", return_value=settings),
-        patch("profile.loader.get_profile", return_value=UserProfile()),
+        patch("profile.loader.load_profile_snapshot", return_value=UserProfile()),
         patch("worker.tasks.score_job", side_effect=reject_during_scoring),
         patch("worker.tasks.generate_application_task") as queued_generation,
     ):
@@ -1033,7 +1033,7 @@ def test_scoring_cannot_overwrite_application_created_during_scoring(tmp_path):
     with (
         patch("worker.tasks.get_session_factory", return_value=factory),
         patch("worker.tasks.get_settings", return_value=settings),
-        patch("profile.loader.get_profile", return_value=UserProfile()),
+        patch("profile.loader.load_profile_snapshot", return_value=UserProfile()),
         patch(
             "worker.tasks.score_job",
             side_effect=generate_application_during_scoring,
@@ -1084,7 +1084,7 @@ def test_discovery_scoring_stops_before_generation_when_preparation_is_blocked(
     with (
         patch("worker.tasks.get_session_factory", return_value=factory),
         patch("worker.tasks.get_settings", return_value=settings),
-        patch("profile.loader.get_profile", return_value=UserProfile()),
+        patch("profile.loader.load_profile_snapshot", return_value=UserProfile()),
         patch(
             "worker.tasks.score_job",
             return_value=SimpleNamespace(total=90.0, skip_reason=None),
