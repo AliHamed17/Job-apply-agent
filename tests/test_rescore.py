@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from core.config import Settings
 from db.models import Application, Base, Job, JobStatus, UserProfileVersion
 from worker.rescore import (
+    _drain_eager_pending_job_rescore,
     auto_prepare_scored_jobs_if_ready,
     enqueue_pending_job_rescore,
     requeue_scored_jobs_for_preparation,
@@ -186,7 +187,95 @@ def test_pending_rescore_enqueue_dispatches_one_bounded_controller(tmp_path):
     engine.dispose()
 
 
-def test_rescore_controller_pages_through_entire_backlog(tmp_path):
+def test_eager_enqueue_starts_background_drainer_without_task_apply(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'eager-rescore-enqueue.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    db.add(
+        Job(
+            title="Eager queued rescore",
+            company="Example",
+            source_url="https://example.test/eager-rescore-enqueue",
+            status=JobStatus.SCORED,
+        )
+    )
+    db.commit()
+    settings = Settings(
+        _env_file=None,
+        tasks_always_eager=True,
+        preparation_requeue_batch_size=7,
+    )
+
+    with (
+        patch("worker.rescore._start_eager_pending_job_rescore", return_value=True) as start,
+        patch("worker.tasks.rescore_pending_jobs_task") as task,
+    ):
+        queued = enqueue_pending_job_rescore(
+            db,
+            settings,
+            expected_profile_version=5,
+        )
+
+    assert queued == 1
+    start.assert_called_once_with(
+        expected_profile_version=5,
+        batch_size=7,
+    )
+    task.apply.assert_not_called()
+    task.delay.assert_not_called()
+    db.close()
+    engine.dispose()
+
+
+def test_eager_celery_rescore_task_processes_only_one_page(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'eager-rescore-task.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    db.add_all(
+        [
+            Job(
+                title="First eager task row",
+                company="Example",
+                source_url="https://example.test/eager-rescore-task-1",
+                status=JobStatus.SCORED,
+            ),
+            Job(
+                title="Second eager task row",
+                company="Example",
+                source_url="https://example.test/eager-rescore-task-2",
+                status=JobStatus.SCORED,
+            ),
+            UserProfileVersion(version=6, profile_yaml="{}"),
+        ]
+    )
+    db.commit()
+    db.close()
+    settings = Settings(
+        _env_file=None,
+        tasks_always_eager=True,
+        preparation_requeue_batch_size=1,
+    )
+
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=settings),
+    ):
+        from worker.tasks import rescore_pending_jobs_task
+
+        result = rescore_pending_jobs_task.run(6, 0)
+
+    assert result["updated"] == 1
+    assert result["has_more"] is True
+    check = factory()
+    scores = [row.score for row in check.query(Job).order_by(Job.id).all()]
+    assert sum(score is not None for score in scores) == 1
+    check.close()
+    engine.dispose()
+
+
+def test_eager_rescore_drainer_iterates_through_entire_backlog(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'rescore-controller.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -216,15 +305,13 @@ def test_rescore_controller_pages_through_entire_backlog(tmp_path):
         preparation_requeue_batch_size=1,
     )
 
-    with (
-        patch("worker.tasks.get_session_factory", return_value=factory),
-        patch("worker.tasks.get_settings", return_value=settings),
-    ):
-        from worker.tasks import rescore_pending_jobs_task
+    with patch("db.session.get_session_factory", return_value=factory):
+        updated = _drain_eager_pending_job_rescore(
+            expected_profile_version=4,
+            batch_size=settings.preparation_requeue_batch_size,
+        )
 
-        result = rescore_pending_jobs_task.apply(args=[4, 0], throw=True)
-        assert result.successful()
-
+    assert updated == 2
     check = factory()
     rows = check.query(Job).order_by(Job.id).all()
     assert all(job.score is not None for job in rows)

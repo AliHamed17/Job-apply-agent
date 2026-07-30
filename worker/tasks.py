@@ -340,12 +340,16 @@ def rescore_pending_jobs_task(
             batch_size=settings.preparation_requeue_batch_size,
         )
         if result.has_more and not result.superseded:
-            if settings.tasks_always_eager:
-                rescore_pending_jobs_task.apply(args=[expected_profile_version, result.last_job_id])
-            else:
+            if not settings.tasks_always_eager:
                 rescore_pending_jobs_task.delay(
                     expected_profile_version,
                     result.last_job_id,
+                )
+            else:
+                logger.info(
+                    "pending_job_rescore_task_bounded_in_eager_mode",
+                    expected_profile_version=expected_profile_version,
+                    last_job_id=result.last_job_id,
                 )
         return {
             "updated": result.updated,

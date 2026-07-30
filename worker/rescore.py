@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, cast
@@ -16,6 +17,8 @@ from match.scoring import score_job
 logger = structlog.get_logger(__name__)
 
 _RESCORE_STATUSES = (JobStatus.EXTRACTED, JobStatus.SCORED, JobStatus.DRAFT)
+_EAGER_RESCORE_LOCK = threading.Lock()
+_EAGER_RESCORE_VERSIONS: set[int] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,12 +152,15 @@ def enqueue_pending_job_rescore(
     if pending_count == 0:
         return 0
 
-    tasks_module = cast(Any, import_module("worker.tasks"))
-    task = tasks_module.rescore_pending_jobs_task
     try:
         if settings.tasks_always_eager:
-            task.apply(args=[expected_profile_version, 0])
+            _start_eager_pending_job_rescore(
+                expected_profile_version=expected_profile_version,
+                batch_size=settings.preparation_requeue_batch_size,
+            )
         else:
+            tasks_module = cast(Any, import_module("worker.tasks"))
+            task = tasks_module.rescore_pending_jobs_task
             task.delay(expected_profile_version, 0)
     except Exception:
         logger.warning(
@@ -169,6 +175,96 @@ def enqueue_pending_job_rescore(
         expected_profile_version=expected_profile_version,
     )
     return int(pending_count)
+
+
+def _drain_eager_pending_job_rescore(
+    *,
+    expected_profile_version: int,
+    batch_size: int,
+) -> int:
+    """Iteratively drain brokerless local rescoring outside the request."""
+
+    from profile.versioned_snapshot import (  # noqa: PLC0415
+        latest_profile_version,
+        load_versioned_profile_snapshot,
+    )
+
+    from db.session import get_session_factory  # noqa: PLC0415
+
+    factory = get_session_factory()
+    bootstrap = factory()
+    try:
+        if latest_profile_version(bootstrap) != expected_profile_version:
+            bootstrap.rollback()
+            return 0
+        profile = load_versioned_profile_snapshot(
+            bootstrap,
+            version=expected_profile_version,
+        ).profile
+        bootstrap.rollback()
+    finally:
+        bootstrap.close()
+
+    updated = 0
+    after_job_id = 0
+    while True:
+        db = factory()
+        try:
+            result = rescore_pending_jobs_batch(
+                db,
+                profile,
+                expected_profile_version=expected_profile_version,
+                after_job_id=after_job_id,
+                batch_size=batch_size,
+            )
+        finally:
+            db.close()
+        updated += result.updated
+        if result.superseded or not result.has_more:
+            return updated
+        after_job_id = result.last_job_id
+
+
+def _start_eager_pending_job_rescore(
+    *,
+    expected_profile_version: int,
+    batch_size: int,
+) -> bool:
+    """Start one daemon drainer per immutable profile revision."""
+
+    with _EAGER_RESCORE_LOCK:
+        if expected_profile_version in _EAGER_RESCORE_VERSIONS:
+            return True
+        _EAGER_RESCORE_VERSIONS.add(expected_profile_version)
+
+    def drain() -> None:
+        try:
+            _drain_eager_pending_job_rescore(
+                expected_profile_version=expected_profile_version,
+                batch_size=batch_size,
+            )
+        except Exception as exc:
+            logger.error(
+                "eager_pending_job_rescore_failed",
+                reason_code=type(exc).__name__,
+                expected_profile_version=expected_profile_version,
+            )
+        finally:
+            with _EAGER_RESCORE_LOCK:
+                _EAGER_RESCORE_VERSIONS.discard(expected_profile_version)
+
+    thread = threading.Thread(
+        target=drain,
+        name=f"profile-rescore-v{expected_profile_version}",
+        daemon=True,
+    )
+    try:
+        thread.start()
+    except Exception:
+        with _EAGER_RESCORE_LOCK:
+            _EAGER_RESCORE_VERSIONS.discard(expected_profile_version)
+        raise
+    return True
 
 
 def requeue_scored_jobs_for_preparation(
