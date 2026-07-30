@@ -181,6 +181,7 @@ def test_scoring_profile_change_keeps_job_eligible_for_rescore(tmp_path):
             "core.automation_readiness.current_automation_readiness",
             return_value=automation,
         ),
+        patch("worker.tasks._dispatch_exact_rescore") as queued_rescore,
         patch("worker.tasks.generate_application_task") as queued_generation,
     ):
         from worker.tasks import score_job_task
@@ -191,6 +192,7 @@ def test_scoring_profile_change_keeps_job_eligible_for_rescore(tmp_path):
     assert check.get(Job, job_id).status == JobStatus.SCORED
     assert check.query(Application).filter(Application.job_id == job_id).count() == 0
     check.close()
+    queued_rescore.assert_called_once_with(job_id, settings)
     queued_generation.delay.assert_not_called()
     queued_generation.apply.assert_not_called()
 

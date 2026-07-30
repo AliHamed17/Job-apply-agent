@@ -428,6 +428,7 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
         # rechecking the version and committing the score transition. This
         # prevents a newer immutable profile from appearing between the final
         # comparison and the generation handoff.
+        scoring_blocked = False
         with profile_write_transaction(db):
             try:
                 db_job = lock_job_without_application_for_mutation(db, job_id=job_id)
@@ -465,9 +466,8 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
                     reason_code=preparation_reasons[0],
                     reason_codes=preparation_reasons,
                 )
-                return
-
-            if action == Action.SKIP:
+                scoring_blocked = True
+            elif action == Action.SKIP:
                 db_job.status = JobStatus.SKIPPED
                 db.commit()
                 logger.info(
@@ -477,10 +477,15 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
                     reason=breakdown.skip_reason,
                 )
                 return
+            else:
+                # Create application draft
+                db_job.status = JobStatus.DRAFT
+                db.commit()
 
-            # Create application draft
-            db_job.status = JobStatus.DRAFT
-            db.commit()
+        if scoring_blocked:
+            if "PROFILE_VERSION_CHANGED" in preparation_reasons:
+                _dispatch_exact_rescore(job_id, settings)
+            return
 
         # Chain to LLM generation
         if settings.tasks_always_eager:
