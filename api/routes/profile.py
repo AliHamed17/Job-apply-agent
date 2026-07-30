@@ -7,6 +7,7 @@ from profile.cv_intake import CVIngestError, ingest_cv_from_temp, stream_to_temp
 from profile.loader import get_profile, load_profile_snapshot
 from profile.models import Personal, ProfileEvidence, UserProfile
 from profile.readiness import (
+    email_is_valid,
     phone_is_valid,
     profile_discovery_readiness_issues,
     profile_preparation_readiness_issues,
@@ -26,7 +27,6 @@ from worker.rescore import auto_prepare_scored_jobs_if_ready
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -66,7 +66,7 @@ class OnboardingProfileUpdate(BaseModel):
     @field_validator("primary_email")
     @classmethod
     def validate_email(cls, value: str) -> str:
-        if not _EMAIL_RE.fullmatch(value):
+        if not email_is_valid(value):
             raise ValueError("enter a valid email address")
         return value
 

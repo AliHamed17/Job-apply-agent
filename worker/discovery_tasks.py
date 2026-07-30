@@ -14,6 +14,22 @@ from core.utils import run_async
 logger = structlog.get_logger(__name__)
 
 
+def _load_discovery_profile(settings, db):
+    """Bind one discovery run to the authoritative immutable profile."""
+
+    from profile.loader import load_profile_snapshot
+    from profile.versioned_snapshot import (
+        latest_profile_version,
+        load_versioned_profile_snapshot,
+    )
+
+    profile_version = latest_profile_version(db)
+    if profile_version is None:
+        return load_profile_snapshot(settings.profile_path), None
+    snapshot = load_versioned_profile_snapshot(db, version=profile_version)
+    return snapshot.profile, snapshot.version
+
+
 @shared_task(name="worker.discovery_tasks.discover_jobs_task")
 def discover_jobs_task() -> int:
     gov = get_governor()
@@ -22,12 +38,11 @@ def discover_jobs_task() -> int:
         logger.info("discovery_skipped", reason=reason)
         return 0
 
-    from profile.loader import load_profile_snapshot  # noqa: PLC0415
     from profile.readiness import (  # noqa: PLC0415
         profile_discovery_readiness_issues,
     )
 
-    from core.automation_readiness import current_automation_readiness  # noqa: PLC0415
+    from core.automation_readiness import build_automation_readiness  # noqa: PLC0415
     from core.operational_metrics import record_discovery_result  # noqa: PLC0415
     from core.operations import readiness_report  # noqa: PLC0415
     from db.models import DiscoveryRun  # noqa: PLC0415
@@ -42,7 +57,6 @@ def discover_jobs_task() -> int:
         logger.info("discovery_skipped", reason="DISCOVERY_DISABLED")
         return 0
     db = get_session_factory()()
-    profile = load_profile_snapshot(settings.profile_path)
     inserted = 0
 
     def start_run(source: str) -> DiscoveryRun:
@@ -63,6 +77,7 @@ def discover_jobs_task() -> int:
         db.commit()
 
     try:
+        profile, profile_version = _load_discovery_profile(settings, db)
         readiness_issues = profile_discovery_readiness_issues(profile)
         if readiness_issues:
             logger.warning(
@@ -83,10 +98,11 @@ def discover_jobs_task() -> int:
                 settings,
                 require_storage_write=False,
             )
-            automation = current_automation_readiness(
+            automation = build_automation_readiness(
                 settings=settings,
                 dependency_report=dependency_report,
-                db=db,
+                profile=profile,
+                profile_version=profile_version,
             )
             preparation_ready = settings.auto_apply and automation["preparation_ready"] is True
             preparation_reasons = automation["stages"]["preparation"]["reason_codes"]

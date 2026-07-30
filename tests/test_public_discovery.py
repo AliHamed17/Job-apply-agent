@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from profile.models import Personal, Preferences, Resume, UserProfile
 
+import yaml
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from core.config import Settings
+from db.models import Base, UserProfileVersion
 from discovery.public_sources import parse_remotive_jobs
 
 
@@ -58,6 +64,48 @@ def test_parse_remotive_jobs_honors_bound():
     payload = {"jobs": [{**row, "url": f"https://remotive.com/job/{index}"} for index in range(5)]}
 
     assert len(parse_remotive_jobs(payload, _profile(), 2)) == 2
+
+
+def test_discovery_profile_prefers_immutable_version_over_edited_yaml(tmp_path):
+    mutable = _profile()
+    mutable.preferences.roles = ["Edited YAML Role"]
+    profile_path = tmp_path / "user_profile.yaml"
+    profile_path.write_text(
+        yaml.safe_dump(mutable.model_dump(mode="json"), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    immutable = _profile()
+    immutable.preferences.roles = ["Immutable Role"]
+    engine = create_engine(f"sqlite:///{tmp_path / 'profile-snapshot.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    db.add(
+        UserProfileVersion(
+            version=1,
+            profile_yaml=yaml.safe_dump(
+                immutable.model_dump(mode="json"),
+                sort_keys=False,
+            ),
+        )
+    )
+    db.commit()
+
+    from worker.discovery_tasks import _load_discovery_profile
+
+    profile, version = _load_discovery_profile(
+        Settings(
+            _env_file=None,
+            user_profile_path=str(profile_path),
+        ),
+        db,
+    )
+
+    assert version == 1
+    assert profile.preferences.roles == ["Immutable Role"]
+    db.close()
+    engine.dispose()
 
 
 def test_global_discovery_switch_stops_before_database_access(monkeypatch):

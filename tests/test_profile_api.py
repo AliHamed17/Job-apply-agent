@@ -169,6 +169,34 @@ def test_local_onboarding_rejects_placeholder_identity_without_writing(tmp_path)
 
 
 @pytest.mark.parametrize(
+    "email",
+    [
+        "candidate@example..com",
+        ".candidate@domain.test",
+        "candidate@-domain.test",
+        "candidate domain.test",
+    ],
+)
+def test_local_onboarding_rejects_malformed_email(email):
+    response = client.put(
+        "/api/profile/onboarding",
+        headers=_auth(),
+        json={
+            "legal_name": "Confirmed Candidate",
+            "primary_email": email,
+            "phone": "+972 50 000 0000",
+            "location": "Israel",
+            "search_locations": ["Israel"],
+            "work_authorization": "Confirmed",
+            "sponsorship": "Confirmed",
+            "nationality": "Confirmed",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
     "phone",
     ["-------", "()()()()", "+() - ()", "+10000000000"],
 )

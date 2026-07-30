@@ -13,6 +13,11 @@ from profile.models import UserProfile
 
 _PLACEHOLDER_NAMES = {"jane doe", "john doe", "your name", "example user"}
 _PLACEHOLDER_DOMAINS = {"example.com", "example.org", "example.net"}
+_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
 _PHONE_RE = re.compile(r"^\+?[0-9().\-\s]{7,40}$")
 _PLACEHOLDER_PHONE_DIGITS = {
     "0000000000",
@@ -27,6 +32,25 @@ _PLACEHOLDER_LOCATIONS = {
     "your preferred location",
     "location",
 }
+
+
+def email_is_valid(value: str) -> bool:
+    """Validate one bounded ASCII mailbox without normalizing operator input."""
+
+    email = value.strip()
+    if not email or len(email) > 320 or email.count("@") != 1:
+        return False
+    local, domain = email.rsplit("@", 1)
+    if (
+        not local
+        or len(local) > 64
+        or len(domain) > 253
+        or local.startswith(".")
+        or local.endswith(".")
+        or ".." in local
+    ):
+        return False
+    return _EMAIL_RE.fullmatch(email) is not None
 
 
 def phone_is_placeholder(value: str) -> bool:
@@ -53,12 +77,10 @@ def _identity_issues(profile: UserProfile) -> list[str]:
     email = profile.personal.email.strip().casefold()
     if not name or name in _PLACEHOLDER_NAMES:
         issues.append("PROFILE_NAME_PLACEHOLDER")
-    if (
-        not email
-        or "@" not in email
-        or any(email.endswith(f"@{domain}") for domain in _PLACEHOLDER_DOMAINS)
-    ):
+    if not email or any(email.endswith(f"@{domain}") for domain in _PLACEHOLDER_DOMAINS):
         issues.append("PROFILE_EMAIL_PLACEHOLDER")
+    elif not email_is_valid(email):
+        issues.append("PROFILE_EMAIL_INVALID")
     return issues
 
 

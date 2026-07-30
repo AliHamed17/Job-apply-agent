@@ -43,6 +43,31 @@ def test_real_minimum_profile_is_ready():
     assert profile_readiness_issues(profile) == []
 
 
+def test_malformed_email_blocks_preparation_and_submission():
+    profile = UserProfile(
+        personal=Personal(
+            name="Candidate Name",
+            email="candidate@example..com",
+            phone="+972 50 000 0000",
+            location="Israel",
+        ),
+        preferences=Preferences(
+            roles=["Software Engineer"],
+            locations=["Israel"],
+        ),
+        evidence=ProfileEvidence(
+            user_confirmed={
+                "work_authorization": "Confirmed",
+                "visa_sponsorship": "Confirmed",
+                "nationality": "Confirmed",
+            }
+        ),
+    )
+
+    assert "PROFILE_EMAIL_INVALID" in profile_readiness_issues(profile)
+    assert "PROFILE_EMAIL_INVALID" in profile_submission_readiness_issues(profile)
+
+
 def test_placeholder_identity_does_not_block_discovery():
     profile = UserProfile(
         personal=Personal(name="Jane Doe", email="jane.doe@example.com"),
