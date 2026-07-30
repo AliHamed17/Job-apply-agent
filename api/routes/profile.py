@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from core.config import Settings, get_settings
 from db.session import get_db
-from worker.rescore import auto_prepare_scored_jobs_if_ready, rescore_pending_jobs
+from worker.rescore import auto_prepare_scored_jobs_if_ready, enqueue_pending_job_rescore
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -270,10 +270,10 @@ async def update_onboarding_profile(
             },
         ) from exc
 
-    rescored = (
-        rescore_pending_jobs(
+    rescore_queued = (
+        enqueue_pending_job_rescore(
             db,
-            updated,
+            settings,
             expected_profile_version=version,
         )
         if db is not None
@@ -283,12 +283,13 @@ async def update_onboarding_profile(
     logger.info(
         "profile_onboarding_saved",
         profile_version=version,
-        rescored=rescored,
+        rescore_queued=rescore_queued,
     )
     response.headers["Cache-Control"] = "no-store"
     return {
         "profile_version": version,
-        "rescored": rescored,
+        "rescored": 0,
+        "rescore_queued": rescore_queued,
         "auto_prepared": auto_prepared,
         **_onboarding_payload(updated),
     }

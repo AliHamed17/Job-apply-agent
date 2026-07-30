@@ -1364,8 +1364,9 @@ async function uploadResume() {
         }
         const data = await res.json();
         renderProfileSummary(data);
+        const queued = Number(data.rescore_queued || 0);
         showToast(
-            `CV processed — profile v${data.version} rebuilt, ${data.rescored} job${data.rescored !== 1 ? 's' : ''} rescored`,
+            `CV processed — profile v${data.version} rebuilt, ${queued} pending job${queued !== 1 ? 's' : ''} queued for rescoring`,
             'info'
         );
     } catch (err) {

@@ -187,7 +187,8 @@ async def _handle_document(msg: dict, db, settings: Settings) -> bool:
         await _send_whatsapp_message(
             sender,
             f"✅ CV received. Profile v{result['version']} rebuilt "
-            f"({len(result['roles'])} target roles). Re-scored {result['rescored']} jobs.",
+            f"({len(result['roles'])} target roles). "
+            f"Queued {result.get('rescore_queued', 0)} pending jobs for rescoring.",
             settings,
         )
         return True

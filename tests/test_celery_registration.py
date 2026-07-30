@@ -72,6 +72,7 @@ def test_core_and_v2_task_modules_all_present():
     required = {
         "worker.tasks.process_message_task",
         "worker.tasks.process_url_task",
+        "worker.tasks.rescore_pending_jobs_task",
         "worker.tasks.score_job_task",
         "worker.tasks.generate_application_task",
         "worker.tasks.submit_application_task",

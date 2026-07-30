@@ -14,7 +14,7 @@ from profile.writer import profile_write_transaction, save_profile
 
 import structlog
 
-from worker.rescore import auto_prepare_scored_jobs_if_ready, rescore_pending_jobs
+from worker.rescore import auto_prepare_scored_jobs_if_ready, enqueue_pending_job_rescore
 
 logger = structlog.get_logger(__name__)
 _ingest_lock = asyncio.Lock()
@@ -178,22 +178,23 @@ async def ingest_cv_from_temp(tmp_pdf: Path, *, settings, db, max_bytes: int) ->
                 else:
                     settings.profile_path.write_bytes(old_yaml)
                 raise
-        rescored = (
-            rescore_pending_jobs(
+        rescore_queued = (
+            enqueue_pending_job_rescore(
                 db,
-                profile,
+                settings,
                 expected_profile_version=version,
             )
             if db is not None
             else 0
         )
         auto_prepared = auto_prepare_scored_jobs_if_ready(db, settings) if db is not None else 0
-        logger.info("cv_ingested", version=version, rescored=rescored)
+        logger.info("cv_ingested", version=version, rescore_queued=rescore_queued)
         return {
             "version": version,
             "name": profile.personal.name,
             "roles": profile.preferences.roles,
             "keywords_count": len(profile.preferences.keywords),
-            "rescored": rescored,
+            "rescored": 0,
+            "rescore_queued": rescore_queued,
             "auto_prepared": auto_prepared,
         }

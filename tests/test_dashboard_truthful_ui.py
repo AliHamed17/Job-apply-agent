@@ -77,6 +77,8 @@ def test_dashboard_separates_discovery_preparation_and_qualified_autopilot() -> 
     assert "(data[field] || []).join('\\n')" in APP_JS
     assert "value.split(/\\r?\\n/)" in APP_JS
     assert "value.split(',')" not in APP_JS
+    assert "queued for rescoring" in APP_JS
+    assert "${data.rescored}" not in APP_JS
     assert "/api/profile/onboarding" in APP_JS
     assert "Saved only on the local runner" in INDEX_HTML
 

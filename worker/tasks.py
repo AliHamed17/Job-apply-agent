@@ -298,6 +298,72 @@ def process_url_task(self, url_id: int):
 # ── Task 3: Score a job ───────────────────────────────────
 
 
+@shared_task(name="worker.tasks.rescore_pending_jobs_task", bind=True, max_retries=1)
+def rescore_pending_jobs_task(
+    self,
+    expected_profile_version: int,
+    after_job_id: int = 0,
+):
+    """Process one bounded profile-version rescore page and chain the next."""
+
+    from profile.versioned_snapshot import (
+        latest_profile_version,
+        load_versioned_profile_snapshot,
+    )
+
+    from worker.rescore import rescore_pending_jobs_batch
+
+    db = _get_db()
+    try:
+        settings = get_settings()
+        if latest_profile_version(db) != expected_profile_version:
+            db.rollback()
+            logger.info(
+                "pending_job_rescore_task_superseded",
+                expected_profile_version=expected_profile_version,
+            )
+            return {
+                "updated": 0,
+                "has_more": False,
+                "superseded": True,
+            }
+        snapshot = load_versioned_profile_snapshot(
+            db,
+            version=expected_profile_version,
+        )
+        db.rollback()
+        result = rescore_pending_jobs_batch(
+            db,
+            snapshot.profile,
+            expected_profile_version=expected_profile_version,
+            after_job_id=after_job_id,
+            batch_size=settings.preparation_requeue_batch_size,
+        )
+        if result.has_more and not result.superseded:
+            if settings.tasks_always_eager:
+                rescore_pending_jobs_task.apply(args=[expected_profile_version, result.last_job_id])
+            else:
+                rescore_pending_jobs_task.delay(
+                    expected_profile_version,
+                    result.last_job_id,
+                )
+        return {
+            "updated": result.updated,
+            "last_job_id": result.last_job_id,
+            "has_more": result.has_more,
+            "superseded": result.superseded,
+        }
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "pending_job_rescore_task_failed",
+            reason_code=type(exc).__name__,
+        )
+        raise self.retry(exc=exc, countdown=30)
+    finally:
+        db.close()
+
+
 @shared_task(name="worker.tasks.score_job_task", bind=True, max_retries=1)
 def score_job_task(self, job_id: int, preparation_ready: bool = True):
     """Score a job against the user profile and decide the action."""

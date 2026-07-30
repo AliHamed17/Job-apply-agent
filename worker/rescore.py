@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, cast
 
@@ -17,40 +18,79 @@ logger = structlog.get_logger(__name__)
 _RESCORE_STATUSES = (JobStatus.EXTRACTED, JobStatus.SCORED, JobStatus.DRAFT)
 
 
-def _rescore_pending_jobs(db, profile) -> int:
+@dataclass(frozen=True, slots=True)
+class RescoreBatchResult:
+    """One bounded exact-profile rescore page."""
+
+    updated: int
+    last_job_id: int
+    has_more: bool
+    superseded: bool = False
+
+
+def _score_value(job: Any, profile: Any) -> float:
+    job_data = JobData(
+        title=job.title,
+        company=job.company or "",
+        location=job.location or "",
+        employment_type=job.employment_type or "",
+        seniority=job.seniority or "",
+        description=job.description or "",
+        requirements=job.requirements or "",
+        apply_url=job.apply_url or "",
+        source_url=job.source_url,
+        date_posted=job.date_posted or "",
+        keywords=json.loads(job.keywords) if job.keywords else [],
+    )
+    return score_job(job_data, profile).total
+
+
+def rescore_pending_jobs(db, profile) -> int:
+    """Synchronously re-score not-yet-submitted jobs for explicit maintenance."""
+
     rows = db.query(Job).filter(Job.status.in_(_RESCORE_STATUSES)).all()
-    updated = 0
-    for j in rows:
-        job_data = JobData(
-            title=j.title,
-            company=j.company or "",
-            location=j.location or "",
-            employment_type=j.employment_type or "",
-            seniority=j.seniority or "",
-            description=j.description or "",
-            requirements=j.requirements or "",
-            apply_url=j.apply_url or "",
-            source_url=j.source_url,
-            date_posted=j.date_posted or "",
-            keywords=json.loads(j.keywords) if j.keywords else [],
-        )
-        j.score = score_job(job_data, profile).total
-        updated += 1
+    for job in rows:
+        job.score = _score_value(job, profile)
     db.commit()
-    logger.info("rescored_pending_jobs", count=updated)
-    return updated
+    logger.info("rescored_pending_jobs", count=len(rows))
+    return len(rows)
 
 
-def rescore_pending_jobs(
+def rescore_pending_jobs_batch(
     db,
     profile,
     *,
-    expected_profile_version: int | None = None,
-) -> int:
-    """Re-score pending jobs against one exact immutable profile revision."""
+    expected_profile_version: int,
+    after_job_id: int,
+    batch_size: int,
+) -> RescoreBatchResult:
+    """Compute outside the profile lock, then commit one exact-version page."""
 
-    if expected_profile_version is None:
-        return _rescore_pending_jobs(db, profile)
+    if not 1 <= batch_size <= 100:
+        raise ValueError("rescore batch size must be between 1 and 100")
+    rows = (
+        db.query(Job)
+        .filter(
+            Job.status.in_(_RESCORE_STATUSES),
+            Job.id > after_job_id,
+        )
+        .order_by(Job.id)
+        .limit(batch_size + 1)
+        .all()
+    )
+    selected = rows[:batch_size]
+    has_more = len(rows) > batch_size
+    if not selected:
+        db.rollback()
+        return RescoreBatchResult(
+            updated=0,
+            last_job_id=after_job_id,
+            has_more=False,
+        )
+
+    scores = {int(job.id): _score_value(job, profile) for job in selected}
+    last_job_id = max(scores)
+    db.rollback()
 
     from profile.versioned_snapshot import latest_profile_version  # noqa: PLC0415
     from profile.writer import profile_write_transaction  # noqa: PLC0415
@@ -60,12 +100,75 @@ def rescore_pending_jobs(
         if current_profile_version != expected_profile_version:
             db.rollback()
             logger.info(
-                "pending_job_rescore_superseded",
+                "pending_job_rescore_batch_superseded",
                 expected_profile_version=expected_profile_version,
                 current_profile_version=current_profile_version,
             )
-            return 0
-        return _rescore_pending_jobs(db, profile)
+            return RescoreBatchResult(
+                updated=0,
+                last_job_id=last_job_id,
+                has_more=False,
+                superseded=True,
+            )
+        live_rows = (
+            db.query(Job)
+            .filter(
+                Job.id.in_(scores),
+                Job.status.in_(_RESCORE_STATUSES),
+            )
+            .all()
+        )
+        for job in live_rows:
+            job.score = scores[int(job.id)]
+        db.commit()
+
+    logger.info(
+        "pending_job_rescore_batch_completed",
+        count=len(live_rows),
+        expected_profile_version=expected_profile_version,
+        last_job_id=last_job_id,
+        has_more=has_more,
+    )
+    return RescoreBatchResult(
+        updated=len(live_rows),
+        last_job_id=last_job_id,
+        has_more=has_more,
+    )
+
+
+def enqueue_pending_job_rescore(
+    db,
+    settings,
+    *,
+    expected_profile_version: int,
+) -> int:
+    """Queue a bounded background rescore controller; return affected row count."""
+
+    pending_count = db.query(Job.id).filter(Job.status.in_(_RESCORE_STATUSES)).count()
+    db.rollback()
+    if pending_count == 0:
+        return 0
+
+    tasks_module = cast(Any, import_module("worker.tasks"))
+    task = tasks_module.rescore_pending_jobs_task
+    try:
+        if settings.tasks_always_eager:
+            task.apply(args=[expected_profile_version, 0])
+        else:
+            task.delay(expected_profile_version, 0)
+    except Exception:
+        logger.warning(
+            "pending_job_rescore_queue_failed",
+            reason_code="RESCORE_QUEUE_UNAVAILABLE",
+            expected_profile_version=expected_profile_version,
+        )
+        return 0
+    logger.info(
+        "pending_job_rescore_queued",
+        count=pending_count,
+        expected_profile_version=expected_profile_version,
+    )
+    return int(pending_count)
 
 
 def requeue_scored_jobs_for_preparation(

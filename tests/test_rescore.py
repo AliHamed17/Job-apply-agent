@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from profile.models import UserProfile
 from unittest.mock import MagicMock, patch
 
@@ -8,8 +9,10 @@ from core.config import Settings
 from db.models import Application, Base, Job, JobStatus, UserProfileVersion
 from worker.rescore import (
     auto_prepare_scored_jobs_if_ready,
+    enqueue_pending_job_rescore,
     requeue_scored_jobs_for_preparation,
     rescore_pending_jobs,
+    rescore_pending_jobs_batch,
 )
 
 
@@ -63,50 +66,169 @@ def test_rescore_updates_scores():
     assert jobs[0].score is not None
 
 
-def test_version_bound_rescore_rejects_superseded_profile(tmp_path):
+def test_version_bound_rescore_is_bounded_and_rejects_superseded_profile(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'version-bound-rescore.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     db = factory()
-    job = Job(
+    first = Job(
         title="RF Engineer",
         company="Example",
-        source_url="https://example.test/version-bound-rescore",
+        source_url="https://example.test/version-bound-rescore-1",
         status=JobStatus.SCORED,
+    )
+    second = Job(
+        title="RAN Engineer",
+        company="Example",
+        source_url="https://example.test/version-bound-rescore-2",
+        status=JobStatus.DRAFT,
     )
     db.add_all(
         [
-            job,
+            first,
+            second,
             UserProfileVersion(version=2, profile_yaml="{}"),
         ]
     )
     db.commit()
-    job_id = job.id
+    first_id = first.id
+    second_id = second.id
 
     stale_profile = UserProfile()
     stale_profile.preferences.roles = ["RF Engineer"]
-    assert (
-        rescore_pending_jobs(
-            db,
-            stale_profile,
-            expected_profile_version=1,
-        )
-        == 0
+    stale = rescore_pending_jobs_batch(
+        db,
+        stale_profile,
+        expected_profile_version=1,
+        after_job_id=0,
+        batch_size=1,
     )
-    assert db.get(Job, job_id).score is None
+    assert stale.superseded is True
+    assert stale.updated == 0
+    assert db.get(Job, first_id).score is None
+
+    lock_state = {"held": False}
+
+    @contextmanager
+    def observed_profile_transaction(_db):
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    def score_outside_profile_lock(*_args, **_kwargs):
+        assert lock_state["held"] is False
+        return MagicMock(total=87.0)
 
     current_profile = UserProfile()
     current_profile.preferences.roles = ["RF Engineer"]
-    assert (
-        rescore_pending_jobs(
+    with (
+        patch(
+            "profile.writer.profile_write_transaction",
+            side_effect=observed_profile_transaction,
+        ),
+        patch("worker.rescore.score_job", side_effect=score_outside_profile_lock),
+    ):
+        first_batch = rescore_pending_jobs_batch(
             db,
             current_profile,
             expected_profile_version=2,
+            after_job_id=0,
+            batch_size=1,
         )
-        == 1
-    )
-    assert db.get(Job, job_id).score is not None
+        second_batch = rescore_pending_jobs_batch(
+            db,
+            current_profile,
+            expected_profile_version=2,
+            after_job_id=first_batch.last_job_id,
+            batch_size=1,
+        )
+
+    assert first_batch.updated == 1
+    assert first_batch.has_more is True
+    assert second_batch.updated == 1
+    assert second_batch.has_more is False
+    assert db.get(Job, first_id).score == 87.0
+    assert db.get(Job, second_id).score == 87.0
+    assert lock_state["held"] is False
     db.close()
+    engine.dispose()
+
+
+def test_pending_rescore_enqueue_dispatches_one_bounded_controller(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'rescore-enqueue.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    db.add(
+        Job(
+            title="Queued rescore",
+            company="Example",
+            source_url="https://example.test/rescore-enqueue",
+            status=JobStatus.SCORED,
+        )
+    )
+    db.commit()
+    settings = Settings(_env_file=None, tasks_always_eager=False)
+
+    with patch("worker.tasks.rescore_pending_jobs_task") as task:
+        queued = enqueue_pending_job_rescore(
+            db,
+            settings,
+            expected_profile_version=3,
+        )
+
+    assert queued == 1
+    task.delay.assert_called_once_with(3, 0)
+    task.apply.assert_not_called()
+    db.close()
+    engine.dispose()
+
+
+def test_rescore_controller_pages_through_entire_backlog(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'rescore-controller.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    db.add_all(
+        [
+            Job(
+                title="First queued rescore",
+                company="Example",
+                source_url="https://example.test/rescore-controller-1",
+                status=JobStatus.SCORED,
+            ),
+            Job(
+                title="Second queued rescore",
+                company="Example",
+                source_url="https://example.test/rescore-controller-2",
+                status=JobStatus.DRAFT,
+            ),
+            UserProfileVersion(version=4, profile_yaml="{}"),
+        ]
+    )
+    db.commit()
+    db.close()
+    settings = Settings(
+        _env_file=None,
+        tasks_always_eager=True,
+        preparation_requeue_batch_size=1,
+    )
+
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=settings),
+    ):
+        from worker.tasks import rescore_pending_jobs_task
+
+        result = rescore_pending_jobs_task.apply(args=[4, 0], throw=True)
+        assert result.successful()
+
+    check = factory()
+    rows = check.query(Job).order_by(Job.id).all()
+    assert all(job.score is not None for job in rows)
+    check.close()
     engine.dispose()
 
 

@@ -86,7 +86,7 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
     try:
         with (
             patch(
-                "api.routes.profile.rescore_pending_jobs",
+                "api.routes.profile.enqueue_pending_job_rescore",
                 return_value=3,
             ) as rescore,
             patch(
@@ -115,7 +115,8 @@ def test_local_onboarding_persists_confirmed_facts_as_new_profile_version(tmp_pa
         assert response.headers["cache-control"] == "no-store"
         body = response.json()
         assert body["profile_version"] >= 1
-        assert body["rescored"] == 3
+        assert body["rescored"] == 0
+        assert body["rescore_queued"] == 3
         assert body["auto_prepared"] == 2
         rescore.assert_called_once()
         assert rescore.call_args.kwargs["expected_profile_version"] == body["profile_version"]
