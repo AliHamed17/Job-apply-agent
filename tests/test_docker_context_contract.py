@@ -31,3 +31,23 @@ def test_container_dependency_floor_covers_current_high_severity_fixes() -> None
 
     assert '"setuptools>=78.1.1,<82"' in dockerfile
     assert "msgpack>=1.2.1,<2" in project["project"]["dependencies"]
+
+
+def test_final_images_remove_build_only_python_packaging_tools() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert dockerfile.count("python -m pip uninstall -y setuptools wheel") == 2
+    assert dockerfile.count("python -m pip uninstall -y pip") == 2
+
+    web_image = dockerfile.split("FROM deps AS web-api", maxsplit=1)[1].split(
+        "FROM deps AS celery-worker",
+        maxsplit=1,
+    )[0]
+    worker_image = dockerfile.split("FROM deps AS celery-worker", maxsplit=1)[1]
+
+    assert web_image.index('pip install -e ".[pdf,email,postgres]"') < web_image.index(
+        "python -m pip uninstall -y pip"
+    )
+    assert worker_image.index("playwright install --with-deps chromium") < worker_image.index(
+        "python -m pip uninstall -y pip"
+    )
