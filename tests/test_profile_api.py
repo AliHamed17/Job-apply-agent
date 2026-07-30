@@ -168,7 +168,10 @@ def test_local_onboarding_rejects_placeholder_identity_without_writing(tmp_path)
         set_profile(UserProfile())
 
 
-@pytest.mark.parametrize("phone", ["-------", "()()()()", "+() - ()"])
+@pytest.mark.parametrize(
+    "phone",
+    ["-------", "()()()()", "+() - ()", "+10000000000"],
+)
 def test_local_onboarding_rejects_phone_without_enough_digits(
     tmp_path,
     phone,

@@ -46,9 +46,12 @@ def requeue_scored_jobs_for_preparation(
     db,
     *,
     tasks_always_eager: bool,
+    batch_size: int,
 ) -> int:
     """Re-enter scoring for discovery rows that previously stopped at SCORE."""
 
+    if not 1 <= batch_size <= 100:
+        raise ValueError("preparation requeue batch size must be between 1 and 100")
     rows = (
         db.query(Job.id)
         .outerjoin(Application, Application.job_id == Job.id)
@@ -57,6 +60,7 @@ def requeue_scored_jobs_for_preparation(
             Application.id.is_(None),
         )
         .order_by(Job.id)
+        .limit(batch_size)
         .all()
     )
     job_ids = [int(row[0]) for row in rows]
@@ -115,4 +119,5 @@ def auto_prepare_scored_jobs_if_ready(db, settings) -> int:
     return requeue_scored_jobs_for_preparation(
         db,
         tasks_always_eager=settings.tasks_always_eager,
+        batch_size=settings.preparation_requeue_batch_size,
     )

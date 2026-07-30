@@ -6,7 +6,7 @@ import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from profile.cv_routing import load_routing_config
-from profile.loader import get_profile, load_profile_snapshot
+from profile.loader import load_profile_snapshot
 from profile.models import UserProfile
 from profile.readiness import (
     profile_discovery_readiness_issues,
@@ -155,34 +155,33 @@ def current_automation_readiness(
 ) -> dict[str, Any]:
     """Build readiness from the latest durable profile version and exact YAML."""
 
-    from db.models import UserProfileVersion  # noqa: PLC0415
+    from profile.versioned_snapshot import (  # noqa: PLC0415
+        load_versioned_profile_snapshot,
+    )
+
     from db.session import get_session_factory  # noqa: PLC0415
 
     owns_session = db is None
     session = db if db is not None else get_session_factory()()
     try:
         try:
-            latest_profile = (
-                session.query(UserProfileVersion.version)
-                .order_by(UserProfileVersion.version.desc())
-                .first()
-            )
-            profile_version = int(latest_profile[0]) if latest_profile is not None else None
+            snapshot = load_versioned_profile_snapshot(session)
+            profile_version = snapshot.version
+            # Before the first immutable version exists, exact YAML may enable
+            # discovery only. Preparation remains blocked by the missing
+            # version. Once a row exists, its content and version are
+            # inseparable and the mutable YAML file is never consulted.
+            if profile_version is None and settings.profile_path.is_file():
+                profile = load_profile_snapshot(settings.profile_path)
+            else:
+                profile = snapshot.profile
         except Exception:
             session.rollback()
             profile_version = None
+            profile = UserProfile()
     finally:
         if owns_session:
             session.close()
-
-    try:
-        profile = (
-            load_profile_snapshot(settings.profile_path)
-            if settings.profile_path.is_file()
-            else get_profile()
-        )
-    except (OSError, ValueError):
-        profile = UserProfile()
 
     return build_automation_readiness(
         settings=settings,

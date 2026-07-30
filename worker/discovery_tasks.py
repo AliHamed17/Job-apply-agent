@@ -101,6 +101,7 @@ def discover_jobs_task() -> int:
             requeue_scored_jobs_for_preparation(
                 db,
                 tasks_always_eager=settings.tasks_always_eager,
+                batch_size=settings.preparation_requeue_batch_size,
             )
 
         if settings.public_discovery_enabled:

@@ -81,7 +81,13 @@ def test_requeue_scored_jobs_excludes_rows_with_an_application(tmp_path):
         status=JobStatus.SCORED,
     )
     already_prepared.application = Application(status=JobStatus.DRAFT)
-    db.add_all([eligible, already_prepared])
+    deferred = Job(
+        title="Deferred",
+        company="Example",
+        source_url="https://example.test/deferred",
+        status=JobStatus.SCORED,
+    )
+    db.add_all([eligible, already_prepared, deferred])
     db.commit()
     eligible_id = eligible.id
 
@@ -89,6 +95,7 @@ def test_requeue_scored_jobs_excludes_rows_with_an_application(tmp_path):
         queued = requeue_scored_jobs_for_preparation(
             db,
             tasks_always_eager=False,
+            batch_size=1,
         )
 
     assert queued == 1

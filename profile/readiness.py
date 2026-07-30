@@ -8,10 +8,17 @@ no candidate values are returned or logged here.
 
 from __future__ import annotations
 
+import re
 from profile.models import UserProfile
 
 _PLACEHOLDER_NAMES = {"jane doe", "john doe", "your name", "example user"}
 _PLACEHOLDER_DOMAINS = {"example.com", "example.org", "example.net"}
+_PHONE_RE = re.compile(r"^\+?[0-9().\-\s]{7,40}$")
+_PLACEHOLDER_PHONE_DIGITS = {
+    "0000000000",
+    "10000000000",
+    "1234567890",
+}
 _PLACEHOLDER_LOCATIONS = {
     "city, country",
     "your city",
@@ -20,6 +27,24 @@ _PLACEHOLDER_LOCATIONS = {
     "your preferred location",
     "location",
 }
+
+
+def phone_is_placeholder(value: str) -> bool:
+    """Return whether a phone matches a shipped or obvious dummy value."""
+
+    digits = "".join(character for character in value if character.isdigit())
+    return digits in _PLACEHOLDER_PHONE_DIGITS or (len(digits) >= 7 and len(set(digits)) == 1)
+
+
+def phone_is_valid(value: str) -> bool:
+    """Validate bounded international-phone syntax without inferring a number."""
+
+    digits = "".join(character for character in value if character.isdigit())
+    return (
+        bool(_PHONE_RE.fullmatch(value))
+        and 7 <= len(digits) <= 15
+        and not phone_is_placeholder(value)
+    )
 
 
 def _identity_issues(profile: UserProfile) -> list[str]:
@@ -80,8 +105,13 @@ def profile_submission_readiness_issues(profile: UserProfile) -> list[str]:
     """Return profile blockers for any employer-facing external action."""
 
     issues = profile_preparation_readiness_issues(profile)
-    if not profile.personal.phone.strip():
+    phone = profile.personal.phone.strip()
+    if not phone:
         issues.append("PROFILE_PHONE_MISSING")
+    elif phone_is_placeholder(phone):
+        issues.append("PROFILE_PHONE_PLACEHOLDER")
+    elif not phone_is_valid(phone):
+        issues.append("PROFILE_PHONE_INVALID")
     confirmed = profile.evidence.user_confirmed
     if not str(confirmed.get("work_authorization") or "").strip():
         issues.append("PROFILE_WORK_AUTHORIZATION_UNCONFIRMED")

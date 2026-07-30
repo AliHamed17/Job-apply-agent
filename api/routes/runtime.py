@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from profile.loader import get_profile
-from profile.models import UserProfile
 from typing import Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from core.automation_readiness import build_automation_readiness
+from core.automation_readiness import current_automation_readiness
 from core.config import get_settings
 from core.operations import readiness_report
 from core.runtime_identity import build_runtime_capabilities
-from db.models import UserProfileVersion
-from db.session import get_session_factory
 
 router = APIRouter(tags=["runtime"])
 
@@ -102,30 +98,6 @@ class RuntimeCapabilitiesResponse(BaseModel):
     llm: LLMCapabilities | None = None
 
 
-def _current_profile_context() -> tuple[UserProfile, int | None]:
-    """Read local profile state without blocking the API event loop."""
-
-    db = get_session_factory()()
-    try:
-        try:
-            latest_profile = (
-                db.query(UserProfileVersion.version)
-                .order_by(UserProfileVersion.version.desc())
-                .first()
-            )
-            profile_version = int(latest_profile[0]) if latest_profile is not None else None
-        except Exception:
-            db.rollback()
-            profile_version = None
-    finally:
-        db.close()
-    try:
-        profile = get_profile()
-    except (OSError, ValueError):
-        profile = UserProfile()
-    return profile, profile_version
-
-
 @router.get(
     "/runtime/capabilities",
     response_model=RuntimeCapabilitiesResponse,
@@ -136,12 +108,10 @@ async def get_runtime_capabilities() -> RuntimeCapabilitiesResponse:
 
     settings = get_settings()
     report = await run_in_threadpool(readiness_report, settings)
-    profile, profile_version = await run_in_threadpool(_current_profile_context)
-    automation = build_automation_readiness(
+    automation = await run_in_threadpool(
+        current_automation_readiness,
         settings=settings,
         dependency_report=report,
-        profile=profile,
-        profile_version=profile_version,
     )
     capabilities = build_runtime_capabilities(
         settings,

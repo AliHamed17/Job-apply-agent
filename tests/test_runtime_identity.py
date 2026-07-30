@@ -496,7 +496,7 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
     )
     monkeypatch.setattr(
         runtime_route,
-        "build_automation_readiness",
+        "current_automation_readiness",
         lambda **_kwargs: _automation_ready(),
     )
 

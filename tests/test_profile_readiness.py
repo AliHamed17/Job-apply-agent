@@ -120,3 +120,27 @@ def test_placeholder_current_location_blocks_preparation_and_submission():
 
     assert "PROFILE_CURRENT_LOCATION_PLACEHOLDER" in profile_readiness_issues(profile)
     assert "PROFILE_CURRENT_LOCATION_PLACEHOLDER" in (profile_submission_readiness_issues(profile))
+
+
+def test_shipped_placeholder_phone_blocks_submission():
+    profile = UserProfile(
+        personal=Personal(
+            name="Candidate Name",
+            email="candidate@domain.test",
+            phone="+10000000000",
+            location="Israel",
+        ),
+        preferences=Preferences(
+            roles=["Software Engineer"],
+            locations=["Israel"],
+        ),
+        evidence=ProfileEvidence(
+            user_confirmed={
+                "work_authorization": "Confirmed",
+                "visa_sponsorship": "Confirmed",
+                "nationality": "Confirmed",
+            }
+        ),
+    )
+
+    assert "PROFILE_PHONE_PLACEHOLDER" in profile_submission_readiness_issues(profile)

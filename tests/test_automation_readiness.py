@@ -3,8 +3,16 @@ from __future__ import annotations
 import json
 from profile.models import Personal, Preferences, ProfileEvidence, UserProfile
 
-from core.automation_readiness import build_automation_readiness
+import yaml
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from core.automation_readiness import (
+    build_automation_readiness,
+    current_automation_readiness,
+)
 from core.config import Settings
+from db.models import Base, UserProfileVersion
 from submitters.inspector import inspect_submitter_health
 from submitters.platforms import (
     TWO_PHASE_EXECUTION_CONTRACT_VERSION,
@@ -82,6 +90,7 @@ overrides: []
         cv_routing_path=str(routing),
         cv_directory=str(cv_dir),
         portal_browser_profile_root=str(browser_root),
+        user_profile_path=str(tmp_path / "user_profile.yaml"),
         llm_provider="mock",
         dry_run=False,
         draft_only=False,
@@ -164,6 +173,46 @@ def test_readiness_is_bounded_and_contains_no_candidate_values(tmp_path):
         profile.personal.phone,
     ):
         assert private_value not in serialized
+
+
+def test_current_readiness_binds_profile_facts_to_immutable_version(tmp_path):
+    settings = _settings(tmp_path)
+    mutable_profile = _profile()
+    settings.profile_path.write_text(
+        yaml.safe_dump(mutable_profile.model_dump(mode="json"), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'readiness.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    immutable_profile = _profile(placeholder_identity=True)
+    db.add(
+        UserProfileVersion(
+            version=1,
+            profile_yaml=yaml.safe_dump(
+                immutable_profile.model_dump(mode="json"),
+                sort_keys=False,
+            ),
+        )
+    )
+    db.commit()
+
+    report = current_automation_readiness(
+        settings=settings,
+        dependency_report=_dependencies(),
+        db=db,
+        adapters=(_qualified_adapter(),),
+    )
+
+    assert report["preparation_ready"] is False
+    assert report["stages"]["preparation"]["reason_codes"] == [
+        "PROFILE_NAME_PLACEHOLDER",
+        "PROFILE_EMAIL_PLACEHOLDER",
+    ]
+    db.close()
+    engine.dispose()
 
 
 def test_legacy_auto_apply_never_reports_live_autopilot(monkeypatch):

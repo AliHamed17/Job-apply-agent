@@ -7,6 +7,7 @@ from profile.cv_intake import CVIngestError, ingest_cv_from_temp, stream_to_temp
 from profile.loader import get_profile, load_profile_snapshot
 from profile.models import Personal, ProfileEvidence, UserProfile
 from profile.readiness import (
+    phone_is_valid,
     profile_discovery_readiness_issues,
     profile_preparation_readiness_issues,
     profile_submission_readiness_issues,
@@ -26,7 +27,6 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_PHONE_RE = re.compile(r"^\+?[0-9().\-\s]{7,40}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -73,8 +73,7 @@ class OnboardingProfileUpdate(BaseModel):
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, value: str) -> str:
-        digit_count = sum(character.isdigit() for character in value)
-        if not _PHONE_RE.fullmatch(value) or not 7 <= digit_count <= 15:
+        if not phone_is_valid(value):
             raise ValueError("enter a valid international phone number")
         return value
 
