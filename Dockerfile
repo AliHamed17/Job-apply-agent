@@ -29,7 +29,7 @@ COPY . .
 # `email` extra (aiosmtplib) is required at runtime: text-post ingestion in
 # web-api sends the CV by email when a recruiter post has only an email
 # contact — without it that send is swallowed and reported as no_contact.
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip "setuptools>=78.1.1,<82" wheel && \
     pip install ".[pdf,email,postgres]"
 
 # ── Stage 3: web-api ───────────────────────────────────────────────────────

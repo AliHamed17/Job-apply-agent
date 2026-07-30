@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 
@@ -22,3 +23,11 @@ def test_web_image_bootstrap_uses_the_public_profile_template() -> None:
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
 
     assert "cp /app/user_profile.yaml.example /app/profile-data/user_profile.yaml" in dockerfile
+
+
+def test_container_dependency_floor_covers_current_high_severity_fixes() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert '"setuptools>=78.1.1,<82"' in dockerfile
+    assert "msgpack>=1.2.1,<2" in project["project"]["dependencies"]
