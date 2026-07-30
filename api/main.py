@@ -95,6 +95,10 @@ from core.runtime_identity import (
 )
 from core.single_instance import acquire_dashboard_instance_lock
 from db.session import init_db
+from worker.rescore import (
+    recover_eager_pending_job_rescore,
+    wait_for_eager_pending_job_rescores,
+)
 
 # Setup structured logging
 setup_logging()
@@ -132,15 +136,18 @@ async def lifespan(_app: FastAPI):
     )
     try:
         init_db()
+        recovered_rescores = recover_eager_pending_job_rescore(settings)
         logger.info(
             "app_started",
             draft_only=settings.draft_only,
             auto_apply=settings.auto_apply,
             build_sha=identity.build_sha,
             boot_id=identity.boot_id,
+            recovered_rescores=recovered_rescores,
         )
         yield
     finally:
+        await run_in_threadpool(wait_for_eager_pending_job_rescores)
         if instance_lock is not None:
             instance_lock.release()
 

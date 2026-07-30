@@ -39,6 +39,7 @@ from db.models import (
     UserProfileVersion,
 )
 from llm.generation import GeneratedApplication
+from match.scoring import Action
 from worker.drainer import expire_stale_jobs
 
 
@@ -969,7 +970,7 @@ def test_scoring_rechecks_application_revision_before_job_write(tmp_path):
     with (
         patch("worker.tasks.get_session_factory", return_value=factory),
         patch("worker.tasks.get_settings", return_value=settings),
-        patch("profile.loader.get_profile", return_value=UserProfile()),
+        patch("profile.loader.load_profile_snapshot", return_value=UserProfile()),
         patch("worker.tasks.score_job", side_effect=reject_during_scoring),
         patch("worker.tasks.generate_application_task") as queued_generation,
     ):
@@ -1032,7 +1033,7 @@ def test_scoring_cannot_overwrite_application_created_during_scoring(tmp_path):
     with (
         patch("worker.tasks.get_session_factory", return_value=factory),
         patch("worker.tasks.get_settings", return_value=settings),
-        patch("profile.loader.get_profile", return_value=UserProfile()),
+        patch("profile.loader.load_profile_snapshot", return_value=UserProfile()),
         patch(
             "worker.tasks.score_job",
             side_effect=generate_application_during_scoring,
@@ -1051,6 +1052,55 @@ def test_scoring_cannot_overwrite_application_created_during_scoring(tmp_path):
     assert job.status == JobStatus.DRAFT
     assert job.score is None
     queued_generation.delay.assert_not_called()
+    db.close()
+
+
+def test_discovery_scoring_stops_before_generation_when_preparation_is_blocked(
+    tmp_path,
+):
+    factory = _factory(tmp_path)
+    db = factory()
+    job = Job(
+        title="Discovery-only role",
+        company="Acme",
+        location="Israel",
+        description="Score this job without preparing private materials.",
+        requirements="Python",
+        source_url="https://example.test/discovery-only",
+        apply_url="https://example.test/discovery-only",
+        status=JobStatus.EXTRACTED,
+    )
+    db.add(job)
+    db.commit()
+    job_id = job.id
+    db.close()
+    settings = Settings(
+        _env_file=None,
+        draft_only=True,
+        auto_apply=True,
+        tasks_always_eager=False,
+    )
+
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=settings),
+        patch("profile.loader.load_profile_snapshot", return_value=UserProfile()),
+        patch(
+            "worker.tasks.score_job",
+            return_value=SimpleNamespace(total=90.0, skip_reason=None),
+        ),
+        patch("worker.tasks.decide_action", return_value=Action.AUTO_APPLY),
+        patch("worker.tasks.generate_application_task") as queued_generation,
+    ):
+        from worker.tasks import score_job_task
+
+        score_job_task.apply(args=[job_id, False])
+
+    db = factory()
+    assert db.get(Job, job_id).status == JobStatus.SCORED
+    assert db.query(Application).filter(Application.job_id == job_id).count() == 0
+    queued_generation.delay.assert_not_called()
+    queued_generation.apply.assert_not_called()
     db.close()
 
 

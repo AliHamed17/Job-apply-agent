@@ -197,12 +197,14 @@ class Settings(BaseSettings):
     submission_command_drain_batch_size: int = 25
 
     # ── Discovery ───────────────────────────────────────
+    discovery_enabled: bool = True
     discovery_interval_h: int = 3
     discovery_pages_per_query: int = 3
     public_discovery_enabled: bool = True
     public_discovery_interval_h: int = 6
     public_discovery_max_jobs: int = 50
     public_discovery_timeout_s: float = 20.0
+    preparation_requeue_batch_size: int = Field(default=25, ge=1, le=100)
 
     # ── WhatsApp outbound + email ───────────────────────
     wa_outbound_daily_cap: int = 15
@@ -320,12 +322,7 @@ class Settings(BaseSettings):
         ]
         if unsafe_cors_origins:
             errors.append("CORS_ORIGINS must contain exact HTTPS or loopback HTTP origins")
-        live_requested = (
-            self.auto_apply
-            or not self.draft_only
-            or not self.dry_run
-            or self.portal_final_submit_enabled
-        )
+        live_requested = not self.draft_only or not self.dry_run or self.portal_final_submit_enabled
         if live_requested and not self.live_automation_acknowledged:
             errors.append(
                 "LIVE_AUTOMATION_ACKNOWLEDGED=true is required for non-dry-run automation"

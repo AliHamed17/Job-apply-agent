@@ -68,6 +68,8 @@ const state = {
     adapterProbeStatus: 'loading',
     operationsData: null,
     operationsProbeStatus: 'loading',
+    onboardingProfile: null,
+    onboardingDirty: false,
     sendIdempotencyKeys: new Map(),
 };
 
@@ -126,6 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setupListeners();
     setupResumeUpload();
+    setupOnboarding();
     refreshAllData();
 });
 
@@ -320,6 +323,7 @@ async function refreshAllData() {
     // Always keep jobs current (used by dashboard histogram + CSV export)
     await fetchJobs();
     await fetchProfileSummary();
+    await fetchOnboardingProfile();
     if (state.currentTab === 'applications') await fetchApplications();
     if (state.currentTab === 'urls') await fetchUrls();
     if (state.currentTab === 'whatsapp') { await fetchMessages(); await fetchBridgeStatus(); }
@@ -353,6 +357,13 @@ async function fetchRuntimeStatus() {
     if (state.applications.length) renderApplications();
 }
 
+function humanizeReasonCode(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, char => char.toUpperCase());
+}
+
 function runtimeSubmissionState() {
     const capabilities = state.runtimeCapabilities;
     const mode = capabilities?.mode || {};
@@ -360,6 +371,7 @@ function runtimeSubmissionState() {
     const submission = capabilities?.submission || {};
     const worker = capabilities?.worker || {};
     const release = capabilities?.release || {};
+    const automation = capabilities?.automation || {};
     const reasons = [];
 
     if (!capabilities) {
@@ -380,6 +392,14 @@ function runtimeSubmissionState() {
             failedChecks.length
                 ? `Dependencies unavailable: ${failedChecks.join(', ')}`
                 : 'Runtime readiness is degraded'
+        );
+    }
+    if (capabilities && automation.submission_ready !== true) {
+        const stageReasons = automation.stages?.submission?.reason_codes || [];
+        reasons.push(
+            stageReasons.length
+                ? `Submission onboarding: ${stageReasons.map(humanizeReasonCode).join(', ')}`
+                : 'Submission onboarding is incomplete'
         );
     }
     if (worker.compatible === false) reasons.push('Runner build is incompatible');
@@ -417,6 +437,7 @@ function runtimeSubmissionState() {
         && mode.dry_run !== true
         && mode.draft_only !== true
         && readiness.status === 'ready'
+        && automation.submission_ready === true
         && worker.compatible !== false
         && releaseMatches;
 
@@ -435,6 +456,7 @@ function renderRuntimeModeBanner() {
     const runtime = runtimeSubmissionState();
     const capabilities = state.runtimeCapabilities;
     const mode = capabilities?.mode || {};
+    const automation = capabilities?.automation || {};
     const isSafeMode = mode.dry_run === true || mode.draft_only === true;
     const variant = runtime.allowed ? 'live' : isSafeMode ? 'safe' : 'blocked';
     const title = runtime.allowed
@@ -453,6 +475,27 @@ function renderRuntimeModeBanner() {
     const llmLabel = llm
         ? `${llm.provider} ${llm.model} · ${llm.ready && llm.local ? 'local ready' : llm.reason_code || 'not ready'}`
         : 'local model unavailable';
+    const modeStates = [
+        {
+            label: 'Discovery',
+            enabled: mode.discovery_enabled === true,
+            ready: automation.discovery_ready === true,
+        },
+        {
+            label: 'Auto-prepare',
+            enabled: mode.auto_prepare_enabled === true,
+            ready: automation.preparation_ready === true,
+        },
+        {
+            label: 'Qualified autopilot',
+            enabled: mode.qualified_autopilot_enabled === true,
+            ready: automation.submission_ready === true,
+        },
+    ];
+    const modeStateHtml = modeStates.map(item => {
+        const status = !item.enabled ? 'off' : item.ready ? 'ready' : 'blocked';
+        return `<span class="automation-mode-state is-${status}">${esc(item.label)}: ${status}</span>`;
+    }).join('');
 
     banner.className = `runtime-mode-banner runtime-mode-${variant}`;
     banner.innerHTML = `
@@ -460,6 +503,9 @@ function renderRuntimeModeBanner() {
         <div class="runtime-mode-copy">
             <div class="runtime-mode-title">${esc(title)}</div>
             <div class="runtime-mode-detail">${esc(detail)}</div>
+            <div class="automation-mode-states" aria-label="Automation modes">
+                ${modeStateHtml}
+            </div>
         </div>
         <div class="runtime-mode-meta" aria-label="Runtime release information">
             <span>${esc(runtime.modeName)}</span>
@@ -564,6 +610,8 @@ function renderOverview(data) {
                     ? 'Sign-in/security check required'
                     : run.reason_code === 'PROFILE_INCOMPLETE'
                         ? 'Complete your real candidate profile'
+                        : String(run.reason_code || '').startsWith('PROFILE_')
+                            ? humanizeReasonCode(run.reason_code)
                         : `${run.inserted || 0} new jobs`;
                 return `<div class="discovery-source-card ${blocked ? 'is-blocked' : ''}">
                     <div class="discovery-source-title">${esc(label)}</div>
@@ -1116,6 +1164,138 @@ function renderScoreHistogram(d) {
 // ── Candidate Profile / CV Upload ──────────────────────────────────────────
 let selectedResumeFile = null;
 
+const ONBOARDING_FIELDS = Object.freeze({
+    legal_name: 'onboarding-legal-name',
+    primary_email: 'onboarding-primary-email',
+    phone: 'onboarding-phone',
+    location: 'onboarding-location',
+    search_locations: 'onboarding-search-locations',
+    work_authorization: 'onboarding-work-authorization',
+    sponsorship: 'onboarding-sponsorship',
+    citizenship: 'onboarding-citizenship',
+    nationality: 'onboarding-nationality',
+    gender: 'onboarding-gender',
+    disability: 'onboarding-disability',
+    ethnicity: 'onboarding-ethnicity',
+    veteran_status: 'onboarding-veteran-status',
+});
+
+function setupOnboarding() {
+    const form = $('onboarding-form');
+    if (!form) return;
+    form.addEventListener('input', () => {
+        state.onboardingDirty = true;
+    });
+    form.addEventListener('submit', event => {
+        event.preventDefault();
+        saveOnboardingProfile();
+    });
+}
+
+function renderProfileReadiness(profileReadiness = null) {
+    const container = $('profile-readiness');
+    if (!container) return;
+    const automation = state.runtimeCapabilities?.automation;
+    const stages = automation?.stages || profileReadiness || {};
+    const modes = state.runtimeCapabilities?.mode || {};
+    const rows = [
+        {
+            key: 'discovery',
+            label: 'Discovery',
+            enabled: modes.discovery_enabled !== false,
+        },
+        {
+            key: 'preparation',
+            label: 'Auto-prepare',
+            enabled: modes.auto_prepare_enabled === true,
+        },
+        {
+            key: 'submission',
+            label: 'Qualified autopilot',
+            enabled: modes.qualified_autopilot_enabled === true,
+        },
+    ];
+    container.innerHTML = rows.map(row => {
+        const stage = stages[row.key] || {};
+        const status = !row.enabled ? 'off' : stage.ready === true ? 'ready' : 'blocked';
+        const reasons = (stage.reason_codes || []).map(humanizeReasonCode).join(' · ');
+        return `<span class="profile-stage ${status === 'ready' ? '' : status === 'off' ? 'is-disabled' : 'is-blocked'}"
+                      title="${esc(reasons || `${row.label} is ${status}`)}">
+                    ${esc(row.label)}: ${esc(status)}
+                </span>`;
+    }).join('');
+}
+
+function populateOnboardingForm(data) {
+    if (!data || state.onboardingDirty) return;
+    Object.entries(ONBOARDING_FIELDS).forEach(([field, id]) => {
+        const input = $(id);
+        if (input) {
+            input.value = field === 'search_locations'
+                ? (data[field] || []).join('\n')
+                : data[field] || '';
+        }
+    });
+    state.onboardingProfile = data;
+    renderProfileReadiness(data.readiness);
+    const identityReasons = [
+        ...(data.readiness?.preparation?.reason_codes || []),
+        ...(data.readiness?.submission?.reason_codes || []),
+    ];
+    const needsOnboarding = identityReasons.some(reason => (
+        reason.startsWith('PROFILE_NAME_')
+        || reason.startsWith('PROFILE_EMAIL_')
+        || reason.startsWith('PROFILE_PHONE_')
+        || reason.startsWith('PROFILE_CURRENT_LOCATION_')
+        || reason.startsWith('PROFILE_SEARCH_LOCATIONS_')
+        || reason.includes('AUTHORIZATION_UNCONFIRMED')
+        || reason.includes('SPONSORSHIP_UNCONFIRMED')
+        || reason.includes('CITIZENSHIP_OR_NATIONALITY_UNCONFIRMED')
+    ));
+    if (needsOnboarding && $('onboarding-panel')) $('onboarding-panel').open = true;
+}
+
+async function fetchOnboardingProfile() {
+    if (state.onboardingDirty) return;
+    const data = await apiCall('/api/profile/onboarding');
+    if (data) populateOnboardingForm(data);
+}
+
+async function saveOnboardingProfile() {
+    const form = $('onboarding-form');
+    const button = $('btn-save-onboarding');
+    if (!form || !button || !form.reportValidity()) return;
+    const payload = Object.fromEntries(Object.entries(ONBOARDING_FIELDS).map(([field, id]) => {
+        const value = ($(id)?.value || '').trim();
+        return [
+            field,
+            field === 'search_locations'
+                ? value.split(/\r?\n/).map(item => item.trim()).filter(Boolean)
+                : value,
+        ];
+    }));
+    if (!payload.citizenship && !payload.nationality) {
+        showToast('Confirm citizenship or nationality before saving', 'warning');
+        return;
+    }
+
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i data-lucide="loader"></i> Saving…';
+    lucide.createIcons();
+    const result = await apiCall('/api/profile/onboarding', 'PUT', payload);
+    if (result) {
+        state.onboardingDirty = false;
+        populateOnboardingForm(result);
+        showToast(`Confirmed profile saved as version ${result.profile_version}`, 'info');
+        await fetchRuntimeStatus();
+        await fetchProfileSummary();
+    }
+    button.disabled = false;
+    button.innerHTML = original;
+    lucide.createIcons();
+}
+
 function setupResumeUpload() {
     const dropzone = $('resume-dropzone');
     const input = $('resumeInput');
@@ -1184,8 +1364,9 @@ async function uploadResume() {
         }
         const data = await res.json();
         renderProfileSummary(data);
+        const queued = Number(data.rescore_queued || 0);
         showToast(
-            `CV processed — profile v${data.version} rebuilt, ${data.rescored} job${data.rescored !== 1 ? 's' : ''} rescored`,
+            `CV processed — profile v${data.version} rebuilt, ${queued} pending job${queued !== 1 ? 's' : ''} queued for rescoring`,
             'info'
         );
     } catch (err) {
@@ -1213,6 +1394,7 @@ function renderProfileSummary(data) {
 async function fetchProfileSummary() {
     const data = await apiCall('/api/profile');
     if (!data) return;
+    renderProfileReadiness(data.readiness);
     const el = $('profile-current-summary');
     if (el) {
         el.textContent = data.name

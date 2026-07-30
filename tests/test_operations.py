@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from pathlib import Path
@@ -47,6 +48,32 @@ def test_production_configuration_accepts_safe_dry_run(
         llm_provider="ollama",
         tasks_always_eager=False,
     )
+    settings.validate_runtime()
+
+
+def test_production_auto_prepare_alias_does_not_require_live_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "llm.qualification_registry.qualified_model_report_is_current",
+        lambda **_kwargs: True,
+    )
+    settings = Settings(
+        app_env="production",
+        secret_key="s" * 32,
+        whatsapp_app_secret="verified-signature-secret-" + "w" * 32,
+        cors_origins="https://jobs.example.test",
+        draft_only=True,
+        auto_apply=True,
+        dry_run=True,
+        portal_final_submit_enabled=False,
+        live_automation_acknowledged=False,
+        application_data_dir=str(tmp_path),
+        llm_provider="ollama",
+        tasks_always_eager=False,
+    )
+
     settings.validate_runtime()
 
 
@@ -327,6 +354,39 @@ def test_readiness_degrades_for_missing_dependency(tmp_path: Path) -> None:
     assert report["status"] == "degraded"
     assert report["checks"]["database"]["ok"]
     assert not report["checks"]["worker"]["ok"]
+
+
+def test_worker_readiness_accepts_read_only_shared_storage(tmp_path: Path) -> None:
+    settings = Settings(application_data_dir=str(tmp_path))
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.execute.return_value.scalar.return_value = "004_submission_attempts"
+    engine = MagicMock()
+    engine.connect.return_value = connection
+    client = MagicMock()
+    client.ping.return_value = True
+    client.get.return_value = None
+
+    def storage_access(_path, mode):
+        return mode == os.R_OK
+
+    with (
+        patch("core.operations.get_engine", return_value=engine),
+        patch("core.operations.redis_client", return_value=client),
+        patch("core.operations.os.access", side_effect=storage_access),
+        patch(
+            "alembic.script.ScriptDirectory.get_current_head",
+            return_value="004_submission_attempts",
+        ),
+    ):
+        api_report = readiness_report(settings)
+        worker_report = readiness_report(
+            settings,
+            require_storage_write=False,
+        )
+
+    assert api_report["checks"]["shared_storage"]["ok"] is False
+    assert worker_report["checks"]["shared_storage"]["ok"] is True
 
 
 def test_metrics_are_prometheus_and_contain_no_personal_data(monkeypatch) -> None:

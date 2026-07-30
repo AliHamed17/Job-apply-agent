@@ -255,6 +255,13 @@ def test_compose_uses_only_loopback_ports_and_external_private_mounts() -> None:
         mounts = "\n".join(service.get("volumes", []))
         assert "${JOB_AGENT_PROFILE_DATA_DIR:-./profile-data}" in mounts
         assert "${JOB_AGENT_BROWSER_STATE_DIR:-./.browser-state}" in mounts
+    for service_name in ("celery-worker", "celery-beat"):
+        profile_mount = next(
+            mount
+            for mount in compose["services"][service_name]["volumes"]
+            if "${JOB_AGENT_PROFILE_DATA_DIR:-./profile-data}" in mount
+        )
+        assert profile_mount.endswith(":ro")
     web_environment = compose["services"]["web-api"]["environment"]
     worker_environment = compose["services"]["celery-worker"]["environment"]
     for environment in (web_environment, worker_environment):

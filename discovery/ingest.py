@@ -20,8 +20,9 @@ def ingest_discovered_jobs(
     source: str,
     easy_apply: bool,
     tasks_always_eager: bool,
+    preparation_ready: bool,
 ) -> int:
-    """Insert deduplicated jobs and enqueue the existing scoring pipeline."""
+    """Insert jobs and score them without crossing a blocked preparation gate."""
     from worker.tasks import score_job_task
 
     inserted = 0
@@ -61,9 +62,9 @@ def ingest_discovered_jobs(
             db.commit()
 
             if tasks_always_eager:
-                score_job_task.apply(args=[db_job.id])
+                score_job_task.apply(args=[db_job.id, preparation_ready])
             else:
-                score_job_task.delay(db_job.id)
+                score_job_task.delay(db_job.id, preparation_ready)
             inserted += 1
         except Exception:
             db.rollback()

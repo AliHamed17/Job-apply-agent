@@ -135,7 +135,14 @@ def parse_search_results(html: str) -> list[JobData]:
     return jobs
 
 
-async def run_discovery(db, profile, settings, governor) -> int:
+async def run_discovery(
+    db,
+    profile,
+    settings,
+    governor,
+    *,
+    preparation_ready: bool,
+) -> int:
     """Discover new LinkedIn jobs via search results — browser-driven, READ-ONLY.
 
     Builds search URLs from ``profile`` (via
@@ -200,6 +207,7 @@ async def run_discovery(db, profile, settings, governor) -> int:
                     logger.warning("discovery_challenge_detected", url=url)
                     governor.trip_cooldown()
                     from worker.alerts import notify_challenge  # noqa: PLC0415
+
                     await notify_challenge(settings)
                     break
 
@@ -209,6 +217,7 @@ async def run_discovery(db, profile, settings, governor) -> int:
                     source="linkedin_search",
                     easy_apply=True,
                     tasks_always_eager=settings.tasks_always_eager,
+                    preparation_ready=preparation_ready,
                 )
 
                 await asyncio.sleep(governor.next_gap_seconds())

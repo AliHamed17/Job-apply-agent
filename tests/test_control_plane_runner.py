@@ -93,6 +93,10 @@ def _capabilities() -> dict[str, object]:
             "protocol_version": identity.protocol_version,
             "boot_id": identity.boot_id,
         },
+        "automation": {
+            "submission_ready": True,
+            "stages": {"submission": {"ready": True, "reason_codes": []}},
+        },
         "submission": {"allowed": True, "reasons": []},
         "llm": {
             "provider": "ollama",
@@ -279,7 +283,7 @@ def test_slow_readiness_rechecks_remote_command_expiry_before_admission(
         expires_at=datetime.now(UTC) + timedelta(milliseconds=200),
     )
 
-    def slow_capabilities(_settings):
+    def slow_capabilities(_settings, **_kwargs):
         time.sleep(0.4)
         return capabilities
 
@@ -318,7 +322,7 @@ def test_runner_admit_rechecks_expiry_after_slow_readiness(
     def clock():
         return current_time[0]
 
-    def slow_capabilities(_settings):
+    def slow_capabilities(_settings, **_kwargs):
         current_time[0] = deadline
         return _capabilities()
 
@@ -906,7 +910,7 @@ async def test_heartbeat_uses_readiness_report_status(
     runner._signed_envelope = signed_envelope
     monkeypatch.setattr(
         "worker.control_plane_runner.readiness_report",
-        lambda _settings: {
+        lambda _settings, **_kwargs: {
             "status": readiness_status,
             "checks": {"database": {"ok": readiness_status == "ready"}},
         },

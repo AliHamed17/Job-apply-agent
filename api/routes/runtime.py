@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from core.automation_readiness import current_automation_readiness
 from core.config import get_settings
 from core.operations import readiness_report
 from core.runtime_identity import build_runtime_capabilities
@@ -31,6 +32,10 @@ class ModeCapabilities(BaseModel):
     dry_run: bool
     draft_only: bool
     live_submit_enabled: bool
+    discovery_enabled: bool
+    auto_prepare_enabled: bool
+    qualified_autopilot_enabled: bool
+    legacy_auto_apply_alias: bool
 
 
 class ReadinessCapabilities(BaseModel):
@@ -68,10 +73,26 @@ class LLMCapabilities(BaseModel):
     reason_code: str | None
 
 
+class AutomationStageCapabilities(BaseModel):
+    ready: bool
+    reason_codes: list[str]
+
+
+class AutomationReadinessCapabilities(BaseModel):
+    discovery_ready: bool
+    preparation_ready: bool
+    submission_ready: bool
+    stages: dict[
+        Literal["discovery", "preparation", "submission"],
+        AutomationStageCapabilities,
+    ]
+
+
 class RuntimeCapabilitiesResponse(BaseModel):
     release: ReleaseCapabilities
     mode: ModeCapabilities
     readiness: ReadinessCapabilities
+    automation: AutomationReadinessCapabilities
     submission: SubmissionCapabilities
     worker: WorkerCapabilities
     llm: LLMCapabilities | None = None
@@ -87,7 +108,16 @@ async def get_runtime_capabilities() -> RuntimeCapabilitiesResponse:
 
     settings = get_settings()
     report = await run_in_threadpool(readiness_report, settings)
-    capabilities = build_runtime_capabilities(settings, report)
+    automation = await run_in_threadpool(
+        current_automation_readiness,
+        settings=settings,
+        dependency_report=report,
+    )
+    capabilities = build_runtime_capabilities(
+        settings,
+        report,
+        automation_readiness=automation,
+    )
     checks = report.get("checks")
     llm = checks.get("llm") if isinstance(checks, Mapping) else None
     if isinstance(llm, Mapping):

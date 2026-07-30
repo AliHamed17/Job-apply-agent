@@ -56,6 +56,9 @@ def test_command_center_endpoint(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     assert data["candidate_name"] == "Test Candidate"
+    assert data["discovery_active"] is get_settings().discovery_enabled
+    assert data["auto_prepare_active"] is get_settings().auto_apply
+    assert data["qualified_autopilot_active"] is False
     assert data["auto_apply_active"] is get_settings().auto_apply
     assert "total_jobs_scanned" in data
 

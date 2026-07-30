@@ -151,6 +151,12 @@ Open `http://127.0.0.1:8000/`. The effective-mode banner and readiness checks
 must agree before preparation. A green liveness check does not mean submission
 is available.
 
+Complete the local **Candidate Profile → Complete private onboarding** form
+before preparation or submission. Placeholder identity does not block
+discovery, but confirmed identity and legal facts remain mandatory for later
+stages. `AUTO_APPLY` is a deprecated auto-preparation alias and never enables
+qualified autopilot.
+
 For asynchronous preparation, start a worker and Beat only after Redis and the
 database are ready:
 

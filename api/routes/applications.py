@@ -41,6 +41,7 @@ from core.application_state import (
     prepared_applications_query,
     reviewable_applications_query,
 )
+from core.automation_readiness import current_automation_readiness
 from core.config import get_settings
 from core.control_plane_review_permits import (
     ControlPlaneReviewGrantError,
@@ -1696,7 +1697,16 @@ async def allow_remote_send(
 
     _require_live_operator_auth(request)
     settings = get_settings()
-    capabilities = build_runtime_capabilities(settings, readiness_report(settings))
+    report = readiness_report(settings)
+    capabilities = build_runtime_capabilities(
+        settings,
+        report,
+        automation_readiness=current_automation_readiness(
+            settings=settings,
+            dependency_report=report,
+            db=db,
+        ),
+    )
     submission = capabilities.get("submission")
     if not isinstance(submission, Mapping) or submission.get("allowed") is not True:
         raise HTTPException(

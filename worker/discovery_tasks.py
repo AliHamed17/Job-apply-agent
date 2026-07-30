@@ -14,6 +14,22 @@ from core.utils import run_async
 logger = structlog.get_logger(__name__)
 
 
+def _load_discovery_profile(settings, db):
+    """Bind one discovery run to the authoritative immutable profile."""
+
+    from profile.loader import load_profile_snapshot
+    from profile.versioned_snapshot import (
+        latest_profile_version,
+        load_versioned_profile_snapshot,
+    )
+
+    profile_version = latest_profile_version(db)
+    if profile_version is None:
+        return load_profile_snapshot(settings.profile_path), None
+    snapshot = load_versioned_profile_snapshot(db, version=profile_version)
+    return snapshot.profile, snapshot.version
+
+
 @shared_task(name="worker.discovery_tasks.discover_jobs_task")
 def discover_jobs_task() -> int:
     gov = get_governor()
@@ -22,19 +38,22 @@ def discover_jobs_task() -> int:
         logger.info("discovery_skipped", reason=reason)
         return 0
 
-    from profile.loader import get_profile  # noqa: PLC0415
-    from profile.readiness import profile_readiness_issues  # noqa: PLC0415
+    from profile.readiness import (  # noqa: PLC0415
+        profile_discovery_readiness_issues,
+    )
 
+    from core.automation_readiness import build_automation_readiness  # noqa: PLC0415
     from core.operational_metrics import record_discovery_result  # noqa: PLC0415
+    from core.operations import readiness_report  # noqa: PLC0415
     from db.models import DiscoveryRun  # noqa: PLC0415
     from db.session import get_session_factory  # noqa: PLC0415
     from discovery.ingest import ingest_discovered_jobs  # noqa: PLC0415
     from discovery.linkedin_search import run_discovery  # noqa: PLC0415
     from discovery.public_sources import fetch_remotive_jobs  # noqa: PLC0415
+    from worker.rescore import requeue_scored_jobs_for_preparation  # noqa: PLC0415
 
     settings = get_settings()
     db = get_session_factory()()
-    profile = get_profile()
     inserted = 0
 
     def start_run(source: str) -> DiscoveryRun:
@@ -55,7 +74,42 @@ def discover_jobs_task() -> int:
         db.commit()
 
     try:
-        readiness_issues = profile_readiness_issues(profile)
+        profile, profile_version = _load_discovery_profile(settings, db)
+        try:
+            dependency_report = readiness_report(
+                settings,
+                require_storage_write=False,
+            )
+            automation = build_automation_readiness(
+                settings=settings,
+                dependency_report=dependency_report,
+                profile=profile,
+                profile_version=profile_version,
+            )
+            preparation_ready = settings.auto_apply and automation["preparation_ready"] is True
+            preparation_reasons = automation["stages"]["preparation"]["reason_codes"]
+            if not settings.auto_apply:
+                preparation_reasons = ["AUTO_PREPARE_DISABLED"]
+        except Exception:
+            preparation_ready = False
+            preparation_reasons = ["PREPARATION_READINESS_UNAVAILABLE"]
+        if not preparation_ready:
+            logger.info(
+                "automatic_preparation_blocked",
+                reason_codes=preparation_reasons,
+            )
+        else:
+            requeue_scored_jobs_for_preparation(
+                db,
+                tasks_always_eager=settings.tasks_always_eager,
+                batch_size=settings.preparation_requeue_batch_size,
+            )
+
+        if not settings.discovery_enabled:
+            logger.info("discovery_skipped", reason="DISCOVERY_DISABLED")
+            return 0
+
+        readiness_issues = profile_discovery_readiness_issues(profile)
         if readiness_issues:
             logger.warning(
                 "discovery_profile_not_ready",
@@ -66,7 +120,7 @@ def discover_jobs_task() -> int:
                 finish_run(
                     run,
                     "blocked",
-                    reason_code="PROFILE_INCOMPLETE",
+                    reason_code=readiness_issues[0],
                 )
             return 0
 
@@ -92,6 +146,7 @@ def discover_jobs_task() -> int:
                         source="remotive",
                         easy_apply=False,
                         tasks_always_eager=settings.tasks_always_eager,
+                        preparation_ready=preparation_ready,
                     )
                     inserted += public_count
                     finish_run(public_run, "success", public_count)
@@ -110,7 +165,15 @@ def discover_jobs_task() -> int:
             return inserted
 
         try:
-            linkedin_count = run_async(run_discovery(db, profile, settings, gov))
+            linkedin_count = run_async(
+                run_discovery(
+                    db,
+                    profile,
+                    settings,
+                    gov,
+                    preparation_ready=preparation_ready,
+                )
+            )
             inserted += linkedin_count
             in_cooldown = bool(gov.status().get("in_cooldown"))
             finish_run(

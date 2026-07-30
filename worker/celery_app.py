@@ -77,6 +77,7 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         task_routes={
             "worker.tasks.process_message_task": {"queue": "ingestion"},
             "worker.tasks.process_url_task": {"queue": "processing"},
+            "worker.tasks.rescore_pending_jobs_task": {"queue": "processing"},
             "worker.tasks.score_job_task": {"queue": "processing"},
             "worker.tasks.generate_application_task": {"queue": "llm"},
             "worker.tasks.submit_application_task": {"queue": "submission"},

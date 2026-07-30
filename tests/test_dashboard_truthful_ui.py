@@ -62,6 +62,27 @@ def test_live_send_is_fail_closed_and_runtime_banner_is_persistent() -> None:
     assert "$('btn-send-app').style.display = 'none'" in APP_JS
 
 
+def test_dashboard_separates_discovery_preparation_and_qualified_autopilot() -> None:
+    for label in ("Discovery", "Auto-prepare", "Qualified autopilot"):
+        assert label in APP_JS
+        assert label in INDEX_HTML
+    assert "mode.discovery_enabled" in APP_JS
+    assert "mode.auto_prepare_enabled" in APP_JS
+    assert "mode.qualified_autopilot_enabled" in APP_JS
+    assert "automation.submission_ready === true" in APP_JS
+    assert 'id="onboarding-form"' in INDEX_HTML
+    assert 'id="onboarding-search-locations"' in INDEX_HTML
+    assert "search_locations: 'onboarding-search-locations'" in APP_JS
+    assert "Search locations (one per line)" in INDEX_HTML
+    assert "(data[field] || []).join('\\n')" in APP_JS
+    assert "value.split(/\\r?\\n/)" in APP_JS
+    assert "value.split(',')" not in APP_JS
+    assert "queued for rescoring" in APP_JS
+    assert "${data.rescored}" not in APP_JS
+    assert "/api/profile/onboarding" in APP_JS
+    assert "Saved only on the local runner" in INDEX_HTML
+
+
 def test_remote_send_permission_is_explicit_bound_and_never_claims_submission() -> None:
     assert 'id="btn-allow-remote-send"' in INDEX_HTML
     assert "async function handleAllowRemoteSend(appId)" in APP_JS

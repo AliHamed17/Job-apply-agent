@@ -38,6 +38,32 @@ OLLAMA_NO_CLOUD=true
 `AUTO_APPLY` means preparation eligibility only. It never approves or sends an
 employment application.
 
+## Stage readiness and private onboarding
+
+`GET /api/runtime/capabilities` reports three independent, privacy-safe gates:
+
+- `discovery_ready` requires configured target roles, search locations, and at
+  least one workplace preference. Placeholder name or email values do not
+  block this stage.
+- `preparation_ready` additionally requires confirmed identity, an immutable
+  profile version, a valid CV-routing file, every configured PDF, shared
+  storage, and the qualified local Ollama runtime.
+- `submission_ready` additionally requires confirmed phone, work
+  authorization, sponsorship, citizenship or nationality, PostgreSQL, Redis,
+  current migrations, worker and Beat heartbeats, browser/profile storage,
+  strong operator authentication, live-mode acknowledgement, and at least one
+  exact live-canary-qualified final executor.
+
+Only stable reason codes are included in runtime readiness; candidate values
+are excluded. Use the **Complete private onboarding** panel in the local
+dashboard to save operator-confirmed identity and legal facts as a new
+immutable profile version. The onboarding API is authenticated and is not
+part of the Vercel control-plane bundle.
+
+The dashboard presents `Discovery`, `Auto-prepare`, and `Qualified autopilot`
+separately. Legacy `AUTO_APPLY=true` maps only to `Auto-prepare`; it cannot
+create unattended final-submit authority.
+
 ## Private Windows API health and monitoring
 
 - `/health/live` is unauthenticated and proves only that the API process

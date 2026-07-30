@@ -6,6 +6,8 @@ import os
 import shutil
 import tempfile
 import threading
+import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from profile.loader import set_profile
@@ -22,6 +24,21 @@ logger = structlog.get_logger(__name__)
 _PROFILE_WRITE_LOCK = threading.RLock()
 _PROFILE_VERSION_LOCK_ID = 0x4A4F4250524F4649
 _VERSION_WRITE_RETRIES = 3
+_ATOMIC_REPLACE_RETRIES = 5
+_ATOMIC_REPLACE_DELAY_SECONDS = 0.05
+
+
+def _replace_with_retry(source: str, destination: Path) -> None:
+    """Tolerate brief Windows scanner contention without hiding real failures."""
+
+    for attempt in range(_ATOMIC_REPLACE_RETRIES):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if attempt + 1 >= _ATOMIC_REPLACE_RETRIES:
+                raise
+            time.sleep(_ATOMIC_REPLACE_DELAY_SECONDS * (attempt + 1))
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -32,7 +49,7 @@ def _atomic_write(path: Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, path)
+        _replace_with_retry(temp_name, path)
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
@@ -47,6 +64,16 @@ def _acquire_database_write_lock(db) -> None:
             sql_text("SELECT pg_advisory_xact_lock(:lock_id)"),
             {"lock_id": _PROFILE_VERSION_LOCK_ID},
         )
+
+
+@contextmanager
+def profile_write_transaction(db=None):
+    """Serialize a complete profile read-modify-write across threads/processes."""
+
+    with _PROFILE_WRITE_LOCK:
+        if db is not None:
+            _acquire_database_write_lock(db)
+        yield
 
 
 def _persist_version(db, profile_yaml: str, yaml_path: Path) -> int:

@@ -33,6 +33,7 @@ _BUILD_ENV_KEYS = (
 _SAFE_RELEASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _SOURCE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_REASON_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _READINESS_COMPONENTS = (
     "database",
     "migration",
@@ -88,6 +89,7 @@ class SubmissionBlockReason(StrEnum):
     SUBMIT_COMMAND_UNAVAILABLE = "SUBMIT_COMMAND_UNAVAILABLE"
     DATABASE_SERIALIZATION_REQUIRED = "DATABASE_SERIALIZATION_REQUIRED"
     OPERATOR_AUTH_REQUIRED = "OPERATOR_AUTH_REQUIRED"
+    AUTOMATION_SUBMISSION_NOT_READY = "AUTOMATION_SUBMISSION_NOT_READY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,7 +331,6 @@ def _effective_mode(settings: Settings) -> tuple[str, bool]:
         and not settings.draft_only
         and settings.portal_final_submit_enabled
         and settings.live_automation_acknowledged
-        and not settings.auto_apply
         and settings.db_is_postgres
         and settings.operator_auth_configured
     )
@@ -339,8 +340,6 @@ def _effective_mode(settings: Settings) -> tuple[str, bool]:
         return "draft_only", live_submit_enabled
     if not settings.portal_final_submit_enabled:
         return "prepare_only", live_submit_enabled
-    if settings.auto_apply:
-        return "blocked_unattended", live_submit_enabled
     if not settings.live_automation_acknowledged:
         return "blocked_unacknowledged", live_submit_enabled
     if not settings.operator_auth_configured:
@@ -354,6 +353,7 @@ def build_runtime_capabilities(
     identity: RuntimeIdentity | None = None,
     *,
     current_source_digest: str | None = None,
+    automation_readiness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the redacted capability response and fail-closed send decision."""
 
@@ -436,8 +436,6 @@ def build_runtime_capabilities(
         reasons.append(SubmissionBlockReason.FINAL_SUBMIT_DISABLED)
     if not settings.live_automation_acknowledged:
         reasons.append(SubmissionBlockReason.LIVE_AUTOMATION_NOT_ACKNOWLEDGED)
-    if settings.auto_apply:
-        reasons.append(SubmissionBlockReason.UNATTENDED_AUTOMATION_ENABLED)
     if not settings.db_is_postgres:
         reasons.append(SubmissionBlockReason.DATABASE_SERIALIZATION_REQUIRED)
     if not settings.operator_auth_configured:
@@ -462,7 +460,30 @@ def build_runtime_capabilities(
     if not SUBMIT_COMMAND_PROTOCOL_AVAILABLE:
         reasons.append(SubmissionBlockReason.SUBMIT_COMMAND_UNAVAILABLE)
 
-    return {
+    automation_submission_ready = False
+    automation_reasons: list[str] = [SubmissionBlockReason.AUTOMATION_SUBMISSION_NOT_READY.value]
+    if automation_readiness is not None:
+        automation_submission_ready = automation_readiness.get("submission_ready") is True
+        automation_reasons = []
+        if not automation_submission_ready:
+            stages = automation_readiness.get("stages")
+            submission_stage = stages.get("submission") if isinstance(stages, Mapping) else None
+            raw_reasons = (
+                submission_stage.get("reason_codes")
+                if isinstance(submission_stage, Mapping)
+                else ()
+            )
+            if isinstance(raw_reasons, (list, tuple)):
+                automation_reasons = [
+                    reason
+                    for reason in raw_reasons
+                    if isinstance(reason, str) and _REASON_CODE_RE.fullmatch(reason)
+                ]
+            if not automation_reasons:
+                automation_reasons = [SubmissionBlockReason.AUTOMATION_SUBMISSION_NOT_READY.value]
+
+    reason_values = list(dict.fromkeys([reason.value for reason in reasons] + automation_reasons))
+    capabilities = {
         "release": {
             "build_sha": release.build_sha,
             "ui_asset_digest": release.ui_asset_digest,
@@ -477,6 +498,10 @@ def build_runtime_capabilities(
             "dry_run": settings.dry_run,
             "draft_only": settings.draft_only,
             "live_submit_enabled": live_submit_enabled,
+            "discovery_enabled": settings.discovery_enabled,
+            "auto_prepare_enabled": settings.auto_apply,
+            "qualified_autopilot_enabled": False,
+            "legacy_auto_apply_alias": settings.auto_apply,
         },
         "readiness": {
             "status": readiness_status,
@@ -489,8 +514,9 @@ def build_runtime_capabilities(
                 and worker_compatible
                 and SUBMIT_COMMAND_PROTOCOL_AVAILABLE
                 and settings.db_is_postgres
+                and automation_submission_ready
             ),
-            "reasons": [reason.value for reason in reasons],
+            "reasons": reason_values,
         },
         "worker": {
             "build_sha": worker_build,
@@ -501,3 +527,6 @@ def build_runtime_capabilities(
         },
         "llm": llm_capabilities,
     }
+    if automation_readiness is not None:
+        capabilities["automation"] = dict(automation_readiness)
+    return capabilities

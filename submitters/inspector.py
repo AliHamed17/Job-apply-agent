@@ -15,6 +15,10 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class SubmitterHealthReport:
     playwright_installed: bool
+    discovery_active: bool
+    auto_prepare_active: bool
+    qualified_autopilot_active: bool
+    # Deprecated compatibility field. It may never be derived from AUTO_APPLY.
     live_auto_apply_active: bool
     auto_apply_threshold: float
     cv_alignment_enabled: bool
@@ -41,7 +45,10 @@ def inspect_submitter_health() -> SubmitterHealthReport:
 
     return SubmitterHealthReport(
         playwright_installed=playwright_ok,
-        live_auto_apply_active=settings.auto_apply,
+        discovery_active=settings.discovery_enabled,
+        auto_prepare_active=settings.auto_apply,
+        qualified_autopilot_active=False,
+        live_auto_apply_active=False,
         auto_apply_threshold=settings.auto_apply_threshold,
         cv_alignment_enabled=settings.llm_cv_alignment,
         registered_platforms=platforms,

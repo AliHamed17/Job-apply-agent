@@ -79,6 +79,18 @@ def _ready_report(
     return {"status": "ready", "checks": checks}
 
 
+def _automation_ready() -> dict[str, object]:
+    return {
+        "discovery_ready": True,
+        "preparation_ready": True,
+        "submission_ready": True,
+        "stages": {
+            stage: {"ready": True, "reason_codes": []}
+            for stage in ("discovery", "preparation", "submission")
+        },
+    }
+
+
 def _live_settings() -> Settings:
     return Settings(
         _env_file=None,
@@ -169,6 +181,7 @@ def test_capabilities_allow_ready_command_protocol_runtime() -> None:
         _live_settings(),
         _ready_report(),
         _identity(),
+        automation_readiness=_automation_ready(),
     )
 
     assert result["mode"] == {
@@ -176,6 +189,10 @@ def test_capabilities_allow_ready_command_protocol_runtime() -> None:
         "dry_run": False,
         "draft_only": False,
         "live_submit_enabled": True,
+        "discovery_enabled": True,
+        "auto_prepare_enabled": False,
+        "qualified_autopilot_enabled": False,
+        "legacy_auto_apply_alias": False,
     }
     assert result["submission"] == {"allowed": True, "reasons": []}
     assert result["worker"]["compatible"] is True
@@ -202,6 +219,7 @@ def test_local_model_outage_denies_submission() -> None:
         _live_settings(),
         readiness,
         _identity(),
+        automation_readiness=_automation_ready(),
     )
 
     assert result["submission"]["allowed"] is False
@@ -228,7 +246,12 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         "detail": "person@example.com",
     }
 
-    result = build_runtime_capabilities(settings, readiness, _identity())
+    result = build_runtime_capabilities(
+        settings,
+        readiness,
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
 
     assert result["submission"]["allowed"] is False
     assert result["submission"]["reasons"] == [
@@ -236,7 +259,6 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         "DRAFT_ONLY_ENABLED",
         "FINAL_SUBMIT_DISABLED",
         "LIVE_AUTOMATION_NOT_ACKNOWLEDGED",
-        "UNATTENDED_AUTOMATION_ENABLED",
         "DATABASE_SERIALIZATION_REQUIRED",
         "OPERATOR_AUTH_REQUIRED",
         "RUNTIME_NOT_READY",
@@ -256,12 +278,67 @@ def test_development_default_secret_never_allows_live_submission() -> None:
         }
     )
 
-    result = build_runtime_capabilities(settings, _ready_report(), _identity())
+    result = build_runtime_capabilities(
+        settings,
+        _ready_report(),
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
 
     assert result["mode"]["name"] == "blocked_auth"
     assert result["mode"]["live_submit_enabled"] is False
     assert result["submission"]["allowed"] is False
     assert result["submission"]["reasons"] == ["OPERATOR_AUTH_REQUIRED"]
+
+
+def test_legacy_auto_apply_is_only_an_auto_prepare_alias() -> None:
+    settings = _live_settings().model_copy(update={"auto_apply": True})
+
+    result = build_runtime_capabilities(
+        settings,
+        _ready_report(),
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
+
+    assert result["mode"]["auto_prepare_enabled"] is True
+    assert result["mode"]["legacy_auto_apply_alias"] is True
+    assert result["mode"]["qualified_autopilot_enabled"] is False
+    assert result["mode"]["live_submit_enabled"] is True
+    assert "UNATTENDED_AUTOMATION_ENABLED" not in result["submission"]["reasons"]
+
+
+def test_submission_admission_includes_automation_readiness() -> None:
+    automation = _automation_ready()
+    automation["submission_ready"] = False
+    automation["stages"]["submission"] = {
+        "ready": False,
+        "reason_codes": ["PROFILE_NAME_PLACEHOLDER"],
+    }
+
+    result = build_runtime_capabilities(
+        _live_settings(),
+        _ready_report(),
+        _identity(),
+        automation_readiness=automation,
+    )
+
+    assert result["automation"] == automation
+    assert result["submission"]["allowed"] is False
+    assert result["submission"]["reasons"] == ["PROFILE_NAME_PLACEHOLDER"]
+
+
+def test_submission_admission_fails_closed_without_automation_readiness() -> None:
+    result = build_runtime_capabilities(
+        _live_settings(),
+        _ready_report(),
+        _identity(),
+    )
+
+    assert result["submission"] == {
+        "allowed": False,
+        "reasons": ["AUTOMATION_SUBMISSION_NOT_READY"],
+    }
 
 
 def test_same_git_build_with_different_backend_source_is_incompatible() -> None:
@@ -273,7 +350,12 @@ def test_same_git_build_with_different_backend_source_is_incompatible() -> None:
         release_id=worker_identity.release_id,
     )
 
-    result = build_runtime_capabilities(_live_settings(), readiness, api_identity)
+    result = build_runtime_capabilities(
+        _live_settings(),
+        readiness,
+        api_identity,
+        automation_readiness=_automation_ready(),
+    )
 
     assert result["submission"]["allowed"] is False
     assert result["submission"]["reasons"] == ["BUILD_MISMATCH"]
@@ -301,6 +383,7 @@ def test_source_mutation_after_identity_creation_denies_submission(tmp_path: Pat
         readiness,
         identity,
         current_source_digest=compute_source_digest(tmp_path),
+        automation_readiness=_automation_ready(),
     )
 
     assert result["submission"]["allowed"] is False
@@ -313,6 +396,7 @@ def test_unknown_build_identity_never_enables_submission() -> None:
         _live_settings(),
         _ready_report(worker_build="unknown"),
         unknown_identity,
+        automation_readiness=_automation_ready(),
     )
 
     assert result["submission"] == {
@@ -332,6 +416,7 @@ def test_runtime_capabilities_preserve_only_bounded_ollama_server_version() -> N
         _live_settings(),
         report,
         _identity(),
+        automation_readiness=_automation_ready(),
     )
     assert result["llm"]["ollama_server_version"] == "0.31.1"
 
@@ -340,6 +425,7 @@ def test_runtime_capabilities_preserve_only_bounded_ollama_server_version() -> N
         _live_settings(),
         report,
         _identity(),
+        automation_readiness=_automation_ready(),
     )
     assert result["llm"]["ollama_server_version"] is None
 
@@ -395,13 +481,23 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
     from api.main import app
     from api.routes import runtime as runtime_route
 
-    expected = build_runtime_capabilities(_live_settings(), _ready_report(), _identity())
+    expected = build_runtime_capabilities(
+        _live_settings(),
+        _ready_report(),
+        _identity(),
+        automation_readiness=_automation_ready(),
+    )
     monkeypatch.setattr(runtime_route, "get_settings", _live_settings)
     monkeypatch.setattr(runtime_route, "readiness_report", lambda _settings: _ready_report())
     monkeypatch.setattr(
         runtime_route,
         "build_runtime_capabilities",
-        lambda _settings, _report: expected,
+        lambda _settings, _report, **_kwargs: expected,
+    )
+    monkeypatch.setattr(
+        runtime_route,
+        "current_automation_readiness",
+        lambda **_kwargs: _automation_ready(),
     )
 
     response = TestClient(app).get(
@@ -419,6 +515,7 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
         "release",
         "mode",
         "readiness",
+        "automation",
         "submission",
         "worker",
         "llm",
@@ -572,11 +669,17 @@ async def test_api_lifespan_holds_and_releases_instance_lock(monkeypatch) -> Non
     acquire = MagicMock(return_value=instance_lock)
     monkeypatch.setattr(api_main, "acquire_dashboard_instance_lock", acquire)
     monkeypatch.setattr(api_main, "init_db", MagicMock())
+    recover = MagicMock(return_value=4)
+    wait = MagicMock(return_value=True)
+    monkeypatch.setattr(api_main, "recover_eager_pending_job_rescore", recover)
+    monkeypatch.setattr(api_main, "wait_for_eager_pending_job_rescores", wait)
 
     async with api_main.lifespan(api_main.app):
         instance_lock.release.assert_not_called()
 
     acquire.assert_called_once()
+    recover.assert_called_once_with(api_main.settings)
+    wait.assert_called_once_with()
     instance_lock.release.assert_called_once_with()
 
 
@@ -594,11 +697,14 @@ async def test_api_lifespan_releases_lock_when_initialization_fails(monkeypatch)
         "init_db",
         MagicMock(side_effect=RuntimeError("database unavailable")),
     )
+    wait = MagicMock(return_value=True)
+    monkeypatch.setattr(api_main, "wait_for_eager_pending_job_rescores", wait)
 
     with pytest.raises(RuntimeError, match="database unavailable"):
         async with api_main.lifespan(api_main.app):
             pytest.fail("lifespan must not yield after failed initialization")
 
+    wait.assert_called_once_with()
     instance_lock.release.assert_called_once_with()
 
 
