@@ -350,6 +350,36 @@ def test_eager_rescore_is_non_daemon_and_joined_at_shutdown():
         assert wait_for_eager_pending_job_rescores(timeout=5) is True
 
 
+def test_eager_rescore_retries_transient_failure_without_restart():
+    completed = threading.Event()
+    calls = 0
+
+    def fail_once_then_complete(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient database lock")
+        completed.set()
+        return 3
+
+    with (
+        patch(
+            "worker.rescore._drain_eager_pending_job_rescore",
+            side_effect=fail_once_then_complete,
+        ),
+        patch("worker.rescore.time.sleep") as sleep,
+    ):
+        assert _start_eager_pending_job_rescore(
+            expected_profile_version=92,
+            batch_size=1,
+        )
+        assert completed.wait(timeout=5)
+        assert wait_for_eager_pending_job_rescores(timeout=5) is True
+
+    assert calls == 2
+    sleep.assert_called_once_with(0.25)
+
+
 def test_eager_rescore_replays_latest_profile_revision_on_api_startup(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'rescore-recovery.db'}")
     Base.metadata.create_all(engine)

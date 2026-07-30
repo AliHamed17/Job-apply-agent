@@ -20,6 +20,8 @@ logger = structlog.get_logger(__name__)
 _RESCORE_STATUSES = (JobStatus.EXTRACTED, JobStatus.SCORED, JobStatus.DRAFT)
 _EAGER_RESCORE_LOCK = threading.Lock()
 _EAGER_RESCORE_THREADS: dict[int, threading.Thread] = {}
+_EAGER_RESCORE_MAX_ATTEMPTS = 5
+_EAGER_RESCORE_RETRY_BASE_SECONDS = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,16 +243,31 @@ def _start_eager_pending_job_rescore(
 
     def drain() -> None:
         try:
-            _drain_eager_pending_job_rescore(
-                expected_profile_version=expected_profile_version,
-                batch_size=batch_size,
-            )
-        except Exception as exc:
-            logger.error(
-                "eager_pending_job_rescore_failed",
-                reason_code=type(exc).__name__,
-                expected_profile_version=expected_profile_version,
-            )
+            for attempt in range(1, _EAGER_RESCORE_MAX_ATTEMPTS + 1):
+                try:
+                    _drain_eager_pending_job_rescore(
+                        expected_profile_version=expected_profile_version,
+                        batch_size=batch_size,
+                    )
+                    return
+                except Exception as exc:
+                    if attempt == _EAGER_RESCORE_MAX_ATTEMPTS:
+                        logger.error(
+                            "eager_pending_job_rescore_failed",
+                            reason_code=type(exc).__name__,
+                            expected_profile_version=expected_profile_version,
+                            attempts=attempt,
+                        )
+                        return
+                    delay = _EAGER_RESCORE_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+                    logger.warning(
+                        "eager_pending_job_rescore_retry",
+                        reason_code=type(exc).__name__,
+                        expected_profile_version=expected_profile_version,
+                        attempt=attempt,
+                        retry_in_seconds=delay,
+                    )
+                    time.sleep(delay)
         finally:
             with _EAGER_RESCORE_LOCK:
                 current = _EAGER_RESCORE_THREADS.get(expected_profile_version)
