@@ -108,25 +108,66 @@ def test_discovery_profile_prefers_immutable_version_over_edited_yaml(tmp_path):
     engine.dispose()
 
 
-def test_global_discovery_switch_stops_before_database_access(monkeypatch):
+def test_global_discovery_switch_still_drains_preparation_backlog(monkeypatch):
     monkeypatch.setenv("DISCOVERY_ENABLED", "false")
+    monkeypatch.setenv("AUTO_APPLY", "true")
+    monkeypatch.setenv("TASKS_ALWAYS_EAGER", "false")
+    monkeypatch.setenv("PREPARATION_REQUEUE_BATCH_SIZE", "7")
 
     import core.config as config_module
     import db.session as session_module
     from worker import discovery_tasks
 
+    class Database:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    database = Database()
+
     class AllowedGovernor:
         def can_act(self):
             return True, "ok"
 
-    def unexpected_session_factory():
-        raise AssertionError("disabled discovery must not open the database")
+    queued: list[dict[str, object]] = []
+
+    def requeue(_db, **kwargs):
+        queued.append(kwargs)
+        return 7
 
     config_module.get_settings.cache_clear()
     monkeypatch.setattr(discovery_tasks, "get_governor", lambda: AllowedGovernor())
-    monkeypatch.setattr(session_module, "get_session_factory", unexpected_session_factory)
+    monkeypatch.setattr(session_module, "get_session_factory", lambda: lambda: database)
+    monkeypatch.setattr(
+        discovery_tasks,
+        "_load_discovery_profile",
+        lambda _settings, _db: (_profile(), 1),
+    )
+    monkeypatch.setattr(
+        "core.operations.readiness_report",
+        lambda _settings, **_kwargs: {"status": "ready", "checks": {}},
+    )
+    monkeypatch.setattr(
+        "core.automation_readiness.build_automation_readiness",
+        lambda **_kwargs: {
+            "preparation_ready": True,
+            "stages": {
+                "preparation": {
+                    "ready": True,
+                    "reason_codes": [],
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "worker.rescore.requeue_scored_jobs_for_preparation",
+        requeue,
+    )
     try:
         assert discovery_tasks.discover_jobs_task() == 0
+        assert queued == [{"tasks_always_eager": False, "batch_size": 7}]
+        assert database.closed is True
     finally:
         config_module.get_settings.cache_clear()
 

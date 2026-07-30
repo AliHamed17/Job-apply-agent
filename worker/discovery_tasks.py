@@ -53,9 +53,6 @@ def discover_jobs_task() -> int:
     from worker.rescore import requeue_scored_jobs_for_preparation  # noqa: PLC0415
 
     settings = get_settings()
-    if not settings.discovery_enabled:
-        logger.info("discovery_skipped", reason="DISCOVERY_DISABLED")
-        return 0
     db = get_session_factory()()
     inserted = 0
 
@@ -78,21 +75,6 @@ def discover_jobs_task() -> int:
 
     try:
         profile, profile_version = _load_discovery_profile(settings, db)
-        readiness_issues = profile_discovery_readiness_issues(profile)
-        if readiness_issues:
-            logger.warning(
-                "discovery_profile_not_ready",
-                reason_codes=readiness_issues,
-            )
-            for source in ("remotive", "linkedin_search"):
-                run = start_run(source)
-                finish_run(
-                    run,
-                    "blocked",
-                    reason_code=readiness_issues[0],
-                )
-            return 0
-
         try:
             dependency_report = readiness_report(
                 settings,
@@ -122,6 +104,25 @@ def discover_jobs_task() -> int:
                 tasks_always_eager=settings.tasks_always_eager,
                 batch_size=settings.preparation_requeue_batch_size,
             )
+
+        if not settings.discovery_enabled:
+            logger.info("discovery_skipped", reason="DISCOVERY_DISABLED")
+            return 0
+
+        readiness_issues = profile_discovery_readiness_issues(profile)
+        if readiness_issues:
+            logger.warning(
+                "discovery_profile_not_ready",
+                reason_codes=readiness_issues,
+            )
+            for source in ("remotive", "linkedin_search"):
+                run = start_run(source)
+                finish_run(
+                    run,
+                    "blocked",
+                    reason_code=readiness_issues[0],
+                )
+            return 0
 
         if settings.public_discovery_enabled:
             cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(
