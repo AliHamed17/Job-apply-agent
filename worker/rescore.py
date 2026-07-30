@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from importlib import import_module
+from typing import Any, cast
 
 import structlog
 
@@ -62,7 +64,10 @@ def requeue_scored_jobs_for_preparation(
     # Release the read transaction before an eager task opens its own writer.
     db.rollback()
 
-    from worker.tasks import score_job_task  # noqa: PLC0415
+    # Resolve the Celery task at dispatch time. Keeping this boundary late-bound
+    # avoids importing the full task graph into profile/CV intake processes.
+    tasks_module = cast(Any, import_module("worker.tasks"))
+    score_job_task = tasks_module.score_job_task
 
     queued = 0
     for job_id in job_ids:
