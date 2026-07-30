@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, cast
@@ -18,7 +19,7 @@ logger = structlog.get_logger(__name__)
 
 _RESCORE_STATUSES = (JobStatus.EXTRACTED, JobStatus.SCORED, JobStatus.DRAFT)
 _EAGER_RESCORE_LOCK = threading.Lock()
-_EAGER_RESCORE_VERSIONS: set[int] = set()
+_EAGER_RESCORE_THREADS: dict[int, threading.Thread] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,12 +231,13 @@ def _start_eager_pending_job_rescore(
     expected_profile_version: int,
     batch_size: int,
 ) -> bool:
-    """Start one daemon drainer per immutable profile revision."""
+    """Start one lifecycle-managed drainer per immutable profile revision."""
 
     with _EAGER_RESCORE_LOCK:
-        if expected_profile_version in _EAGER_RESCORE_VERSIONS:
+        existing = _EAGER_RESCORE_THREADS.get(expected_profile_version)
+        if existing is not None and existing.is_alive():
             return True
-        _EAGER_RESCORE_VERSIONS.add(expected_profile_version)
+        _EAGER_RESCORE_THREADS.pop(expected_profile_version, None)
 
     def drain() -> None:
         try:
@@ -251,20 +253,70 @@ def _start_eager_pending_job_rescore(
             )
         finally:
             with _EAGER_RESCORE_LOCK:
-                _EAGER_RESCORE_VERSIONS.discard(expected_profile_version)
+                current = _EAGER_RESCORE_THREADS.get(expected_profile_version)
+                if current is threading.current_thread():
+                    _EAGER_RESCORE_THREADS.pop(expected_profile_version, None)
 
     thread = threading.Thread(
         target=drain,
         name=f"profile-rescore-v{expected_profile_version}",
-        daemon=True,
+        daemon=False,
     )
-    try:
-        thread.start()
-    except Exception:
-        with _EAGER_RESCORE_LOCK:
-            _EAGER_RESCORE_VERSIONS.discard(expected_profile_version)
-        raise
+    with _EAGER_RESCORE_LOCK:
+        existing = _EAGER_RESCORE_THREADS.get(expected_profile_version)
+        if existing is not None and existing.is_alive():
+            return True
+        _EAGER_RESCORE_THREADS[expected_profile_version] = thread
+        try:
+            thread.start()
+        except Exception:
+            _EAGER_RESCORE_THREADS.pop(expected_profile_version, None)
+            raise
     return True
+
+
+def recover_eager_pending_job_rescore(settings) -> int:
+    """Replay the latest durable profile revision after a brokerless restart."""
+
+    if not settings.tasks_always_eager:
+        return 0
+
+    from profile.versioned_snapshot import latest_profile_version  # noqa: PLC0415
+
+    from db.session import get_session_factory  # noqa: PLC0415
+
+    db = get_session_factory()()
+    try:
+        expected_profile_version = latest_profile_version(db)
+        if expected_profile_version is None:
+            db.rollback()
+            return 0
+        return enqueue_pending_job_rescore(
+            db,
+            settings,
+            expected_profile_version=expected_profile_version,
+        )
+    finally:
+        db.close()
+
+
+def wait_for_eager_pending_job_rescores(timeout: float | None = None) -> bool:
+    """Join all managed brokerless drainers during graceful API shutdown."""
+
+    if timeout is not None and timeout < 0:
+        raise ValueError("rescore shutdown timeout must be non-negative")
+    deadline = None if timeout is None else time.monotonic() + timeout
+
+    while True:
+        with _EAGER_RESCORE_LOCK:
+            threads = tuple(_EAGER_RESCORE_THREADS.values())
+        if not threads:
+            return True
+        for thread in threads:
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            thread.join(remaining)
+            if thread.is_alive() and deadline is not None and time.monotonic() >= deadline:
+                return False
 
 
 def requeue_scored_jobs_for_preparation(

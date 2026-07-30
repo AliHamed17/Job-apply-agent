@@ -1,3 +1,4 @@
+import threading
 from contextlib import contextmanager
 from profile.models import UserProfile
 from unittest.mock import MagicMock, patch
@@ -9,11 +10,14 @@ from core.config import Settings
 from db.models import Application, Base, Job, JobStatus, UserProfileVersion
 from worker.rescore import (
     _drain_eager_pending_job_rescore,
+    _start_eager_pending_job_rescore,
     auto_prepare_scored_jobs_if_ready,
     enqueue_pending_job_rescore,
+    recover_eager_pending_job_rescore,
     requeue_scored_jobs_for_preparation,
     rescore_pending_jobs,
     rescore_pending_jobs_batch,
+    wait_for_eager_pending_job_rescores,
 )
 
 
@@ -316,6 +320,71 @@ def test_eager_rescore_drainer_iterates_through_entire_backlog(tmp_path):
     rows = check.query(Job).order_by(Job.id).all()
     assert all(job.score is not None for job in rows)
     check.close()
+    engine.dispose()
+
+
+def test_eager_rescore_is_non_daemon_and_joined_at_shutdown():
+    entered = threading.Event()
+    release = threading.Event()
+
+    def block_until_shutdown(**_kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return 0
+
+    with patch(
+        "worker.rescore._drain_eager_pending_job_rescore",
+        side_effect=block_until_shutdown,
+    ):
+        assert _start_eager_pending_job_rescore(
+            expected_profile_version=91,
+            batch_size=1,
+        )
+        assert entered.wait(timeout=5)
+        managed = next(
+            thread for thread in threading.enumerate() if thread.name == "profile-rescore-v91"
+        )
+        assert managed.daemon is False
+        assert wait_for_eager_pending_job_rescores(timeout=0) is False
+        release.set()
+        assert wait_for_eager_pending_job_rescores(timeout=5) is True
+
+
+def test_eager_rescore_replays_latest_profile_revision_on_api_startup(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'rescore-recovery.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    db = factory()
+    db.add_all(
+        [
+            Job(
+                title="Interrupted rescore",
+                company="Example",
+                source_url="https://example.test/interrupted-rescore",
+                status=JobStatus.SCORED,
+            ),
+            UserProfileVersion(version=12, profile_yaml="{}"),
+        ]
+    )
+    db.commit()
+    db.close()
+    settings = Settings(
+        _env_file=None,
+        tasks_always_eager=True,
+        preparation_requeue_batch_size=9,
+    )
+
+    with (
+        patch("db.session.get_session_factory", return_value=factory),
+        patch("worker.rescore._start_eager_pending_job_rescore", return_value=True) as start,
+    ):
+        recovered = recover_eager_pending_job_rescore(settings)
+
+    assert recovered == 1
+    start.assert_called_once_with(
+        expected_profile_version=12,
+        batch_size=9,
+    )
     engine.dispose()
 
 

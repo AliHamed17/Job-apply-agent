@@ -669,11 +669,17 @@ async def test_api_lifespan_holds_and_releases_instance_lock(monkeypatch) -> Non
     acquire = MagicMock(return_value=instance_lock)
     monkeypatch.setattr(api_main, "acquire_dashboard_instance_lock", acquire)
     monkeypatch.setattr(api_main, "init_db", MagicMock())
+    recover = MagicMock(return_value=4)
+    wait = MagicMock(return_value=True)
+    monkeypatch.setattr(api_main, "recover_eager_pending_job_rescore", recover)
+    monkeypatch.setattr(api_main, "wait_for_eager_pending_job_rescores", wait)
 
     async with api_main.lifespan(api_main.app):
         instance_lock.release.assert_not_called()
 
     acquire.assert_called_once()
+    recover.assert_called_once_with(api_main.settings)
+    wait.assert_called_once_with()
     instance_lock.release.assert_called_once_with()
 
 
@@ -691,11 +697,14 @@ async def test_api_lifespan_releases_lock_when_initialization_fails(monkeypatch)
         "init_db",
         MagicMock(side_effect=RuntimeError("database unavailable")),
     )
+    wait = MagicMock(return_value=True)
+    monkeypatch.setattr(api_main, "wait_for_eager_pending_job_rescores", wait)
 
     with pytest.raises(RuntimeError, match="database unavailable"):
         async with api_main.lifespan(api_main.app):
             pytest.fail("lifespan must not yield after failed initialization")
 
+    wait.assert_called_once_with()
     instance_lock.release.assert_called_once_with()
 
 
