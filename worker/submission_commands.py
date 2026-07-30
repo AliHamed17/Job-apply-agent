@@ -802,7 +802,6 @@ def execute_claimed_submission_command(
         or runtime_settings.draft_only
         or not runtime_settings.portal_final_submit_enabled
         or not runtime_settings.live_automation_acknowledged
-        or runtime_settings.auto_apply
     ):
         return _finish_claimed_before_commit(
             db,

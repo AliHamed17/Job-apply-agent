@@ -204,6 +204,95 @@
                         <i data-lucide="user-circle"></i> Candidate Profile
                     </div>
                     <div class="profile-card">
+                        <div class="profile-readiness" id="profile-readiness"
+                             role="status" aria-live="polite">
+                            <span class="profile-stage is-blocked">Discovery: checking</span>
+                            <span class="profile-stage is-blocked">Auto-prepare: checking</span>
+                            <span class="profile-stage is-blocked">Qualified autopilot: checking</span>
+                        </div>
+                        <details class="onboarding-panel" id="onboarding-panel">
+                            <summary>
+                                <span>
+                                    <i data-lucide="user-round-check"></i>
+                                    Complete private onboarding
+                                </span>
+                                <span class="text-sm text-dim">Saved only on the local runner</span>
+                            </summary>
+                            <div class="onboarding-copy">
+                                Confirm these facts yourself. They are never inferred from a CV or
+                                sent to Ollama, metrics, or the Vercel control plane.
+                            </div>
+                            <form id="onboarding-form" class="onboarding-form">
+                                <label>
+                                    Legal name
+                                    <input id="onboarding-legal-name" class="form-input"
+                                           autocomplete="name" maxlength="200" required>
+                                </label>
+                                <label>
+                                    Primary email
+                                    <input id="onboarding-primary-email" class="form-input"
+                                           type="email" autocomplete="email" maxlength="320" required>
+                                </label>
+                                <label>
+                                    Phone
+                                    <input id="onboarding-phone" class="form-input"
+                                           type="tel" autocomplete="tel" maxlength="40" required>
+                                </label>
+                                <label>
+                                    Current location
+                                    <input id="onboarding-location" class="form-input"
+                                           autocomplete="address-level2" maxlength="200" required>
+                                </label>
+                                <label>
+                                    Work authorization
+                                    <input id="onboarding-work-authorization" class="form-input"
+                                           autocomplete="off" maxlength="300" required>
+                                </label>
+                                <label>
+                                    Sponsorship requirement
+                                    <input id="onboarding-sponsorship" class="form-input"
+                                           autocomplete="off" maxlength="300" required>
+                                </label>
+                                <label>
+                                    Citizenship
+                                    <input id="onboarding-citizenship" class="form-input"
+                                           autocomplete="off" maxlength="200">
+                                </label>
+                                <label>
+                                    Nationality
+                                    <input id="onboarding-nationality" class="form-input"
+                                           autocomplete="off" maxlength="200">
+                                </label>
+                                <label>
+                                    Gender (optional)
+                                    <input id="onboarding-gender" class="form-input"
+                                           autocomplete="off" maxlength="100">
+                                </label>
+                                <label>
+                                    Disability answer (optional)
+                                    <input id="onboarding-disability" class="form-input"
+                                           autocomplete="off" maxlength="100">
+                                </label>
+                                <label>
+                                    Ethnicity answer (optional)
+                                    <input id="onboarding-ethnicity" class="form-input"
+                                           autocomplete="off" maxlength="100">
+                                </label>
+                                <label>
+                                    Veteran status (optional)
+                                    <input id="onboarding-veteran-status" class="form-input"
+                                           autocomplete="off" maxlength="100">
+                                </label>
+                                <div class="onboarding-actions">
+                                    <span class="text-sm text-dim">
+                                        Citizenship or nationality is required; demographic answers are optional.
+                                    </span>
+                                    <button class="btn btn-primary" id="btn-save-onboarding" type="submit">
+                                        <i data-lucide="save"></i> Save confirmed profile
+                                    </button>
+                                </div>
+                            </form>
+                        </details>
                         <div class="profile-dropzone" id="resume-dropzone">
                             <input type="file" id="resumeInput" accept=".pdf,application/pdf" hidden>
                             <i data-lucide="file-up"></i>

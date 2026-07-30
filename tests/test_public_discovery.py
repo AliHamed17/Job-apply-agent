@@ -7,12 +7,14 @@ from discovery.public_sources import parse_remotive_jobs
 
 def _profile() -> UserProfile:
     return UserProfile(
-        personal=Personal(name="Candidate Name", email="candidate@domain.test"),
+        # Discovery intentionally ignores placeholder identity.
+        personal=Personal(name="Jane Doe", email="jane@example.com"),
         resume=Resume(text="Experienced engineer. " * 20),
         preferences=Preferences(
             roles=["Machine Learning Engineer", "Software Engineer"],
+            locations=["Israel", "Worldwide Remote"],
             keywords=["Python", "Kubernetes", "PyTorch"],
-        )
+        ),
     )
 
 
@@ -53,19 +55,35 @@ def test_parse_remotive_jobs_honors_bound():
         "description": "Python and Kubernetes",
         "url": "https://remotive.com/job/",
     }
-    payload = {
-        "jobs": [
-            {**row, "url": f"https://remotive.com/job/{index}"}
-            for index in range(5)
-        ]
-    }
+    payload = {"jobs": [{**row, "url": f"https://remotive.com/job/{index}"} for index in range(5)]}
 
     assert len(parse_remotive_jobs(payload, _profile(), 2)) == 2
 
 
-def test_public_discovery_continues_during_linkedin_cooldown(
-    tmp_path, monkeypatch
-):
+def test_global_discovery_switch_stops_before_database_access(monkeypatch):
+    monkeypatch.setenv("DISCOVERY_ENABLED", "false")
+
+    import core.config as config_module
+    import db.session as session_module
+    from worker import discovery_tasks
+
+    class AllowedGovernor:
+        def can_act(self):
+            return True, "ok"
+
+    def unexpected_session_factory():
+        raise AssertionError("disabled discovery must not open the database")
+
+    config_module.get_settings.cache_clear()
+    monkeypatch.setattr(discovery_tasks, "get_governor", lambda: AllowedGovernor())
+    monkeypatch.setattr(session_module, "get_session_factory", unexpected_session_factory)
+    try:
+        assert discovery_tasks.discover_jobs_task() == 0
+    finally:
+        config_module.get_settings.cache_clear()
+
+
+def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypatch):
     database_url = f"sqlite:///{tmp_path / 'public-discovery.db'}"
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("PUBLIC_DISCOVERY_ENABLED", "true")
@@ -111,9 +129,7 @@ def test_public_discovery_continues_during_linkedin_cooldown(
     monkeypatch.setattr(linkedin_module, "run_discovery", fake_linkedin)
     monkeypatch.setattr(ingest_module, "ingest_discovered_jobs", fake_ingest)
     monkeypatch.setattr(profile_module, "get_profile", _profile)
-    monkeypatch.setattr(
-        discovery_tasks, "get_governor", lambda: CooldownGovernor()
-    )
+    monkeypatch.setattr(discovery_tasks, "get_governor", lambda: CooldownGovernor())
 
     assert discovery_tasks.discover_jobs_task() == 2
     assert discovery_tasks.discover_jobs_task() == 0

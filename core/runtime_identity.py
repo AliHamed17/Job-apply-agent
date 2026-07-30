@@ -329,7 +329,6 @@ def _effective_mode(settings: Settings) -> tuple[str, bool]:
         and not settings.draft_only
         and settings.portal_final_submit_enabled
         and settings.live_automation_acknowledged
-        and not settings.auto_apply
         and settings.db_is_postgres
         and settings.operator_auth_configured
     )
@@ -339,8 +338,6 @@ def _effective_mode(settings: Settings) -> tuple[str, bool]:
         return "draft_only", live_submit_enabled
     if not settings.portal_final_submit_enabled:
         return "prepare_only", live_submit_enabled
-    if settings.auto_apply:
-        return "blocked_unattended", live_submit_enabled
     if not settings.live_automation_acknowledged:
         return "blocked_unacknowledged", live_submit_enabled
     if not settings.operator_auth_configured:
@@ -436,8 +433,6 @@ def build_runtime_capabilities(
         reasons.append(SubmissionBlockReason.FINAL_SUBMIT_DISABLED)
     if not settings.live_automation_acknowledged:
         reasons.append(SubmissionBlockReason.LIVE_AUTOMATION_NOT_ACKNOWLEDGED)
-    if settings.auto_apply:
-        reasons.append(SubmissionBlockReason.UNATTENDED_AUTOMATION_ENABLED)
     if not settings.db_is_postgres:
         reasons.append(SubmissionBlockReason.DATABASE_SERIALIZATION_REQUIRED)
     if not settings.operator_auth_configured:
@@ -477,6 +472,10 @@ def build_runtime_capabilities(
             "dry_run": settings.dry_run,
             "draft_only": settings.draft_only,
             "live_submit_enabled": live_submit_enabled,
+            "discovery_enabled": settings.discovery_enabled,
+            "auto_prepare_enabled": settings.auto_apply,
+            "qualified_autopilot_enabled": False,
+            "legacy_auto_apply_alias": settings.auto_apply,
         },
         "readiness": {
             "status": readiness_status,

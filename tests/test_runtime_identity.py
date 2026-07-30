@@ -79,6 +79,18 @@ def _ready_report(
     return {"status": "ready", "checks": checks}
 
 
+def _automation_ready() -> dict[str, object]:
+    return {
+        "discovery_ready": True,
+        "preparation_ready": True,
+        "submission_ready": True,
+        "stages": {
+            stage: {"ready": True, "reason_codes": []}
+            for stage in ("discovery", "preparation", "submission")
+        },
+    }
+
+
 def _live_settings() -> Settings:
     return Settings(
         _env_file=None,
@@ -176,6 +188,10 @@ def test_capabilities_allow_ready_command_protocol_runtime() -> None:
         "dry_run": False,
         "draft_only": False,
         "live_submit_enabled": True,
+        "discovery_enabled": True,
+        "auto_prepare_enabled": False,
+        "qualified_autopilot_enabled": False,
+        "legacy_auto_apply_alias": False,
     }
     assert result["submission"] == {"allowed": True, "reasons": []}
     assert result["worker"]["compatible"] is True
@@ -236,7 +252,6 @@ def test_capabilities_fail_closed_with_bounded_reasons() -> None:
         "DRAFT_ONLY_ENABLED",
         "FINAL_SUBMIT_DISABLED",
         "LIVE_AUTOMATION_NOT_ACKNOWLEDGED",
-        "UNATTENDED_AUTOMATION_ENABLED",
         "DATABASE_SERIALIZATION_REQUIRED",
         "OPERATOR_AUTH_REQUIRED",
         "RUNTIME_NOT_READY",
@@ -262,6 +277,18 @@ def test_development_default_secret_never_allows_live_submission() -> None:
     assert result["mode"]["live_submit_enabled"] is False
     assert result["submission"]["allowed"] is False
     assert result["submission"]["reasons"] == ["OPERATOR_AUTH_REQUIRED"]
+
+
+def test_legacy_auto_apply_is_only_an_auto_prepare_alias() -> None:
+    settings = _live_settings().model_copy(update={"auto_apply": True})
+
+    result = build_runtime_capabilities(settings, _ready_report(), _identity())
+
+    assert result["mode"]["auto_prepare_enabled"] is True
+    assert result["mode"]["legacy_auto_apply_alias"] is True
+    assert result["mode"]["qualified_autopilot_enabled"] is False
+    assert result["mode"]["live_submit_enabled"] is True
+    assert "UNATTENDED_AUTOMATION_ENABLED" not in result["submission"]["reasons"]
 
 
 def test_same_git_build_with_different_backend_source_is_incompatible() -> None:
@@ -396,12 +423,20 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
     from api.routes import runtime as runtime_route
 
     expected = build_runtime_capabilities(_live_settings(), _ready_report(), _identity())
+    expected["automation"] = _automation_ready()
     monkeypatch.setattr(runtime_route, "get_settings", _live_settings)
     monkeypatch.setattr(runtime_route, "readiness_report", lambda _settings: _ready_report())
     monkeypatch.setattr(
         runtime_route,
         "build_runtime_capabilities",
-        lambda _settings, _report: expected,
+        lambda _settings, _report: {
+            key: value for key, value in expected.items() if key != "automation"
+        },
+    )
+    monkeypatch.setattr(
+        runtime_route,
+        "build_automation_readiness",
+        lambda **_kwargs: _automation_ready(),
     )
 
     response = TestClient(app).get(
@@ -419,6 +454,7 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
         "release",
         "mode",
         "readiness",
+        "automation",
         "submission",
         "worker",
         "llm",

@@ -1,12 +1,22 @@
-from profile.models import Personal, Preferences, Resume, UserProfile
-from profile.readiness import profile_readiness_issues
+from profile.models import (
+    Personal,
+    Preferences,
+    ProfileEvidence,
+    Resume,
+    UserProfile,
+)
+from profile.readiness import (
+    profile_discovery_readiness_issues,
+    profile_readiness_issues,
+    profile_submission_readiness_issues,
+)
 
 
 def test_placeholder_profile_is_blocked():
     profile = UserProfile(
         personal=Personal(name="Jane Doe", email="jane.doe@example.com"),
         resume=Resume(text="Experienced engineer. " * 20),
-        preferences=Preferences(roles=["Software Engineer"]),
+        preferences=Preferences(roles=["Software Engineer"], locations=["Israel"]),
     )
 
     assert profile_readiness_issues(profile) == [
@@ -19,7 +29,61 @@ def test_real_minimum_profile_is_ready():
     profile = UserProfile(
         personal=Personal(name="Candidate Name", email="candidate@domain.test"),
         resume=Resume(text="Experienced engineer. " * 20),
-        preferences=Preferences(roles=["Software Engineer"]),
+        preferences=Preferences(roles=["Software Engineer"], locations=["Israel"]),
     )
 
     assert profile_readiness_issues(profile) == []
+
+
+def test_placeholder_identity_does_not_block_discovery():
+    profile = UserProfile(
+        personal=Personal(name="Jane Doe", email="jane.doe@example.com"),
+        preferences=Preferences(
+            roles=["Machine Learning Engineer"],
+            locations=["Israel", "Worldwide Remote"],
+        ),
+    )
+
+    assert profile_discovery_readiness_issues(profile) == []
+
+
+def test_discovery_requires_real_roles_locations_and_workplace_preference():
+    profile = UserProfile(
+        preferences=Preferences(
+            roles=[""],
+            locations=["Your preferred location"],
+            remote_ok=False,
+            hybrid_ok=False,
+            onsite_ok=False,
+        )
+    )
+
+    assert profile_discovery_readiness_issues(profile) == [
+        "PROFILE_TARGET_ROLES_MISSING",
+        "PROFILE_SEARCH_LOCATIONS_PLACEHOLDER",
+        "PROFILE_WORKPLACE_PREFERENCE_MISSING",
+    ]
+
+
+def test_submission_requires_operator_confirmed_identity_and_legal_facts():
+    profile = UserProfile(
+        personal=Personal(
+            name="Candidate Name",
+            email="candidate@domain.test",
+            phone="+972 50 000 0000",
+            location="Israel",
+        ),
+        preferences=Preferences(
+            roles=["Software Engineer"],
+            locations=["Israel"],
+        ),
+        evidence=ProfileEvidence(
+            user_confirmed={
+                "work_authorization": "Confirmed by operator",
+                "visa_sponsorship": "Confirmed by operator",
+                "nationality": "Confirmed by operator",
+            }
+        ),
+    )
+
+    assert profile_submission_readiness_issues(profile) == []

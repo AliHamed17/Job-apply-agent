@@ -23,7 +23,9 @@ def discover_jobs_task() -> int:
         return 0
 
     from profile.loader import get_profile  # noqa: PLC0415
-    from profile.readiness import profile_readiness_issues  # noqa: PLC0415
+    from profile.readiness import (  # noqa: PLC0415
+        profile_discovery_readiness_issues,
+    )
 
     from core.operational_metrics import record_discovery_result  # noqa: PLC0415
     from db.models import DiscoveryRun  # noqa: PLC0415
@@ -33,6 +35,9 @@ def discover_jobs_task() -> int:
     from discovery.public_sources import fetch_remotive_jobs  # noqa: PLC0415
 
     settings = get_settings()
+    if not settings.discovery_enabled:
+        logger.info("discovery_skipped", reason="DISCOVERY_DISABLED")
+        return 0
     db = get_session_factory()()
     profile = get_profile()
     inserted = 0
@@ -55,7 +60,7 @@ def discover_jobs_task() -> int:
         db.commit()
 
     try:
-        readiness_issues = profile_readiness_issues(profile)
+        readiness_issues = profile_discovery_readiness_issues(profile)
         if readiness_issues:
             logger.warning(
                 "discovery_profile_not_ready",
@@ -66,7 +71,7 @@ def discover_jobs_task() -> int:
                 finish_run(
                     run,
                     "blocked",
-                    reason_code="PROFILE_INCOMPLETE",
+                    reason_code=readiness_issues[0],
                 )
             return 0
 

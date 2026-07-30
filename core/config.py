@@ -197,6 +197,7 @@ class Settings(BaseSettings):
     submission_command_drain_batch_size: int = 25
 
     # ── Discovery ───────────────────────────────────────
+    discovery_enabled: bool = True
     discovery_interval_h: int = 3
     discovery_pages_per_query: int = 3
     public_discovery_enabled: bool = True

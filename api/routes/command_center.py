@@ -19,6 +19,10 @@ router = APIRouter(tags=["command_center"])
 
 class CommandCenterSummary(BaseModel):
     candidate_name: str
+    discovery_active: bool
+    auto_prepare_active: bool
+    qualified_autopilot_active: bool
+    # Deprecated compatibility alias for auto_prepare_active.
     auto_apply_active: bool
     score_threshold: float
     governor_cap: int
@@ -59,6 +63,9 @@ async def get_command_center_summary(db: Session = Depends(get_db)):
 
     return CommandCenterSummary(
         candidate_name=get_profile().personal.name or "Candidate",
+        discovery_active=settings.discovery_enabled,
+        auto_prepare_active=settings.auto_apply,
+        qualified_autopilot_active=False,
         auto_apply_active=settings.auto_apply,
         score_threshold=settings.auto_apply_threshold,
         governor_cap=settings.linkedin_daily_cap,
