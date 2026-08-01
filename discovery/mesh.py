@@ -10,6 +10,7 @@ from db.models import DiscoverySourceState, EmployerCatalogEntryRecord
 from discovery.catalog import (
     catalog_entry_from_url,
     load_catalog,
+    synchronize_configured_catalog,
     upsert_catalog_entries,
 )
 from discovery.contracts import (
@@ -172,8 +173,7 @@ def synchronize_discovery_configuration(db, settings) -> list[DiscoverySourceSta
     """Import local catalog entries and persist every enabled/disabled descriptor."""
 
     configured = load_catalog(settings.employer_catalog_path)
-    if configured:
-        upsert_catalog_entries(db, configured)
+    synchronize_configured_catalog(db, configured)
     states = [
         upsert_source_state(db, remotive_descriptor(settings)),
         upsert_source_state(db, gmail_descriptor(settings)),

@@ -331,6 +331,15 @@ def ingest_discovered_postings(
                     _update_mutable_job(job, posting)
                     updated += 1
                     queued_ids.append(int(job.id))
+                elif job.status == JobStatus.SKIPPED:
+                    # A newly observed source occurrence proves that a
+                    # source-closure skip is no longer current. Reopen the
+                    # canonical job without allowing a sparse alert to erase
+                    # richer ATS metadata already stored on it.
+                    job.status = JobStatus.EXTRACTED
+                    job.score = None
+                    updated += 1
+                    queued_ids.append(int(job.id))
                 elif job.status == JobStatus.EXTRACTED and job.score is None:
                     queued_ids.append(int(job.id))
 

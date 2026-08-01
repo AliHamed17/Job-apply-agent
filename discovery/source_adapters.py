@@ -54,7 +54,7 @@ def descriptor_for(
     return DiscoverySourceDescriptor(
         source_key=source_key_for(entry),
         source_type=entry.ats,
-        semantic_version="1.0.0",
+        semantic_version=("1.1.0" if entry.ats in {"lever", "smartrecruiters"} else "1.0.0"),
         configuration_digest=stable_digest(
             {
                 "ats": entry.ats,
@@ -92,7 +92,7 @@ def descriptor_for(
             "generic_jsonld",
             "generic_feed",
         },
-        supports_conditional_requests=True,
+        supports_conditional_requests=entry.ats in {"greenhouse", "ashby", "generic_jsonld"},
         tenant_scoped=True,
         enabled=entry.enabled,
         disabled_reason=None if entry.enabled else "CATALOG_ENTRY_DISABLED",
@@ -208,13 +208,18 @@ def _next_cursor(
     response,
     *,
     values: dict[str, str | int | float | bool | None] | None = None,
+    capture_validators: bool = True,
 ) -> DiscoveryCursor:
     return DiscoveryCursor(
         source_key=cursor.source_key,
         catalog_key=cursor.catalog_key,
         cursor=values or cursor.cursor,
-        etag=response.headers.get("ETag") or cursor.etag,
-        last_modified=response.headers.get("Last-Modified") or cursor.last_modified,
+        etag=(response.headers.get("ETag") or cursor.etag) if capture_validators else None,
+        last_modified=(
+            response.headers.get("Last-Modified") or cursor.last_modified
+            if capture_validators
+            else None
+        ),
         last_seen_posting_at=datetime.now(UTC),
     )
 
@@ -310,18 +315,20 @@ async def fetch_lever_page(
     response = await client.get(
         f"https://{host}/v0/postings/{entry.tenant_key}",
         params={"mode": "json", "skip": offset, "limit": limit},
-        headers=_conditional_headers(cursor) if offset == 0 else {},
         allowed_hosts=_LEVER_HOSTS,
     )
-    if _snapshot_changed(cursor, response, offset=offset):
-        return _restart_page(cursor)
+    # Lever validators describe an individual paginated response, not a
+    # collection-wide snapshot. Comparing page 0's validator with page 1's
+    # would restart forever, while a page-0 304 could hide later-page changes.
+    # Scan all pages unconditionally and never persist page validators.
     next_cursor = _next_cursor(
         cursor,
         response,
-        values={"offset": 0 if response.status_code == 304 else offset + limit},
+        values={"offset": offset + limit},
+        capture_validators=False,
     )
     if response.status_code == 304:
-        return DiscoveryPage(cursor=next_cursor, complete_snapshot=True, not_modified=True)
+        raise ValueError("SOURCE_UNEXPECTED_NOT_MODIFIED")
     try:
         rows = response.json()
     except ValueError as exc:
@@ -492,18 +499,18 @@ async def fetch_smartrecruiters_page(
     response = await client.get(
         f"https://api.smartrecruiters.com/v1/companies/{entry.tenant_key}/postings",
         params={"offset": offset, "limit": limit},
-        headers=_conditional_headers(cursor) if offset == 0 else {},
         allowed_hosts=_SMARTRECRUITERS_HOSTS,
     )
-    if _snapshot_changed(cursor, response, offset=offset):
-        return _restart_page(cursor)
+    # SmartRecruiters also emits page-level validators. Treating those as a
+    # collection identity causes false drift on every page transition.
     next_cursor = _next_cursor(
         cursor,
         response,
-        values={"offset": 0 if response.status_code == 304 else offset + limit},
+        values={"offset": offset + limit},
+        capture_validators=False,
     )
     if response.status_code == 304:
-        return DiscoveryPage(cursor=next_cursor, complete_snapshot=True, not_modified=True)
+        raise ValueError("SOURCE_UNEXPECTED_NOT_MODIFIED")
     try:
         payload: dict[str, Any] = response.json()
         rows = payload.get("content", [])

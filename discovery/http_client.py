@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import ipaddress
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -76,12 +77,19 @@ class DiscoveryHttpClient:
         self,
         url: str,
         *,
-        params: dict[str, object] | None,
+        params: dict[str, str | int | float | bool | None] | None,
         headers: dict[str, str],
+        extensions: dict[str, object] | None = None,
     ) -> httpx.Response:
         """Stream one response and retain at most the configured byte budget."""
 
-        request = self._client.build_request("GET", url, params=params, headers=headers)
+        request = self._client.build_request(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            extensions=extensions,
+        )
         response = await self._client.send(
             request,
             stream=True,
@@ -133,12 +141,17 @@ class DiscoveryHttpClient:
         self,
         url: str,
         *,
-        params: dict[str, object] | None = None,
+        params: dict[str, str | int | float | bool | None] | None = None,
         headers: dict[str, str] | None = None,
         allowed_hosts: frozenset[str] | None = None,
+        connect_ip: str | None = None,
     ) -> httpx.Response:
-        parsed = urlsplit(url)
-        host = (parsed.hostname or "").rstrip(".").casefold()
+        try:
+            parsed = urlsplit(url)
+            host = (parsed.hostname or "").rstrip(".").casefold()
+            port = parsed.port or 443
+        except (ValueError, UnicodeError) as exc:
+            raise DiscoveryFetchError("SOURCE_URL_UNSAFE") from exc
         if (
             parsed.scheme != "https"
             or not host
@@ -156,15 +169,42 @@ class DiscoveryHttpClient:
             "User-Agent": "JobApplyAgent/0.2 (+private authorized discovery)",
             **(headers or {}),
         }
+        request_url = url
+        request_extensions: dict[str, object] | None = None
+        if connect_ip is not None:
+            try:
+                pinned_address = ipaddress.ip_address(connect_ip.split("%", 1)[0])
+            except ValueError as exc:
+                raise DiscoveryFetchError("SOURCE_ADDRESS_NOT_PUBLIC") from exc
+            if not pinned_address.is_global:
+                raise DiscoveryFetchError("SOURCE_ADDRESS_NOT_PUBLIC")
+            address_text = str(pinned_address)
+            address_netloc = f"[{address_text}]" if pinned_address.version == 6 else address_text
+            if port != 443:
+                address_netloc = f"{address_netloc}:{port}"
+            request_url = urlunsplit(
+                (parsed.scheme, address_netloc, parsed.path, parsed.query, parsed.fragment)
+            )
+            host_header = f"[{host}]" if ":" in host else host
+            if port != 443:
+                host_header = f"{host_header}:{port}"
+            # The TCP connection uses the already validated numeric address;
+            # Host and SNI retain the configured origin for HTTP routing and
+            # certificate verification. Closing the HTTP/1.1 connection also
+            # prevents a shared-IP pool from crossing configured hostnames.
+            request_headers["Host"] = host_header
+            request_headers["Connection"] = "close"
+            request_extensions = {"sni_hostname": host}
         last_status: int | None = None
         last_retry_after: float | None = None
         for attempt in range(1, self._max_attempts + 1):
             try:
                 async with lock:
                     response = await self._send_bounded(
-                        url,
+                        request_url,
                         params=params,
                         headers=request_headers,
+                        extensions=request_extensions,
                     )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if attempt == self._max_attempts:

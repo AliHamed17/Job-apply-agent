@@ -125,3 +125,26 @@ def upsert_catalog_entries(db, entries: tuple[EmployerCatalogEntry, ...]) -> int
                 changed += 1
     db.commit()
     return changed
+
+
+def synchronize_configured_catalog(db, entries: tuple[EmployerCatalogEntry, ...]) -> int:
+    """Upsert the current local catalog and disable removed config-owned rows.
+
+    Alert- and feed-learned tenants are intentionally retained. A missing or
+    emptied personal catalog, however, must stop polling tenants that exist
+    solely because an older local configuration named them.
+    """
+
+    changed = upsert_catalog_entries(db, entries)
+    configured_keys = {entry.catalog_key for entry in entries}
+    config_rows = (
+        db.query(EmployerCatalogEntryRecord)
+        .filter(EmployerCatalogEntryRecord.discovered_via == "config")
+        .all()
+    )
+    for row in config_rows:
+        if row.catalog_key not in configured_keys and row.enabled:
+            row.enabled = False
+            changed += 1
+    db.commit()
+    return changed

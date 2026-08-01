@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import re
 from datetime import UTC, datetime
@@ -49,6 +50,8 @@ _GENERIC_ANCHOR_LABELS = frozenset(
     }
 )
 _LINKEDIN_ID = re.compile(r"/jobs/(?:view|collections/recommended)/(\d+)")
+_ACCESS_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
+_ACCESS_TOKEN_CACHE_LIMIT = 32
 
 
 def _body_parts(message) -> tuple[str, str]:
@@ -197,8 +200,8 @@ def parse_job_alert_message(
 def _decode_raw(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
     try:
-        return base64.urlsafe_b64decode(value + padding)
-    except (ValueError, TypeError) as exc:
+        return base64.b64decode(value + padding, altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError, TypeError) as exc:
         raise ValueError("ALERT_MESSAGE_INVALID") from exc
 
 
@@ -217,10 +220,43 @@ def _load_oauth_state(path: str | Path) -> dict[str, object]:
     return payload
 
 
-async def _access_token(state: dict[str, object], client: httpx.AsyncClient) -> str:
+def _token_cache_key(path: str | Path, state: dict[str, object]) -> str:
+    return stable_digest(
+        {
+            "oauth_path": str(Path(path).absolute()),
+            "client_id": str(state.get("client_id") or "").strip(),
+            "refresh_token": str(state.get("refresh_token") or "").strip(),
+        }
+    )
+
+
+def _cache_access_token(cache_key: str, token: str, expires_at: float) -> None:
+    now = datetime.now(UTC).timestamp()
+    for key, (_cached_token, cached_expiry) in tuple(_ACCESS_TOKEN_CACHE.items()):
+        if cached_expiry <= now + 60:
+            _ACCESS_TOKEN_CACHE.pop(key, None)
+    if len(_ACCESS_TOKEN_CACHE) >= _ACCESS_TOKEN_CACHE_LIMIT:
+        oldest_key = min(_ACCESS_TOKEN_CACHE, key=lambda key: _ACCESS_TOKEN_CACHE[key][1])
+        _ACCESS_TOKEN_CACHE.pop(oldest_key, None)
+    _ACCESS_TOKEN_CACHE[cache_key] = (token, expires_at)
+
+
+async def _access_token(
+    state: dict[str, object],
+    client: httpx.AsyncClient,
+    *,
+    cache_key: str,
+) -> str:
+    now = datetime.now(UTC).timestamp()
+    cached = _ACCESS_TOKEN_CACHE.get(cache_key)
+    if cached is not None and cached[1] > now + 60:
+        return cached[0]
     token = str(state.get("access_token") or "").strip()
-    expires_at = float(state.get("expires_at") or 0)
-    if token and expires_at > datetime.now(UTC).timestamp() + 60:
+    try:
+        expires_at = float(str(state.get("expires_at") or 0))
+    except (TypeError, ValueError):
+        expires_at = 0
+    if token and expires_at > now + 60:
         return token
     refresh_fields = {
         "client_id": str(state.get("client_id") or "").strip(),
@@ -243,6 +279,13 @@ async def _access_token(state: dict[str, object], client: httpx.AsyncClient) -> 
     token = str(payload.get("access_token") or "").strip()
     if not token:
         raise ValueError("GMAIL_OAUTH_REFRESH_FAILED")
+    try:
+        expires_in = float(str(payload.get("expires_in") or 3600))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("GMAIL_OAUTH_REFRESH_FAILED") from exc
+    if expires_in <= 0:
+        raise ValueError("GMAIL_OAUTH_REFRESH_FAILED")
+    _cache_access_token(cache_key, token, now + min(expires_in, 86_400))
     return token
 
 
@@ -260,7 +303,9 @@ async def fetch_gmail_alert_page(
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=20.0)
     try:
-        token = await _access_token(_load_oauth_state(oauth_path), client)
+        oauth_state = _load_oauth_state(oauth_path)
+        cache_key = _token_cache_key(oauth_path, oauth_state)
+        token = await _access_token(oauth_state, client, cache_key=cache_key)
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         last_internal = int(cursor.cursor.get("last_internal_date_ms") or 0)
         page_token = str(cursor.cursor.get("page_token") or "").strip()
@@ -271,7 +316,7 @@ async def fetch_gmail_alert_page(
         query = f'label:"{escaped_label}"'
         if last_internal:
             query += f" after:{max(0, last_internal // 1000 - 1)}"
-        params: dict[str, object] = {
+        params: dict[str, str | int] = {
             "q": query,
             "maxResults": min(100, max_messages),
         }
@@ -283,6 +328,8 @@ async def fetch_gmail_alert_page(
             headers=headers,
         )
         if response.status_code != 200:
+            if response.status_code == 401:
+                _ACCESS_TOKEN_CACHE.pop(cache_key, None)
             raise ValueError("GMAIL_ALERT_LIST_FAILED")
         try:
             payload = response.json()
@@ -311,6 +358,8 @@ async def fetch_gmail_alert_page(
                 # Failing the whole page preserves the prior durable cursor.
                 # Advancing after a partial detail fetch could permanently
                 # skip an older message when a newer message succeeded.
+                if detail.status_code == 401:
+                    _ACCESS_TOKEN_CACHE.pop(cache_key, None)
                 raise ValueError("GMAIL_ALERT_MESSAGE_FETCH_FAILED")
             try:
                 message_payload = detail.json()
@@ -318,13 +367,22 @@ async def fetch_gmail_alert_page(
                 raise ValueError("GMAIL_ALERT_MESSAGE_INVALID") from exc
             if not isinstance(message_payload, dict):
                 raise ValueError("GMAIL_ALERT_MESSAGE_INVALID")
-            internal_date = int(message_payload.get("internalDate") or 0)
+            raw_value = str(message_payload.get("raw") or "").strip()
+            try:
+                internal_date = int(message_payload.get("internalDate") or 0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("GMAIL_ALERT_MESSAGE_INVALID") from exc
+            if internal_date <= 0 or not raw_value:
+                raise ValueError("GMAIL_ALERT_MESSAGE_INVALID")
+            raw_message = _decode_raw(raw_value)
+            if not raw_message:
+                raise ValueError("GMAIL_ALERT_MESSAGE_INVALID")
             max_internal = max(max_internal, internal_date)
             if internal_date <= last_internal:
                 continue
             postings.extend(
                 parse_job_alert_message(
-                    _decode_raw(str(message_payload.get("raw") or "")),
+                    raw_message,
                     message_id=message_id,
                     internal_date_ms=internal_date,
                     source_key=cursor.source_key,

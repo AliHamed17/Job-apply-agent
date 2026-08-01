@@ -6,6 +6,7 @@ import asyncio
 import ipaddress
 import socket
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
@@ -28,12 +29,22 @@ from jobs.parsers.jsonld import parse_jsonld
 _USER_AGENT = "JobApplyAgent/0.2"
 
 
-async def require_public_https_url(url: str) -> str:
+@dataclass(frozen=True, slots=True)
+class PublicHttpsTarget:
+    """A validated origin and the exact public address used to connect."""
+
+    host: str
+    port: int
+    address: str
+
+
+async def require_public_https_url(url: str) -> PublicHttpsTarget:
     """Reject credentials, non-HTTPS schemes, and private/reserved DNS targets."""
 
     try:
         parsed = urlsplit(url)
         host = (parsed.hostname or "").rstrip(".").casefold()
+        port = parsed.port or 443
     except (ValueError, UnicodeError) as exc:
         raise DiscoveryFetchError("SOURCE_URL_UNSAFE") from exc
     if (
@@ -47,29 +58,51 @@ async def require_public_https_url(url: str) -> str:
         addresses = await asyncio.to_thread(
             socket.getaddrinfo,
             host,
-            parsed.port or 443,
+            port,
             type=socket.SOCK_STREAM,
         )
     except OSError as exc:
         raise DiscoveryFetchError("SOURCE_DNS_FAILED") from exc
-    resolved = {item[4][0].split("%", 1)[0] for item in addresses}
-    if not resolved or any(not ipaddress.ip_address(value).is_global for value in resolved):
+    try:
+        resolved = {ipaddress.ip_address(str(item[4][0]).split("%", 1)[0]) for item in addresses}
+    except ValueError as exc:
+        raise DiscoveryFetchError("SOURCE_ADDRESS_NOT_PUBLIC") from exc
+    if not resolved or any(not address.is_global for address in resolved):
         raise DiscoveryFetchError("SOURCE_ADDRESS_NOT_PUBLIC")
-    return host
+    # Prefer a public IPv4 address when available and pin every request in the
+    # scan to it. The transport still uses the original host for TLS SNI and
+    # the HTTP Host header, so a later DNS answer cannot redirect the socket.
+    selected = min(resolved, key=lambda address: (address.version != 4, int(address)))
+    return PublicHttpsTarget(host=host, port=port, address=str(selected))
+
+
+def _uses_target(url: str, target: PublicHttpsTarget) -> bool:
+    try:
+        parsed = urlsplit(url)
+        return bool(
+            parsed.scheme == "https"
+            and (parsed.hostname or "").rstrip(".").casefold() == target.host
+            and (parsed.port or 443) == target.port
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except (ValueError, UnicodeError):
+        return False
 
 
 async def _robots_allowed(
     client: DiscoveryHttpClient,
     *,
     url: str,
-    host: str,
+    target: PublicHttpsTarget,
 ) -> bool:
     parsed = urlsplit(url)
     robots_url = f"https://{parsed.netloc}/robots.txt"
     try:
         response = await client.get(
             robots_url,
-            allowed_hosts=frozenset({host}),
+            allowed_hosts=frozenset({target.host}),
+            connect_ip=target.address,
         )
     except DiscoveryFetchError as exc:
         if exc.status_code == 404 or exc.reason_code == "SOURCE_TENANT_NOT_FOUND":
@@ -168,8 +201,8 @@ async def fetch_generic_page(
     if entry.base_url is None:
         raise ValueError("SOURCE_BASE_URL_REQUIRED")
     base_url = str(entry.base_url)
-    host = await require_public_https_url(base_url)
-    if not await _robots_allowed(client, url=base_url, host=host):
+    target = await require_public_https_url(base_url)
+    if not await _robots_allowed(client, url=base_url, target=target):
         raise DiscoveryFetchError("ROBOTS_DISALLOWED")
     offset = int(cursor.cursor.get("offset") or 0)
     headers: dict[str, str] = {}
@@ -184,7 +217,8 @@ async def fetch_generic_page(
     response = await client.get(
         base_url,
         headers=headers,
-        allowed_hosts=frozenset({host}),
+        allowed_hosts=frozenset({target.host}),
+        connect_ip=target.address,
     )
     if offset > 0:
         current_etag = response.headers.get("ETag")
@@ -243,12 +277,15 @@ async def fetch_generic_page(
     postings: list[DiscoveredPosting] = []
     snapshot_keys: list[str] = []
     for url in selected:
-        parsed = urlsplit(url)
-        if (parsed.hostname or "").rstrip(".").casefold() != host:
+        if not _uses_target(url, target):
             continue
-        if not await _robots_allowed(client, url=url, host=host):
+        if not await _robots_allowed(client, url=url, target=target):
             continue
-        page = await client.get(url, allowed_hosts=frozenset({host}))
+        page = await client.get(
+            url,
+            allowed_hosts=frozenset({target.host}),
+            connect_ip=target.address,
+        )
         for job in parse_jsonld(page.text, url, require_explicit_url=True):
             snapshot_keys.append(_occurrence_key(job, entry))
             if _matches(job, intents):

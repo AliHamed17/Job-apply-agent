@@ -21,6 +21,7 @@ from db.models import (
     Base,
     DiscoveryCursorState,
     DiscoveryRun,
+    DiscoverySourceState,
     EmployerCatalogEntryRecord,
     Job,
     JobSourceOccurrenceRecord,
@@ -44,7 +45,7 @@ from discovery.generic_sources import fetch_generic_page, require_public_https_u
 from discovery.gmail_alerts import fetch_gmail_alert_page, parse_job_alert_message
 from discovery.http_client import DiscoveryFetchError, DiscoveryHttpClient
 from discovery.locks import reconcile_stale_discovery_runs, try_discovery_lock
-from discovery.mesh import _run_catalog_source
+from discovery.mesh import _run_catalog_source, synchronize_discovery_configuration
 from discovery.persistence import (
     ingest_discovered_postings,
     load_cursor,
@@ -282,6 +283,54 @@ def test_catalog_learns_tenant_scoped_identifiers(url, ats, tenant, region):
     assert tenant.casefold() not in source_key_for(entry).casefold()
 
 
+def test_catalog_sync_disables_removed_config_rows_but_preserves_learned_rows(tmp_path):
+    engine, factory = _factory(tmp_path, "catalog-removal.db")
+    db = factory()
+    catalog_path = tmp_path / "employer_catalog.yaml"
+    catalog_path.write_text(
+        """employers:
+  - company_name: Example
+    ats: greenhouse
+    tenant_key: example
+    base_url: https://boards.greenhouse.io/example
+""",
+        encoding="utf-8",
+    )
+    settings = SimpleNamespace(
+        employer_catalog_path=str(catalog_path),
+        public_discovery_enabled=False,
+        public_discovery_interval_h=6,
+        gmail_alert_enabled=False,
+        gmail_alert_label="JobApplyAgent",
+        discovery_poll_interval_seconds=600,
+    )
+    synchronize_discovery_configuration(db, settings)
+    configured = _entry("greenhouse")
+    learned = build_catalog_entry(
+        company_name="Learned",
+        ats="lever",
+        tenant_key="learned",
+        discovered_via="alert",
+    )
+    upsert_catalog_entries(db, (learned,))
+
+    catalog_path.write_text("employers: []\n", encoding="utf-8")
+    synchronize_discovery_configuration(db, settings)
+    rows = {row.catalog_key: row for row in db.query(EmployerCatalogEntryRecord).all()}
+    configured_source = (
+        db.query(DiscoverySourceState)
+        .filter(DiscoverySourceState.source_key == source_key_for(configured))
+        .one()
+    )
+
+    assert rows[configured.catalog_key].enabled is False
+    assert rows[learned.catalog_key].enabled is True
+    assert configured_source.enabled is False
+    assert configured_source.health_status == "disabled"
+    db.close()
+    engine.dispose()
+
+
 async def test_http_transport_honors_retry_after_then_recovers(monkeypatch):
     calls = 0
 
@@ -394,6 +443,33 @@ async def test_http_transport_rejects_allowlist_bypassing_redirects():
             allowed_hosts=frozenset({"api.lever.co"}),
         )
     await raw.aclose()
+
+
+async def test_http_transport_pins_validated_ip_and_preserves_origin_identity():
+    observed: dict[str, object] = {}
+
+    async def handler(request):
+        observed.update(
+            host=request.url.host,
+            host_header=request.headers.get("Host"),
+            sni_hostname=request.extensions.get("sni_hostname"),
+        )
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    raw, client = _mock_client(handler)
+    response = await client.get(
+        "https://careers.example.test/jobs",
+        allowed_hosts=frozenset({"careers.example.test"}),
+        connect_ip="93.184.216.34",
+    )
+    await raw.aclose()
+
+    assert response.json() == {"ok": True}
+    assert observed == {
+        "host": "93.184.216.34",
+        "host_header": "careers.example.test",
+        "sni_hostname": "careers.example.test",
+    }
 
 
 async def test_http_transport_rejects_oversized_payloads():
@@ -589,19 +665,31 @@ async def test_lever_cursor_paginates_without_losing_offset():
     assert len(first.snapshot_occurrence_keys) + len(second.snapshot_occurrence_keys) == 3
 
 
-async def test_changed_etag_restarts_paginated_snapshot_from_origin():
+@pytest.mark.parametrize(
+    ("ats", "fetch_page"),
+    [
+        ("lever", fetch_lever_page),
+        ("smartrecruiters", fetch_smartrecruiters_page),
+    ],
+)
+async def test_server_paginated_adapters_do_not_compare_page_validators(ats, fetch_page):
+    conditional_headers: list[str | None] = []
+
     async def handler(request):
+        conditional_headers.append(request.headers.get("If-None-Match"))
+        payload = [] if ats == "lever" else {"totalFound": 100, "content": []}
         return httpx.Response(
             200,
-            headers={"ETag": '"new"'},
-            json=[],
+            headers={"ETag": '"page-100"'},
+            json=payload,
             request=request,
         )
 
-    entry = _entry("lever")
-    cursor = _cursor(entry).model_copy(update={"cursor": {"offset": 100}, "etag": '"old"'})
+    entry = _entry(ats)
+    descriptor = descriptor_for(entry, cadence_seconds=600)
+    cursor = _cursor(entry).model_copy(update={"cursor": {"offset": 100}, "etag": '"page-0"'})
     raw, client = _mock_client(handler)
-    page = await fetch_lever_page(
+    page = await fetch_page(
         entry,
         cursor,
         client,
@@ -610,7 +698,11 @@ async def test_changed_etag_restarts_paginated_snapshot_from_origin():
     )
     await raw.aclose()
 
-    assert page.restart_snapshot is True
+    assert descriptor.semantic_version == "1.1.0"
+    assert descriptor.supports_conditional_requests is False
+    assert conditional_headers == [None]
+    assert page.restart_snapshot is False
+    assert page.complete_snapshot is True
     assert page.cursor.cursor == {"offset": 0}
     assert page.cursor.etag is None
 
@@ -788,6 +880,81 @@ Content-Type: text/html; charset=utf-8
     assert requested_details == ["newer", "older"]
 
 
+async def test_gmail_missing_raw_message_fails_page_before_checkpoint(tmp_path):
+    async def handler(request):
+        if request.url.path.endswith("/messages"):
+            return httpx.Response(
+                200,
+                json={"messages": [{"id": "missing-raw"}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"internalDate": "1784800000000"},
+            request=request,
+        )
+
+    raw = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with (
+        patch(
+            "discovery.gmail_alerts._load_oauth_state",
+            return_value={
+                "access_token": "fixture-local-token",
+                "expires_at": datetime.now(UTC).timestamp() + 3600,
+            },
+        ),
+        pytest.raises(ValueError, match="GMAIL_ALERT_MESSAGE_INVALID"),
+    ):
+        await fetch_gmail_alert_page(
+            oauth_path=tmp_path / "unused-local-oauth.json",
+            label="JobApplyAgent",
+            cursor=DiscoveryCursor(source_key="gmail_alert"),
+            intents=(),
+            max_messages=10,
+            client=raw,
+        )
+    await raw.aclose()
+
+
+async def test_gmail_refreshed_access_token_is_reused_in_process(tmp_path):
+    refresh_requests = 0
+
+    async def handler(request):
+        nonlocal refresh_requests
+        if request.url.host == "oauth2.googleapis.com":
+            refresh_requests += 1
+            return httpx.Response(
+                200,
+                json={"access_token": "refreshed-token", "expires_in": 3600},
+                request=request,
+            )
+        assert request.headers["Authorization"] == "Bearer refreshed-token"
+        return httpx.Response(200, json={"messages": []}, request=request)
+
+    oauth_state = {
+        "client_id": "local-client",
+        "client_secret": "local-secret",
+        "refresh_token": "local-refresh",
+    }
+    raw = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with (
+        patch("discovery.gmail_alerts._load_oauth_state", return_value=oauth_state),
+        patch("discovery.gmail_alerts._ACCESS_TOKEN_CACHE", {}),
+    ):
+        for _ in range(2):
+            await fetch_gmail_alert_page(
+                oauth_path=tmp_path / "unused-local-oauth.json",
+                label="JobApplyAgent",
+                cursor=DiscoveryCursor(source_key="gmail_alert"),
+                intents=(),
+                max_messages=10,
+                client=raw,
+            )
+    await raw.aclose()
+
+    assert refresh_requests == 1
+
+
 async def test_generic_source_rejects_loopback_dns(monkeypatch):
     monkeypatch.setattr(
         "socket.getaddrinfo",
@@ -810,9 +977,17 @@ async def test_generic_feed_pagination_does_not_send_first_page_validator(
     )
     sitemap_requests: list[str | None] = []
     job_page_requests = 0
+    transport_origins: list[tuple[str, str | None, object]] = []
 
     async def handler(request):
         nonlocal job_page_requests
+        transport_origins.append(
+            (
+                request.url.host,
+                request.headers.get("Host"),
+                request.extensions.get("sni_hostname"),
+            )
+        )
         if request.url.path == "/robots.txt":
             return httpx.Response(200, text="User-agent: *\nAllow: /", request=request)
         if request.url.path == "/jobs.xml":
@@ -876,6 +1051,9 @@ async def test_generic_feed_pagination_does_not_send_first_page_validator(
     # The third request starts a new scan with the same index ETag. It must
     # still reload the child page, where the revision changed.
     assert sitemap_requests == [None, None, None]
+    assert set(transport_origins) == {
+        ("93.184.216.34", "careers.example.test", "careers.example.test")
+    }
     assert first.complete_snapshot is False
     assert second.complete_snapshot is True
     assert len(first.postings) == len(second.postings) == len(third.postings) == 1
@@ -1175,6 +1353,56 @@ def test_posting_revision_rescores_mutable_job_and_closure_is_explicit(tmp_path)
     assert reopened.updated == 1
     assert db.query(JobSourceOccurrenceRecord).one().active is True
     assert db.query(Job).one().status == JobStatus.EXTRACTED
+    db.close()
+    engine.dispose()
+
+
+def test_new_source_reopens_closed_job_without_erasing_rich_content(tmp_path):
+    engine, factory = _factory(tmp_path, "cross-source-reopen.db")
+    db = factory()
+    rich = _posting(
+        source_key="lever:one",
+        occurrence_key="lever-rich",
+        url="https://jobs.example.test/reopened",
+        revision="rich",
+        description="Detailed Python and ML systems responsibilities.",
+    )
+    sparse = _posting(
+        source_key="gmail_alert",
+        occurrence_key="gmail-sparse",
+        url="https://jobs.example.test/reopened",
+        revision="sparse",
+        description="",
+    )
+    with patch("worker.tasks.score_job_task") as score:
+        ingest_discovered_postings(
+            db,
+            (rich,),
+            tasks_always_eager=False,
+            preparation_ready=False,
+        )
+        reconcile_source_snapshot(
+            db,
+            source_key="lever:one",
+            catalog_entry_id=None,
+            seen_occurrence_keys=set(),
+            observed_at=datetime.now(UTC),
+        )
+        score.reset_mock()
+        reopened = ingest_discovered_postings(
+            db,
+            (sparse,),
+            tasks_always_eager=False,
+            preparation_ready=False,
+        )
+
+    job = db.query(Job).one()
+    assert reopened.updated == 1
+    assert reopened.queued == 1
+    assert score.delay.call_count == 1
+    assert job.status == JobStatus.EXTRACTED
+    assert job.description.startswith("Detailed Python")
+    assert db.query(JobSourceOccurrenceRecord).count() == 2
     db.close()
     engine.dispose()
 
