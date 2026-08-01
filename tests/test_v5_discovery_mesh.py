@@ -47,6 +47,7 @@ from discovery.locks import reconcile_stale_discovery_runs, try_discovery_lock
 from discovery.mesh import _run_catalog_source
 from discovery.persistence import (
     ingest_discovered_postings,
+    load_cursor,
     mark_source_result,
     reconcile_source_snapshot,
     save_cursor,
@@ -808,8 +809,10 @@ async def test_generic_feed_pagination_does_not_send_first_page_validator(
         ],
     )
     sitemap_requests: list[str | None] = []
+    job_page_requests = 0
 
     async def handler(request):
+        nonlocal job_page_requests
         if request.url.path == "/robots.txt":
             return httpx.Response(200, text="User-agent: *\nAllow: /", request=request)
         if request.url.path == "/jobs.xml":
@@ -826,12 +829,13 @@ async def test_generic_feed_pagination_does_not_send_first_page_validator(
                 request=request,
             )
         job_id = request.url.path.rsplit("/", 1)[-1]
+        job_page_requests += 1
         return httpx.Response(
             200,
             text=(
                 '<script type="application/ld+json">'
                 '{"@context":"https://schema.org","@type":"JobPosting",'
-                f'"title":"Role 0","description":"Python Skill 0",'
+                f'"title":"Role 0","description":"Python Skill revision {job_page_requests}",'
                 f'"url":"https://careers.example.test/jobs/{job_id}",'
                 '"hiringOrganization":{"name":"Example"}}'
                 "</script>"
@@ -860,12 +864,22 @@ async def test_generic_feed_pagination_does_not_send_first_page_validator(
         (_intent(),),
         max_jobs=1,
     )
+    third = await fetch_generic_page(
+        entry,
+        second.cursor,
+        client,
+        (_intent(),),
+        max_jobs=1,
+    )
     await raw.aclose()
 
-    assert sitemap_requests == [None, None]
+    # The third request starts a new scan with the same index ETag. It must
+    # still reload the child page, where the revision changed.
+    assert sitemap_requests == [None, None, None]
     assert first.complete_snapshot is False
     assert second.complete_snapshot is True
-    assert len(first.postings) == len(second.postings) == 1
+    assert len(first.postings) == len(second.postings) == len(third.postings) == 1
+    assert third.postings[0].job.description == "Python Skill revision 3"
 
 
 def test_cross_source_dedup_preserves_both_occurrences(tmp_path):
@@ -1299,6 +1313,99 @@ async def test_resumed_paginated_scan_cannot_close_unseen_first_page(tmp_path):
 
     assert complete.closed == 1
     assert db.query(JobSourceOccurrenceRecord).one().active is False
+    db.close()
+    engine.dispose()
+
+
+async def test_bounded_runs_preserve_snapshot_watermark_until_reconciliation(tmp_path):
+    engine, factory = _factory(tmp_path, "bounded-snapshot.db")
+    db = factory()
+    entry = _entry("lever")
+    upsert_catalog_entries(db, (entry,))
+    catalog = db.query(EmployerCatalogEntryRecord).one()
+    descriptor = descriptor_for(entry, cadence_seconds=600)
+    source = upsert_source_state(db, descriptor)
+    postings = tuple(
+        _posting(
+            source_key=descriptor.source_key,
+            occurrence_key=f"bounded-{index}",
+            url=f"https://jobs.lever.co/example/bounded-{index}",
+            revision="r1",
+            catalog_key=entry.catalog_key,
+            external_posting_id=f"bounded-{index}",
+        )
+        for index in range(4)
+    )
+    with patch("worker.tasks.score_job_task"):
+        ingest_discovered_postings(
+            db,
+            postings,
+            tasks_always_eager=False,
+            preparation_ready=False,
+        )
+    old_seen_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+    for occurrence in db.query(JobSourceOccurrenceRecord).all():
+        occurrence.last_seen_at = old_seen_at
+    db.commit()
+
+    async def three_page_snapshot(_entry, cursor, *_args, **_kwargs):
+        offset = int(cursor.cursor.get("offset") or 0)
+        posting = postings[offset]
+        complete = offset == 2
+        return DiscoveryPage(
+            postings=(posting,),
+            snapshot_occurrence_keys=(posting.occurrence.occurrence_key,),
+            cursor=cursor.model_copy(update={"cursor": {"offset": 0 if complete else offset + 1}}),
+            complete_snapshot=complete,
+        )
+
+    settings = SimpleNamespace(
+        discovery_poll_interval_seconds=600,
+        public_discovery_timeout_s=2.0,
+        discovery_http_max_attempts=1,
+        discovery_http_max_response_bytes=1024 * 1024,
+        discovery_max_pages_per_run=2,
+        public_discovery_max_jobs=1,
+        tasks_always_eager=False,
+    )
+    with (
+        patch("discovery.mesh.fetch_catalog_page", new=three_page_snapshot),
+        patch("worker.tasks.score_job_task"),
+    ):
+        first = await _run_catalog_source(
+            db,
+            settings=settings,
+            source=source,
+            catalog=catalog,
+            intents=(_intent(),),
+            preparation_ready=False,
+        )
+        partial_cursor = load_cursor(db, descriptor, catalog=catalog)
+        second = await _run_catalog_source(
+            db,
+            settings=settings,
+            source=source,
+            catalog=catalog,
+            intents=(_intent(),),
+            preparation_ready=False,
+        )
+
+    assert first.closed == 0
+    assert partial_cursor.cursor["offset"] == 2
+    assert partial_cursor.cursor["snapshot_started_at"]
+    assert second.closed == 1
+    active_by_id = {
+        occurrence.external_posting_id: occurrence.active
+        for occurrence in db.query(JobSourceOccurrenceRecord).all()
+    }
+    assert active_by_id == {
+        "bounded-0": True,
+        "bounded-1": True,
+        "bounded-2": True,
+        "bounded-3": False,
+    }
+    final_cursor = load_cursor(db, descriptor, catalog=catalog)
+    assert final_cursor.cursor == {"offset": 0}
     db.close()
     engine.dispose()
 

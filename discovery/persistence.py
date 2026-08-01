@@ -369,15 +369,48 @@ def ingest_discovered_postings(
     )
 
 
+def mark_snapshot_occurrences_seen(
+    db,
+    *,
+    source_key: str,
+    catalog_entry_id: int | None,
+    occurrence_keys: tuple[str, ...],
+    observed_at: datetime,
+) -> int:
+    """Persist page-level presence, including postings filtered by search intent."""
+
+    unique_keys = tuple(dict.fromkeys(occurrence_keys))
+    if not unique_keys:
+        return 0
+    query = db.query(JobSourceOccurrenceRecord).filter(
+        JobSourceOccurrenceRecord.source_key == source_key,
+        JobSourceOccurrenceRecord.occurrence_key.in_(unique_keys),
+    )
+    if catalog_entry_id is not None:
+        query = query.filter(JobSourceOccurrenceRecord.catalog_entry_id == catalog_entry_id)
+    seen_at = observed_at.astimezone(UTC).replace(tzinfo=None)
+    rows = query.all()
+    for row in rows:
+        row.last_seen_at = max(row.last_seen_at, seen_at)
+        row.active = True
+        row.closed_at = None
+    db.commit()
+    return len(rows)
+
+
 def reconcile_source_snapshot(
     db,
     *,
     source_key: str,
     catalog_entry_id: int | None,
-    seen_occurrence_keys: set[str],
+    seen_occurrence_keys: set[str] | None = None,
+    snapshot_started_at: datetime | None = None,
     observed_at: datetime,
 ) -> int:
     """Close tracked occurrences absent from one complete source snapshot."""
+
+    if (seen_occurrence_keys is None) == (snapshot_started_at is None):
+        raise ValueError("provide exactly one snapshot reconciliation strategy")
 
     query = db.query(JobSourceOccurrenceRecord).filter(
         JobSourceOccurrenceRecord.source_key == source_key,
@@ -385,12 +418,15 @@ def reconcile_source_snapshot(
     )
     if catalog_entry_id is not None:
         query = query.filter(JobSourceOccurrenceRecord.catalog_entry_id == catalog_entry_id)
+    if snapshot_started_at is not None:
+        started_at = snapshot_started_at.astimezone(UTC).replace(tzinfo=None)
+        query = query.filter(JobSourceOccurrenceRecord.last_seen_at < started_at)
     rows = query.all()
     closed = 0
     closed_at = observed_at.astimezone(UTC).replace(tzinfo=None)
     affected_job_ids: set[int] = set()
     for row in rows:
-        if row.occurrence_key in seen_occurrence_keys:
+        if seen_occurrence_keys is not None and row.occurrence_key in seen_occurrence_keys:
             continue
         row.active = False
         row.closed_at = closed_at

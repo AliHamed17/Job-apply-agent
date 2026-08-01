@@ -14,6 +14,7 @@ from discovery.catalog import (
 )
 from discovery.contracts import (
     DiscoveredPosting,
+    DiscoveryCursor,
     DiscoveryPage,
     DiscoverySourceDescriptor,
     EmployerCatalogEntry,
@@ -30,6 +31,7 @@ from discovery.persistence import (
     finish_discovery_run,
     ingest_discovered_postings,
     load_cursor,
+    mark_snapshot_occurrences_seen,
     mark_source_result,
     reconcile_source_snapshot,
     save_cursor,
@@ -43,6 +45,9 @@ from ingestion.url_utils import normalize_url, url_hash
 from jobs.models import JobData
 
 logger = structlog.get_logger(__name__)
+
+_SNAPSHOT_STARTED_KEY = "snapshot_started_at"
+_SNAPSHOT_PENDING_KEY = "snapshot_pending_reconciliation"
 
 LINKEDIN_DESCRIPTOR = DiscoverySourceDescriptor(
     source_key="linkedin_partner",
@@ -198,6 +203,38 @@ def _source_due(source: DiscoverySourceState, *, now: datetime, force: bool) -> 
     )
 
 
+def _snapshot_started_at(cursor: DiscoveryCursor) -> datetime | None:
+    raw = str(cursor.cursor.get(_SNAPSHOT_STARTED_KEY) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _with_snapshot_state(
+    cursor: DiscoveryCursor,
+    *,
+    started_at: datetime,
+    pending_reconciliation: bool,
+) -> DiscoveryCursor:
+    values = dict(cursor.cursor)
+    values[_SNAPSHOT_STARTED_KEY] = started_at.astimezone(UTC).isoformat()
+    values[_SNAPSHOT_PENDING_KEY] = pending_reconciliation
+    return cursor.model_copy(update={"cursor": values})
+
+
+def _without_snapshot_state(cursor: DiscoveryCursor) -> DiscoveryCursor:
+    values = dict(cursor.cursor)
+    values.pop(_SNAPSHOT_STARTED_KEY, None)
+    values.pop(_SNAPSHOT_PENDING_KEY, None)
+    return cursor.model_copy(update={"cursor": values})
+
+
 async def _run_catalog_source(
     db,
     *,
@@ -217,9 +254,22 @@ async def _run_catalog_source(
     updated = 0
     duplicates = 0
     closed = 0
-    seen_keys: set[str] = set()
     complete = False
-    snapshot_started_at_origin = int(cursor.cursor.get("offset") or 0) == 0
+    snapshot_started = _snapshot_started_at(cursor)
+    if bool(cursor.cursor.get(_SNAPSHOT_PENDING_KEY)):
+        if snapshot_started is not None:
+            closed += reconcile_source_snapshot(
+                db,
+                source_key=source.source_key,
+                catalog_entry_id=int(catalog.id),
+                snapshot_started_at=snapshot_started,
+                observed_at=datetime.now(UTC),
+            )
+        cursor = _without_snapshot_state(cursor)
+        save_cursor(db, cursor, catalog=catalog)
+        snapshot_started = None
+    if int(cursor.cursor.get("offset") or 0) == 0 and snapshot_started is None:
+        snapshot_started = datetime.now(UTC)
     async with DiscoveryHttpClient(
         timeout_seconds=settings.public_discovery_timeout_s,
         max_attempts=settings.discovery_http_max_attempts,
@@ -243,10 +293,13 @@ async def _run_catalog_source(
                     max_jobs=settings.public_discovery_max_jobs,
                 )
             if page.restart_snapshot:
-                seen_keys.clear()
-                cursor = page.cursor
+                snapshot_started = datetime.now(UTC)
+                cursor = _with_snapshot_state(
+                    page.cursor,
+                    started_at=snapshot_started,
+                    pending_reconciliation=False,
+                )
                 save_cursor(db, cursor, catalog=catalog)
-                snapshot_started_at_origin = True
                 continue
             stats = ingest_discovered_postings(
                 db,
@@ -257,20 +310,40 @@ async def _run_catalog_source(
             inserted += stats.inserted
             updated += stats.updated
             duplicates += stats.duplicate
-            seen_keys.update(page.snapshot_occurrence_keys)
-            cursor = page.cursor
+            mark_snapshot_occurrences_seen(
+                db,
+                source_key=source.source_key,
+                catalog_entry_id=int(catalog.id),
+                occurrence_keys=page.snapshot_occurrence_keys,
+                observed_at=datetime.now(UTC),
+            )
+            if page.not_modified:
+                cursor = _without_snapshot_state(page.cursor)
+            elif snapshot_started is not None:
+                cursor = _with_snapshot_state(
+                    page.cursor,
+                    started_at=snapshot_started,
+                    pending_reconciliation=page.complete_snapshot,
+                )
+            else:
+                # A legacy resumed cursor has no trustworthy origin watermark.
+                # Finish it without reconciliation; the next origin scan will
+                # create a durable snapshot watermark.
+                cursor = _without_snapshot_state(page.cursor)
             save_cursor(db, cursor, catalog=catalog)
             complete = page.complete_snapshot
             if page.not_modified or complete or not descriptor.supports_cursor:
                 break
-    if complete and snapshot_started_at_origin and not page.not_modified:
-        closed = reconcile_source_snapshot(
+    if complete and snapshot_started is not None and not page.not_modified:
+        closed += reconcile_source_snapshot(
             db,
             source_key=source.source_key,
             catalog_entry_id=int(catalog.id),
-            seen_occurrence_keys=seen_keys,
+            snapshot_started_at=snapshot_started,
             observed_at=datetime.now(UTC),
         )
+        cursor = _without_snapshot_state(cursor)
+        save_cursor(db, cursor, catalog=catalog)
     return DiscoveryIngestStats(
         inserted=inserted,
         updated=updated,

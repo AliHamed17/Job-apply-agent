@@ -173,9 +173,13 @@ async def fetch_generic_page(
         raise DiscoveryFetchError("ROBOTS_DISALLOWED")
     offset = int(cursor.cursor.get("offset") or 0)
     headers: dict[str, str] = {}
-    if cursor.etag and offset == 0:
+    # A generic feed validator covers only the URL index, not the linked job
+    # pages. Revalidate the index unconditionally so child revisions remain
+    # observable. A single-page JSON-LD document can safely use validators.
+    use_document_validator = entry.ats == "generic_jsonld" and offset == 0
+    if cursor.etag and use_document_validator:
         headers["If-None-Match"] = cursor.etag
-    if cursor.last_modified and offset == 0:
+    if cursor.last_modified and use_document_validator:
         headers["If-Modified-Since"] = cursor.last_modified
     response = await client.get(
         base_url,
@@ -210,6 +214,8 @@ async def fetch_generic_page(
         last_seen_posting_at=datetime.now(UTC),
     )
     if response.status_code == 304:
+        if entry.ats != "generic_jsonld":
+            raise DiscoveryFetchError("SOURCE_FEED_REVALIDATION_REQUIRED", status_code=304)
         return DiscoveryPage(cursor=next_cursor, complete_snapshot=True, not_modified=True)
 
     observed = datetime.now(UTC)

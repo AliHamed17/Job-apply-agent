@@ -31,7 +31,9 @@ Each enabled source uses HTTPS, one concurrent request per host, bounded
 pagination, conditional requests where supported, exponential backoff, and
 `Retry-After`. Redirects are rejected so a source cannot bypass its host
 allowlist. Generic sources additionally require public DNS and an allowed
-robots policy.
+robots policy. Generic feed indexes are reloaded on every scan because an
+unchanged sitemap or feed validator cannot prove that linked job pages are
+unchanged.
 
 ## Gmail alert onboarding
 
@@ -74,8 +76,10 @@ exists. Later changes require explicit activation.
 The scheduler wakes every minute. PostgreSQL advisory locking prevents
 overlapping mesh runs. A run abandoned for 30 minutes is marked
 `STALE_RUN_RECOVERED`; durable cursors resume from the last committed page.
-Closure reconciliation happens only after a complete snapshot that started at
-the first page, preventing a resumed partial scan from falsely closing jobs.
+An origin watermark remains in the durable cursor across bounded worker runs.
+Closure reconciliation occurs only when every page in that exact snapshot has
+been observed, preventing both false closure after a partial scan and missed
+closure for sources larger than one run's page budget.
 
 Source occurrences are preserved even when multiple sources resolve to the
 same normalized URL. Distinct posting IDs with distinct URLs remain distinct,
