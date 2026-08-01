@@ -19,6 +19,8 @@ from sqlalchemy import func
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
 
+from core.automation_authority_fence import lock_automation_authority_fence
+
 logger = structlog.get_logger(__name__)
 
 _PROFILE_WRITE_LOCK = threading.RLock()
@@ -72,6 +74,7 @@ def profile_write_transaction(db=None):
 
     with _PROFILE_WRITE_LOCK:
         if db is not None:
+            lock_automation_authority_fence(db)
             _acquire_database_write_lock(db)
         yield
 
@@ -83,6 +86,7 @@ def _persist_version(db, profile_yaml: str, yaml_path: Path) -> int:
 
     for attempt in range(_VERSION_WRITE_RETRIES):
         try:
+            lock_automation_authority_fence(db)
             _acquire_database_write_lock(db)
             # Keep the authoritative file swap inside the same serialized
             # section as sequence allocation. A uniqueness rollback releases
@@ -117,6 +121,7 @@ def _restore_authoritative_file(
 
     db.rollback()
     try:
+        lock_automation_authority_fence(db)
         _acquire_database_write_lock(db)
         latest = db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
         if latest is not None:

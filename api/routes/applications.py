@@ -41,6 +41,7 @@ from core.application_state import (
     prepared_applications_query,
     reviewable_applications_query,
 )
+from core.automation_authority_fence import lock_automation_authority_fence
 from core.automation_readiness import current_automation_readiness
 from core.config import get_settings
 from core.control_plane_review_permits import (
@@ -1350,6 +1351,9 @@ async def confirm_application_answer(
     db: Session = Depends(get_db),
 ):
     """Confirm one exact observed answer and clone the immutable review plan."""
+    # Reusable-answer revisions participate in final authority. Take the shared
+    # fence before the application row so every writer follows authority -> app.
+    lock_automation_authority_fence(db)
     locked = _lock_mutation_or_http(
         db,
         application_id=app_id,

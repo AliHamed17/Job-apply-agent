@@ -53,6 +53,18 @@ def test_signed_autopilot_migration_round_trip_preserves_existing_history(tmp_pa
                 "VALUES (1, 'draft', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
             )
         )
+        connection.execute(
+            text(
+                "INSERT INTO browser_qualification_runs "
+                "(selector_version, terminal_reason, qualified, trace_json, adapter_name, "
+                "adapter_version, qualification_tier, form_fingerprint, fixture_digest, "
+                "created_at) VALUES "
+                "('legacy-live-v1', 'LIVE_CANARY_CONFIRMED', true, '[]', 'greenhouse', "
+                "'1.0.0', 'live_canary_qualified', :fingerprint, :fixture_digest, "
+                "CURRENT_TIMESTAMP)"
+            ),
+            {"fingerprint": "f" * 64, "fixture_digest": "e" * 64},
+        )
     engine.dispose()
 
     _alembic(database, "upgrade", "head")
@@ -79,6 +91,21 @@ def test_signed_autopilot_migration_round_trip_preserves_existing_history(tmp_pa
     assert "form_contract_digest" in qualification_columns
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM applications")) == 1
+        legacy_canary = (
+            connection.execute(
+                text(
+                    "SELECT qualification_tier, qualified, terminal_reason, "
+                    "form_contract_digest FROM browser_qualification_runs "
+                    "WHERE selector_version = 'legacy-live-v1'"
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert legacy_canary["qualification_tier"] == "dry_run_qualified"
+        assert bool(legacy_canary["qualified"]) is True
+        assert legacy_canary["terminal_reason"] == "LIVE_CANARY_CONFIRMED"
+        assert legacy_canary["form_contract_digest"] is None
         differences = compare_metadata(
             MigrationContext.configure(
                 connection,

@@ -39,6 +39,7 @@ from core.automation_policy_service import (
     policy_usage_status,
     revoke_auto_submit_policy,
     set_automation_kill_switch,
+    validate_automation_inspection_candidate,
     validate_current_automation_decision,
 )
 from core.config import Settings
@@ -562,19 +563,41 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
     monkeypatch.setenv("AUTOMATION_POLICY_SIGNING_KEY_PATH", str(key_path))
     settings = _settings()
     monkeypatch.setattr(automation_route, "get_settings", lambda: settings)
-    monkeypatch.setattr(
-        policy_service,
-        "_private_bindings",
-        lambda *_args, **_kwargs: {
+    activation_calls: list[str] = []
+
+    def private_bindings(*_args, **_kwargs):
+        activation_calls.append("bindings")
+        return {
             "profile_version": 1,
             "role_families": ("cv-ai",),
             "routing_config_digest": _ROUTING_DIGEST,
             "cv_manifest_digest": _MANIFEST_DIGEST,
             "fit_qualification_digest": _QUALIFICATION_DIGEST,
             "confirmed_answer_revision": "e" * 64,
-        },
+        }
+
+    monkeypatch.setattr(
+        policy_service,
+        "_private_bindings",
+        private_bindings,
+    )
+    monkeypatch.setattr(
+        policy_service,
+        "lock_automation_authority_fence",
+        lambda _db: activation_calls.append("authority"),
     )
     monkeypatch.setattr(policy_service, "_scope_has_live_canary", lambda *_args: True)
+    seed_db = factory()
+    seed_db.add(
+        UserProfileVersion(
+            profile_yaml=(
+                "personal:\n  name: Evidence Candidate\n  email: candidate@example.test\n"
+            ),
+            version=1,
+        )
+    )
+    seed_db.commit()
+    seed_db.close()
     base_descriptor = adapter_for_url("https://boards.greenhouse.io/acme/jobs/123")
     assert base_descriptor is not None
     scope = QualifiedFormContractV1(
@@ -595,6 +618,7 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
             qualified_form_contracts=(scope,),
             now=_NOW,
         )
+    assert activation_calls[:2] == ["authority", "bindings"]
     policy_db.rollback()
     policy_db.close()
     descriptor = replace(
@@ -686,6 +710,76 @@ def test_exact_qualified_application_receives_a_short_lived_decision(tmp_path, m
         assert decision.allowed is True
         assert decision.selected_cv_hash == _CV_HASH
         assert db.get(Application, scenario.application_id).prepared_revision == 1
+    finally:
+        db.close()
+
+
+def test_new_profile_version_invalidates_inspection_reservation_and_status(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    try:
+        reserved = evaluate_auto_submit_policy(
+            db,
+            application_id=scenario.application_id,
+            form_plan_id=scenario.plan_id,
+            now=_NOW,
+        )
+        assert reserved.allowed is True
+        db.commit()
+
+        db.add(
+            UserProfileVersion(
+                profile_yaml=(
+                    "personal:\n  name: Updated Candidate\n  email: updated@example.test\n"
+                ),
+                version=2,
+            )
+        )
+        db.commit()
+
+        with pytest.raises(AutomationPolicyError, match="PROFILE_VERSION_CHANGED"):
+            validate_automation_inspection_candidate(
+                db,
+                application_id=scenario.application_id,
+                now=_NOW + timedelta(minutes=1),
+            )
+        with pytest.raises(AutomationPolicyError, match="PROFILE_VERSION_CHANGED"):
+            validate_current_automation_decision(
+                db,
+                decision_record=reserved,
+                now=_NOW + timedelta(minutes=1),
+                lock=True,
+            )
+        status = policy_usage_status(db, now=_NOW + timedelta(minutes=1))
+        assert status["active"] is False
+        assert status["reason_code"] == "PROFILE_VERSION_CHANGED"
+    finally:
+        db.close()
+
+
+def test_stale_profile_policy_cannot_reserve_new_authority(tmp_path, monkeypatch) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    try:
+        db.add(
+            UserProfileVersion(
+                profile_yaml="personal:\n  name: Updated Candidate\n",
+                version=2,
+            )
+        )
+        db.commit()
+
+        decision = evaluate_auto_submit_policy(
+            db,
+            application_id=scenario.application_id,
+            form_plan_id=scenario.plan_id,
+            now=_NOW,
+        )
+        assert decision.allowed is False
+        assert "PROFILE_VERSION_CHANGED" in json.loads(decision.reason_codes_json)
     finally:
         db.close()
 

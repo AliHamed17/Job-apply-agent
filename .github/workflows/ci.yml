@@ -165,6 +165,7 @@ jobs:
       - name: Typed v5 signed autopilot authority
         run: >
           mypy --follow-imports=skip --ignore-missing-imports
+          core/automation_authority_fence.py
           core/automation_policy.py core/automation_policy_keys.py
           core/automation_policy_service.py core/submission_service.py
           core/submit_permits.py api/routes/automation.py
@@ -236,7 +237,8 @@ jobs:
           api/routes/cv_routing.py
           api/routes/dashboard.py api/routes/discovery.py api/routes/operations.py
           api/routes/realign.py api/routes/runtime.py
-          core/application_audit.py core/automation_policy.py
+          core/application_audit.py core/automation_authority_fence.py
+          core/automation_policy.py
           core/automation_policy_keys.py core/automation_policy_service.py
           core/config.py core/form_plan_evidence.py
           core/form_planning.py core/form_plan_persistence.py

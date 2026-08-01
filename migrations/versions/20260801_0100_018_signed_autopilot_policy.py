@@ -266,6 +266,20 @@ def upgrade() -> None:
 
     with op.batch_alter_table("browser_qualification_runs") as batch_op:
         batch_op.add_column(sa.Column("form_contract_digest", sa.String(64), nullable=True))
+
+    # Pre-v5 live canaries were not qualified against a semantic form-contract
+    # digest. Preserve their observed evidence, but remove live authority rather
+    # than inventing a digest or allowing the new constraint to reject upgrade.
+    op.execute(
+        sa.text(
+            "UPDATE browser_qualification_runs "
+            "SET qualification_tier = 'dry_run_qualified' "
+            "WHERE qualification_tier = 'live_canary_qualified' "
+            "AND form_contract_digest IS NULL"
+        )
+    )
+
+    with op.batch_alter_table("browser_qualification_runs") as batch_op:
         batch_op.create_check_constraint(
             "ck_browser_qualification_live_contract",
             "qualification_tier <> 'live_canary_qualified' OR form_contract_digest IS NOT NULL",

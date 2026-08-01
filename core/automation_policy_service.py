@@ -16,11 +16,15 @@ from typing import Any, TypedDict
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, text
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from core.application_revision import mark_application_prepared
+from core.automation_authority_fence import (
+    AUTOMATION_AUTHORITY_FENCE_ID,
+    lock_automation_authority_fence,
+)
 from core.automation_policy import (
     AutomationGeography,
     AutoSubmitDecisionV1,
@@ -62,7 +66,7 @@ from submitters.platforms import adapter_for_platform, adapter_for_url
 _ZERO_DIGEST = "0" * 64
 _REASON_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _JERUSALEM = ZoneInfo("Asia/Jerusalem")
-_AUTOMATION_AUTHORITY_FENCE_ID = 5_354_025_376_604_503_901
+_AUTOMATION_AUTHORITY_FENCE_ID = AUTOMATION_AUTHORITY_FENCE_ID
 
 
 class AutomationPolicyError(ValueError):
@@ -83,16 +87,6 @@ class PrivatePolicyBindings(TypedDict):
     cv_manifest_digest: str
     fit_qualification_digest: str
     confirmed_answer_revision: str
-
-
-def lock_automation_authority_fence(db: Session) -> None:
-    """Serialize policy/kill mutations with irreversible-boundary admission."""
-
-    if db.get_bind().dialect.name == "postgresql":
-        db.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_id)"),
-            {"lock_id": _AUTOMATION_AUTHORITY_FENCE_ID},
-        )
 
 
 def _aware(value: datetime) -> datetime:
@@ -369,6 +363,7 @@ def activate_auto_submit_policy(
         identity = load_automation_policy_signing_identity(signing_key_path)
     except AutomationPolicyKeyError as exc:
         raise AutomationPolicyError(exc.reason_code) from exc
+    lock_automation_authority_fence(db)
     bindings = _private_bindings(db, settings)
     configured_roles = set(bindings["role_families"])
     requested_roles = tuple(dict.fromkeys(role_families))
@@ -388,7 +383,6 @@ def activate_auto_submit_policy(
     if any(not _scope_has_live_canary(db, scope) for scope in scopes):
         raise AutomationPolicyError("AUTOMATION_POLICY_FORM_SCOPE_NOT_QUALIFIED")
 
-    lock_automation_authority_fence(db)
     current = _active_policy_record(db, lock=True)
     next_revision = (
         int(
@@ -606,6 +600,8 @@ def validate_automation_inspection_candidate(
         raise AutomationPolicyError("AUTOMATION_POLICY_NOT_ACTIVE")
     _record, signed = active
     policy = signed.policy
+    if latest_profile_version(db) != policy.profile_version:
+        raise AutomationPolicyError("PROFILE_VERSION_CHANGED")
     if kill_switch_active(db):
         raise AutomationPolicyError("KILL_SWITCH_ACTIVE")
     active_hours, _deadline = _active_hours_deadline(timestamp)
@@ -834,6 +830,7 @@ def evaluate_auto_submit_policy(
         raise AutomationPolicyError("AUTOMATION_POLICY_NOT_ACTIVE")
     policy_record, signed = active
     policy = signed.policy
+    current_profile_version = latest_profile_version(db)
     existing_allowed = (
         db.query(ApplicationPolicyDecision)
         .filter(
@@ -877,7 +874,8 @@ def evaluate_auto_submit_policy(
     if fit.job_digest != job_content_digest(job):
         reasons.append("JOB_CHANGED")
     if (
-        fit.profile_version != policy.profile_version
+        current_profile_version != policy.profile_version
+        or fit.profile_version != policy.profile_version
         or application.profile_version != policy.profile_version
         or plan.profile_version != policy.profile_version
     ):
@@ -1032,6 +1030,8 @@ def validate_current_automation_decision(
         raise AutomationPolicyError("AUTOMATION_POLICY_NOT_ACTIVE")
     policy_record, signed = active
     policy = signed.policy
+    if latest_profile_version(db) != policy.profile_version:
+        raise AutomationPolicyError("PROFILE_VERSION_CHANGED")
     if (
         policy_record.id != decision_record.policy_revision_id
         or policy.payload_digest != decision.policy_digest
@@ -1100,6 +1100,7 @@ def policy_usage_status(
     signing_key_path: str | Path | None = None,
 ) -> dict[str, Any]:
     timestamp = _aware(now or datetime.now(UTC))
+    lock_automation_authority_fence(db)
     kill = latest_kill_switch_event(db)
     record = _active_policy_record(db)
     if record is None:
@@ -1117,6 +1118,7 @@ def policy_usage_status(
             "kill_switch_active": bool(kill and kill.active),
         }
     policy = signed.policy
+    profile_changed = latest_profile_version(db) != policy.profile_version
     daily, hourly, _company = _usage_counts(
         db,
         company_digest=_ZERO_DIGEST,
@@ -1124,12 +1126,14 @@ def policy_usage_status(
     )
     expired = policy.expires_at <= timestamp
     return {
-        "active": not expired and not bool(kill and kill.active),
+        "active": not expired and not profile_changed and not bool(kill and kill.active),
         "reason_code": (
             "KILL_SWITCH_ACTIVE"
             if kill and kill.active
             else "AUTOMATION_POLICY_EXPIRED"
             if expired
+            else "PROFILE_VERSION_CHANGED"
+            if profile_changed
             else None
         ),
         "policy_id": str(policy.policy_id),
