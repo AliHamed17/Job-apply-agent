@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import threading
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,7 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from core.application_mutations import mark_job_terminally_skipped
 from db.models import (
     Base,
     DiscoveryCursorState,
@@ -39,7 +41,7 @@ from discovery.contracts import (
     stable_digest,
 )
 from discovery.generic_sources import fetch_generic_page, require_public_https_url
-from discovery.gmail_alerts import parse_job_alert_message
+from discovery.gmail_alerts import fetch_gmail_alert_page, parse_job_alert_message
 from discovery.http_client import DiscoveryFetchError, DiscoveryHttpClient
 from discovery.locks import reconcile_stale_discovery_runs, try_discovery_lock
 from discovery.mesh import _run_catalog_source
@@ -408,6 +410,33 @@ async def test_http_transport_rejects_oversized_payloads():
     await raw.aclose()
 
 
+async def test_http_transport_stops_streaming_at_payload_limit():
+    class ChunkedStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.yielded = 0
+
+        async def __aiter__(self):
+            for _ in range(4):
+                self.yielded += 1
+                yield b"x" * 700
+
+    stream = ChunkedStream()
+
+    async def handler(request):
+        return httpx.Response(200, stream=stream, request=request)
+
+    raw = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DiscoveryHttpClient(
+        timeout_seconds=2,
+        max_response_bytes=1024,
+        client=raw,
+    )
+    with pytest.raises(DiscoveryFetchError, match="SOURCE_PAYLOAD_TOO_LARGE"):
+        await client.get("https://api.lever.co/v0/postings/example")
+    await raw.aclose()
+    assert stream.yielded == 2
+
+
 async def test_greenhouse_conditional_snapshot_tracks_unmatched_ids():
     async def handler(request):
         assert request.headers["if-none-match"] == '"old"'
@@ -702,6 +731,60 @@ def test_sanitized_job_alert_fixtures_are_parsed(fixture_name, provider):
     assert len(postings) == 1
     assert postings[0].job.keywords == [provider]
     assert "candidate@example.test" not in postings[0].model_dump_json()
+
+
+async def test_gmail_detail_failure_does_not_advance_page_checkpoint(tmp_path):
+    encoded = base64.urlsafe_b64encode(
+        b"""From: alerts@example.test
+To: candidate@example.test
+Subject: Jobs
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="https://jobs.lever.co/example/newer">Machine Learning Engineer</a>
+"""
+    ).decode()
+    requested_details: list[str] = []
+
+    async def handler(request):
+        if request.url.path.endswith("/messages"):
+            return httpx.Response(
+                200,
+                json={"messages": [{"id": "newer"}, {"id": "older"}]},
+                request=request,
+            )
+        message_id = request.url.path.rsplit("/", 1)[-1]
+        requested_details.append(message_id)
+        if message_id == "newer":
+            return httpx.Response(
+                200,
+                json={"internalDate": "1784800000000", "raw": encoded},
+                request=request,
+            )
+        return httpx.Response(503, request=request)
+
+    raw = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with (
+        patch(
+            "discovery.gmail_alerts._load_oauth_state",
+            return_value={
+                "access_token": "fixture-local-token",
+                "expires_at": datetime.now(UTC).timestamp() + 3600,
+            },
+        ),
+        pytest.raises(ValueError, match="GMAIL_ALERT_MESSAGE_FETCH_FAILED"),
+    ):
+        await fetch_gmail_alert_page(
+            oauth_path=tmp_path / "unused-local-oauth.json",
+            label="JobApplyAgent",
+            cursor=DiscoveryCursor(source_key="gmail_alert"),
+            intents=(),
+            max_messages=10,
+            client=raw,
+        )
+    await raw.aclose()
+
+    assert requested_details == ["newer", "older"]
 
 
 async def test_generic_source_rejects_loopback_dns(monkeypatch):
@@ -1066,6 +1149,65 @@ def test_posting_revision_rescores_mutable_job_and_closure_is_explicit(tmp_path)
     assert closed == 1
     assert db.query(JobSourceOccurrenceRecord).one().active is False
     assert db.query(Job).one().status == JobStatus.SKIPPED
+    assert db.query(Job).one().terminal_skip_at is None
+
+    with patch("worker.tasks.score_job_task"):
+        reopened = ingest_discovered_postings(
+            db,
+            (changed,),
+            tasks_always_eager=False,
+            preparation_ready=False,
+        )
+    assert reopened.updated == 1
+    assert db.query(JobSourceOccurrenceRecord).one().active is True
+    assert db.query(Job).one().status == JobStatus.EXTRACTED
+    db.close()
+    engine.dispose()
+
+
+def test_operator_terminal_skip_survives_source_revision(tmp_path):
+    engine, factory = _factory(tmp_path, "terminal-skip.db")
+    db = factory()
+    original = _posting(
+        source_key="lever:one",
+        occurrence_key="lever-terminal",
+        url="https://jobs.example.test/terminal",
+        revision="r1",
+        description="Original",
+    )
+    changed = _posting(
+        source_key="lever:one",
+        occurrence_key="lever-terminal",
+        url="https://jobs.example.test/terminal",
+        revision="r2",
+        description="Changed",
+    )
+    with patch("worker.tasks.score_job_task") as score:
+        ingest_discovered_postings(
+            db,
+            (original,),
+            tasks_always_eager=False,
+            preparation_ready=False,
+        )
+        score.reset_mock()
+        job = db.query(Job).one()
+        mark_job_terminally_skipped(job)
+        db.commit()
+
+        stats = ingest_discovered_postings(
+            db,
+            (changed,),
+            tasks_always_eager=False,
+            preparation_ready=False,
+        )
+
+    job = db.query(Job).one()
+    assert stats.updated == 0
+    assert stats.queued == 0
+    assert score.delay.call_count == 0
+    assert job.status == JobStatus.SKIPPED
+    assert job.terminal_skip_at is not None
+    assert job.description == "Original"
     db.close()
     engine.dispose()
 

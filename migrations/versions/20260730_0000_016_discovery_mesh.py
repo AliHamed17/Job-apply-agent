@@ -43,6 +43,17 @@ def _datetime(value: object) -> datetime | None:
 
 
 def upgrade() -> None:
+    with op.batch_alter_table("jobs") as batch_op:
+        batch_op.add_column(sa.Column("terminal_skip_at", sa.DateTime(), nullable=True))
+    # Existing skipped rows have ambiguous provenance. Preserve them as
+    # terminal rather than allowing the new discovery mesh to revive them.
+    op.execute(
+        sa.text(
+            "UPDATE jobs SET terminal_skip_at = COALESCE(created_at, CURRENT_TIMESTAMP) "
+            "WHERE status = 'skipped'"
+        )
+    )
+
     with op.batch_alter_table("discovery_runs") as batch_op:
         batch_op.add_column(sa.Column("updated", sa.Integer(), nullable=False, server_default="0"))
         batch_op.add_column(
@@ -348,3 +359,5 @@ def downgrade() -> None:
         batch_op.drop_column("closed")
         batch_op.drop_column("duplicates")
         batch_op.drop_column("updated")
+    with op.batch_alter_table("jobs") as batch_op:
+        batch_op.drop_column("terminal_skip_at")

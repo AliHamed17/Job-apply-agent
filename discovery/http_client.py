@@ -72,6 +72,63 @@ class DiscoveryHttpClient:
         if self._owns_client:
             await self._client.aclose()
 
+    async def _send_bounded(
+        self,
+        url: str,
+        *,
+        params: dict[str, object] | None,
+        headers: dict[str, str],
+    ) -> httpx.Response:
+        """Stream one response and retain at most the configured byte budget."""
+
+        request = self._client.build_request("GET", url, params=params, headers=headers)
+        response = await self._client.send(
+            request,
+            stream=True,
+            # Discovery endpoints are canonical and fixed-host. Following a
+            # redirect would bypass the host allowlist and DNS checks.
+            follow_redirects=False,
+        )
+        try:
+            if response.status_code == 304 or not 200 <= response.status_code < 300:
+                return httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=b"",
+                    request=response.request,
+                )
+
+            content_length = response.headers.get("Content-Length")
+            if content_length:
+                try:
+                    declared_size = int(content_length)
+                except ValueError:
+                    declared_size = 0
+                if declared_size > self._max_response_bytes:
+                    raise DiscoveryFetchError("SOURCE_PAYLOAD_TOO_LARGE")
+
+            chunks: list[bytes] = []
+            received = 0
+            async for chunk in response.aiter_bytes():
+                received += len(chunk)
+                if received > self._max_response_bytes:
+                    raise DiscoveryFetchError("SOURCE_PAYLOAD_TOO_LARGE")
+                chunks.append(chunk)
+
+            # aiter_bytes yields decoded bytes. Remove transport encodings so
+            # the reconstructed in-memory response is not decoded twice.
+            bounded_headers = httpx.Headers(response.headers)
+            for header in ("Content-Encoding", "Content-Length", "Transfer-Encoding"):
+                bounded_headers.pop(header, None)
+            return httpx.Response(
+                response.status_code,
+                headers=bounded_headers,
+                content=b"".join(chunks),
+                request=response.request,
+            )
+        finally:
+            await response.aclose()
+
     async def get(
         self,
         url: str,
@@ -95,6 +152,7 @@ class DiscoveryHttpClient:
         lock = self._host_locks.setdefault(host, asyncio.Lock())
         request_headers = {
             "Accept": "application/json, application/ld+json, application/xml, text/html;q=0.8",
+            "Accept-Encoding": "identity",
             "User-Agent": "JobApplyAgent/0.2 (+private authorized discovery)",
             **(headers or {}),
         }
@@ -103,14 +161,10 @@ class DiscoveryHttpClient:
         for attempt in range(1, self._max_attempts + 1):
             try:
                 async with lock:
-                    response = await self._client.get(
+                    response = await self._send_bounded(
                         url,
                         params=params,
                         headers=request_headers,
-                        # Discovery endpoints are canonical and fixed-host.
-                        # Following a redirect would bypass the host allowlist
-                        # and generic-source DNS checks.
-                        follow_redirects=False,
                     )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if attempt == self._max_attempts:
@@ -168,16 +222,6 @@ class DiscoveryHttpClient:
                         "SOURCE_HTTP_ERROR",
                         status_code=response.status_code,
                     ) from exc
-                content_length = response.headers.get("Content-Length")
-                if content_length:
-                    try:
-                        declared_size = int(content_length)
-                    except ValueError:
-                        declared_size = 0
-                    if declared_size > self._max_response_bytes:
-                        raise DiscoveryFetchError("SOURCE_PAYLOAD_TOO_LARGE")
-                if len(response.content) > self._max_response_bytes:
-                    raise DiscoveryFetchError("SOURCE_PAYLOAD_TOO_LARGE")
             return response
         raise DiscoveryFetchError(
             "SOURCE_UNAVAILABLE",

@@ -12,6 +12,7 @@ from core.application_mutations import (
     ApplicationMutationIntent,
     lock_application_for_mutation,
     lock_job_without_application_for_mutation,
+    mark_job_terminally_skipped,
     transition_locked_application_to_skipped,
 )
 from db.models import Application, Job, JobStatus, Submission, SubmissionStatus
@@ -123,7 +124,7 @@ def expire_stale_jobs(db, now: datetime, ttl_days: int) -> int:
         if job.status not in _STALE_STATUSES or job.created_at >= cutoff:
             db.rollback()
             continue
-        job.status = JobStatus.SKIPPED
+        mark_job_terminally_skipped(job, now=now)
         db.commit()
         expired += 1
 

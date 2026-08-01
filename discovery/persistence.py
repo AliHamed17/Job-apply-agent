@@ -256,6 +256,7 @@ def ingest_discovered_postings(
         observed_at = posting.occurrence.observed_at.astimezone(UTC).replace(tzinfo=None)
         if occurrence is not None:
             changed = occurrence.revision_digest != posting.occurrence.revision_digest
+            reopened = not occurrence.active and occurrence.closed_at is not None
             occurrence.last_seen_at = observed_at
             occurrence.active = True
             occurrence.closed_at = None
@@ -263,7 +264,12 @@ def ingest_discovered_postings(
             occurrence.normalized_url_hash = posting.occurrence.normalized_url_hash
             occurrence.revision_digest = posting.occurrence.revision_digest
             job = occurrence.job
-            if changed and job.application is None and job.status in _MUTABLE_JOB_STATUSES:
+            if (
+                (changed or reopened)
+                and job.application is None
+                and job.status in _MUTABLE_JOB_STATUSES
+                and job.terminal_skip_at is None
+            ):
                 _update_mutable_job(job, posting)
                 updated += 1
                 queued_ids.append(int(job.id))
@@ -316,7 +322,11 @@ def ingest_discovered_postings(
             queued_ids.append(int(job.id))
         else:
             duplicate += 1
-            if job.application is None and job.status in _MUTABLE_JOB_STATUSES:
+            if (
+                job.application is None
+                and job.status in _MUTABLE_JOB_STATUSES
+                and job.terminal_skip_at is None
+            ):
                 if _job_content_quality(posting.job) > _job_content_quality(job):
                     _update_mutable_job(job, posting)
                     updated += 1

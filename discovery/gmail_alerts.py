@@ -299,13 +299,19 @@ async def fetch_gmail_alert_page(
             message_id = str(row.get("id") or "").strip()
             if not message_id:
                 continue
-            detail = await client.get(
-                f"https://{_GMAIL_API_HOST}/gmail/v1/users/me/messages/{message_id}",
-                params={"format": "raw"},
-                headers=headers,
-            )
+            try:
+                detail = await client.get(
+                    f"https://{_GMAIL_API_HOST}/gmail/v1/users/me/messages/{message_id}",
+                    params={"format": "raw"},
+                    headers=headers,
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                raise ValueError("GMAIL_ALERT_MESSAGE_FETCH_FAILED") from exc
             if detail.status_code != 200:
-                continue
+                # Failing the whole page preserves the prior durable cursor.
+                # Advancing after a partial detail fetch could permanently
+                # skip an older message when a newer message succeeded.
+                raise ValueError("GMAIL_ALERT_MESSAGE_FETCH_FAILED")
             try:
                 message_payload = detail.json()
             except ValueError as exc:

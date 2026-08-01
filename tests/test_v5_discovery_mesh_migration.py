@@ -52,7 +52,7 @@ def test_discovery_mesh_migration_backfills_and_round_trips(tmp_path):
                 "VALUES "
                 "('ML Engineer', 'Example', 'Israel', "
                 "'https://example.test/jobs/1', 'https://example.test/jobs/1', "
-                ":url_digest, :signature, 'scored', 'remotive', CURRENT_TIMESTAMP)"
+                ":url_digest, :signature, 'skipped', 'remotive', CURRENT_TIMESTAMP)"
             ),
             {"url_digest": "legacy-invalid", "signature": "a" * 64},
         )
@@ -65,6 +65,7 @@ def test_discovery_mesh_migration_backfills_and_round_trips(tmp_path):
     assert {"updated", "duplicates", "closed"}.issubset(
         {column["name"] for column in inspector.get_columns("discovery_runs")}
     )
+    assert "terminal_skip_at" in {column["name"] for column in inspector.get_columns("jobs")}
     with engine.connect() as connection:
         occurrence = connection.execute(
             text(
@@ -77,6 +78,9 @@ def test_discovery_mesh_migration_backfills_and_round_trips(tmp_path):
         assert len(occurrence[2]) == 64
         assert occurrence[2] != "legacy-invalid"
         assert bool(occurrence[3]) is True
+        assert (
+            connection.execute(text("SELECT terminal_skip_at FROM jobs")).scalar_one() is not None
+        )
         differences = compare_metadata(
             MigrationContext.configure(
                 connection,
@@ -98,6 +102,9 @@ def test_discovery_mesh_migration_backfills_and_round_trips(tmp_path):
     assert {"updated", "duplicates", "closed"}.isdisjoint(
         {column["name"] for column in inspect(engine).get_columns("discovery_runs")}
     )
+    assert "terminal_skip_at" not in {
+        column["name"] for column in inspect(engine).get_columns("jobs")
+    }
     with engine.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 1
     engine.dispose()

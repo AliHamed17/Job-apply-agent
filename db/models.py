@@ -180,6 +180,9 @@ class Job(Base):
     discovery_source = Column(String(30), default="manual", nullable=True)
     easy_apply = Column(Boolean, default=False, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+    # Explicit terminal provenance prevents a later source revision from
+    # reviving work that an operator or lifecycle policy already cancelled.
+    terminal_skip_at = Column(DateTime, nullable=True)
 
     extracted_url = relationship("ExtractedURL", back_populates="jobs")
     application = relationship("Application", back_populates="job", uselist=False)
