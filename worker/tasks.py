@@ -1084,6 +1084,31 @@ def generate_application_task(
                 app_id=app.id,
             )
 
+        qualified_autopilot_candidate = bool(
+            fit_decision.quality_eligible
+            and routing.fallback_reason is None
+            and fit_binding_matches
+            and generated.eligible
+            and app.material_eligible is True
+            and app.needs_review_reason is None
+        )
+        if qualified_autopilot_candidate:
+            from worker.autopilot_inspection import (
+                enqueue_and_wake_qualified_autopilot_inspection,
+            )
+
+            inspection = enqueue_and_wake_qualified_autopilot_inspection(
+                db,
+                application_id=app.id,
+            )
+            logger.info(
+                "qualified_autopilot_inspection_admission",
+                application_id=app.id,
+                state=inspection.state,
+                reason_code=inspection.reason_code,
+                replayed=inspection.replayed,
+            )
+
     except Exception as exc:
         db.rollback()
         logger.error("generation_failed", reason_code=type(exc).__name__)

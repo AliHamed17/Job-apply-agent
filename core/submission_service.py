@@ -22,6 +22,7 @@ from core.submission_domain import FormPlanV1
 from core.submit_permits import issue_final_submit_permit
 from db.models import (
     Application,
+    ApplicationPolicyDecision,
     FormPlan,
     JobStatus,
     Submission,
@@ -68,6 +69,8 @@ class SubmissionCommandRequest:
     form_plan_id: str
     client_release: ClientReleaseIdentity
     authority_expires_at: datetime | None = None
+    authority_kind: str = "explicit_operator"
+    automation_policy_decision_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +186,8 @@ def _default_session_checker(
 
 def _runtime_capabilities(settings: Settings, db) -> Mapping[str, object]:
     report = readiness_report(settings)
+    from core.automation_policy_service import policy_usage_status
+
     return build_runtime_capabilities(
         settings,
         report,
@@ -191,6 +196,7 @@ def _runtime_capabilities(settings: Settings, db) -> Mapping[str, object]:
             dependency_report=report,
             db=db,
         ),
+        automation_policy_status=policy_usage_status(db),
     )
 
 
@@ -227,9 +233,10 @@ def _require_runtime(capabilities: Mapping[str, object]) -> str:
     if not isinstance(automation, Mapping) or automation.get("submission_ready") is not True:
         stages = automation.get("stages") if isinstance(automation, Mapping) else None
         submission_stage = stages.get("submission") if isinstance(stages, Mapping) else None
-        reasons = (
+        raw_reasons = (
             submission_stage.get("reason_codes") if isinstance(submission_stage, Mapping) else ()
         )
+        reasons = raw_reasons if isinstance(raw_reasons, (list, tuple)) else ()
         reason = next(
             (
                 item
@@ -304,6 +311,8 @@ def _find_replay(
         or attempt.application_revision != request.application_revision
         or attempt.form_plan is None
         or attempt.form_plan.plan_id != request.form_plan_id
+        or attempt.authority_kind != request.authority_kind
+        or attempt.automation_policy_decision_id != request.automation_policy_decision_id
     ):
         raise SubmissionAdmissionError("IDEMPOTENCY_KEY_CONFLICT")
     return CreatedSubmissionCommand(
@@ -485,6 +494,66 @@ def _require_profile_snapshot(db, version: int) -> None:
         raise SubmissionAdmissionError(reason) from exc
 
 
+def _validate_automation_authority(
+    db,
+    *,
+    request: SubmissionCommandRequest,
+    application: Application,
+    plan: FormPlan,
+    now: datetime,
+) -> tuple[ApplicationPolicyDecision | None, datetime | None]:
+    """Resolve system authority without allowing callers to forge policy state."""
+
+    if request.authority_kind not in {
+        "explicit_operator",
+        "control_plane",
+        "qualified_autopilot",
+    }:
+        raise SubmissionAdmissionError("SUBMISSION_AUTHORITY_INVALID")
+    if request.authority_kind != "qualified_autopilot":
+        if request.automation_policy_decision_id is not None:
+            raise SubmissionAdmissionError("SUBMISSION_AUTHORITY_INVALID")
+        return None, request.authority_expires_at
+    if request.automation_policy_decision_id is None:
+        raise SubmissionAdmissionError("AUTOMATION_DECISION_REQUIRED")
+    query = db.query(ApplicationPolicyDecision).filter(
+        ApplicationPolicyDecision.id == request.automation_policy_decision_id
+    )
+    if db.bind.dialect.name == "postgresql":
+        query = query.with_for_update()
+    record = query.populate_existing().one_or_none()
+    if record is None:
+        raise SubmissionAdmissionError("AUTOMATION_DECISION_REQUIRED")
+    try:
+        from core.automation_policy_service import (
+            AutomationPolicyError,
+            validate_current_automation_decision,
+        )
+
+        decision = validate_current_automation_decision(
+            db,
+            decision_record=record,
+            now=_aware_utc(now),
+            lock=False,
+        )
+    except AutomationPolicyError as exc:
+        raise SubmissionAdmissionError(exc.reason_code) from exc
+    if (
+        record.application_id != application.id
+        or record.application_revision != application.revision
+        or record.form_plan_id != plan.id
+        or str(decision.form_plan_id) != plan.plan_id
+    ):
+        raise SubmissionAdmissionError("AUTOMATION_DECISION_BINDING_MISMATCH")
+    expiry = _aware_utc(record.authority_expires_at)
+    requested_expiry = _aware_utc(request.authority_expires_at)
+    if expiry is None:
+        raise SubmissionAdmissionError("AUTOMATION_AUTHORITY_EXPIRED")
+    if requested_expiry is not None:
+        expiry = min(expiry, requested_expiry)
+    return record, expiry
+
+
 def _create_one(
     db,
     *,
@@ -581,6 +650,13 @@ def _create_one(
         raise SubmissionAdmissionError("SESSION_EXPIRED")
     runner_release = _require_runtime(capabilities)
     _require_model_binding(application, domain_plan, capabilities)
+    automation_decision, authority_expires_at = _validate_automation_authority(
+        db,
+        request=request,
+        application=application,
+        plan=plan,
+        now=now,
+    )
 
     next_attempt_number = (
         db.query(func.coalesce(func.max(Submission.attempt_number), 0))
@@ -610,6 +686,13 @@ def _create_one(
         attachment_verified=plan.attachment_verified,
         profile_version=plan.profile_version,
         runner_release=runner_release,
+        authority_kind=request.authority_kind,
+        automation_policy_decision_id=(
+            automation_decision.id if automation_decision is not None else None
+        ),
+        automation_policy_decision_digest=(
+            automation_decision.decision_digest if automation_decision is not None else None
+        ),
     )
     db.add(attempt)
     db.flush()
@@ -632,7 +715,7 @@ def _create_one(
         job_url_hash=url_hash(normalized_url),
         ttl_seconds=settings.submit_permit_ttl_seconds,
         now=now,
-        not_after=request.authority_expires_at,
+        not_after=authority_expires_at,
     )
     db.flush()
     command = SubmissionCommand(
@@ -646,7 +729,9 @@ def _create_one(
         db,
         application.id,
         "submission_command_created",
-        actor="operator",
+        actor=(
+            "qualified_autopilot" if request.authority_kind == "qualified_autopilot" else "operator"
+        ),
         details={
             "attempt_number": attempt.attempt_number,
             "platform": descriptor.platform,
@@ -654,6 +739,7 @@ def _create_one(
             "profile_version": attempt.profile_version,
             "state": attempt.stage,
             "external_action_queued": True,
+            "authority_kind": request.authority_kind,
         },
     )
     db.flush()

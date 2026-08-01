@@ -30,6 +30,7 @@ from core.runtime_identity import get_runtime_identity
 from core.submission_service import SubmissionAdmissionError
 from db.models import (
     Application,
+    AutomationKillSwitchEvent,
     Base,
     ControlPlaneCommandReceipt,
     ControlPlaneEventOutbox,
@@ -874,6 +875,98 @@ def test_runner_uses_canonical_ed25519_protocol_in_both_directions(tmp_path):
     tampered["payload"]["application_revision"] = 10
     with pytest.raises(ControlPlaneRunnerError, match="CONTROL_COMMAND_INVALID"):
         runner._verify_command(tampered, now=now)
+
+
+@pytest.mark.asyncio
+async def test_signed_kill_command_is_applied_before_any_application_poll(tmp_path):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'kill-first.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    device_private = Ed25519PrivateKey.generate()
+    control_private = Ed25519PrivateKey.generate()
+    private_path = (tmp_path / "kill-first-runner.key").resolve()
+    public_path = (tmp_path / "kill-first-control.pub").resolve()
+    key_material = {
+        private_path: control_crypto.private_key_to_base64url(device_private).encode(),
+        public_path: control_crypto.public_key_to_base64url(control_private.public_key()).encode(),
+    }
+    control_signing_key_id = str(uuid4())
+    command_id = uuid4()
+    now = datetime.now(UTC)
+    unsigned = control_protocol.KillSwitchCommandEnvelope.model_validate(
+        {
+            "protocol_version": control_protocol.PROTOCOL_VERSION,
+            "key_id": control_signing_key_id,
+            "purpose": control_protocol.EnvelopePurpose.CONTROL_KILL_COMMAND,
+            "audience": control_protocol.RUNNER_AUDIENCE,
+            "issued_at": now,
+            "expires_at": now + timedelta(minutes=5),
+            "nonce": uuid4(),
+            "payload": {
+                "command_id": command_id,
+                "action": "activate_kill_switch",
+                "reason_code": "REMOTE_OPERATOR_KILL",
+            },
+            "signature": "",
+        }
+    )
+    signed = control_crypto.sign_envelope(unsigned, control_private).model_dump(mode="json")
+    order: list[str] = []
+    acknowledgements: list[tuple[str, dict[str, object]]] = []
+
+    class Client:
+        async def poll_kill_switch_command(self, _envelope):
+            order.append("kill_poll")
+            return {"commands": [signed]}
+
+        async def acknowledge_kill_switch_command(self, received_id, envelope):
+            order.append("kill_ack")
+            acknowledgements.append((received_id, dict(envelope)))
+
+        async def poll_command(self, _envelope):
+            raise AssertionError("application commands must wait behind the kill switch")
+
+    runner = ControlPlaneRunner(
+        RunnerConfig(
+            control_plane_url="https://control.example",
+            device_id=str(uuid4()),
+            control_signing_key_id=control_signing_key_id,
+            control_plane_audience=control_protocol.CONTROL_AUDIENCE,
+            private_key_path=private_path,
+            control_plane_public_key_path=public_path,
+        ),
+        client=Client(),
+        key_loader=lambda path: key_material[path],
+        settings=_settings(),
+        session_factory=factory,
+    )
+    runner._last_heartbeat = now
+
+    assert await runner.run_once() == "kill_switch_activated"
+    assert order == ["kill_poll", "kill_ack"]
+    assert acknowledgements[0][0] == str(command_id)
+    ack = control_protocol.CommandAckEnvelope.model_validate(acknowledgements[0][1])
+    assert ack.payload.command_id == command_id
+    assert ack.payload.ack_status == control_protocol.CommandAckStatus.RECEIVED
+    control_crypto.verify_envelope(
+        ack,
+        device_private.public_key(),
+        expected_purpose=control_protocol.EnvelopePurpose.RUNNER_COMMAND_ACK,
+        expected_audience=control_protocol.CONTROL_AUDIENCE,
+        now=now,
+    )
+    db = factory()
+    try:
+        event = db.query(AutomationKillSwitchEvent).one()
+        assert event.active is True
+        assert event.source == "vercel_signed_kill"
+        assert event.reason_code == "REMOTE_OPERATOR_KILL"
+        assert event.command_digest is not None
+    finally:
+        db.close()
 
 
 @pytest.mark.asyncio

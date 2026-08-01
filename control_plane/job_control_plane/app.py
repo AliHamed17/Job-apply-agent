@@ -41,13 +41,20 @@ from .db import (
     current_revision,
     database_is_responsive,
 )
-from .models import OperatorSession, ReviewGrant, RunnerDevice, SubmissionCommand
+from .models import (
+    ControlKillSwitchCommand,
+    OperatorSession,
+    ReviewGrant,
+    RunnerDevice,
+    SubmissionCommand,
+)
 from .protocol import (
     PROTOCOL_VERSION,
     CommandAckEnvelope,
     CommandPollEnvelope,
     ControlCommandEnvelope,
     HeartbeatEnvelope,
+    KillSwitchCommandEnvelope,
     ReviewGrantEnvelope,
     ReviewGrantRevocationEnvelope,
     RunnerEventEnvelope,
@@ -55,10 +62,13 @@ from .protocol import (
 from .services import (
     ControlPlaneError,
     acknowledge_command,
+    acknowledge_kill_switch_command,
     as_utc,
     audit,
     create_command,
+    create_kill_switch_command,
     poll_command,
+    poll_kill_switch_command,
     receive_heartbeat,
     receive_review_grant,
     receive_review_grant_revocation,
@@ -120,6 +130,22 @@ class SendCommandResponse(ApiModel):
         str,
         StringConstraints(pattern=r"^/api/commands/[0-9a-f-]{36}$"),
     ]
+
+
+class KillSwitchRequest(ApiModel):
+    acknowledgement: Literal["ACTIVATE_KILL_SWITCH"]
+    client_idempotency_key: UUID
+
+
+class KillSwitchResponse(ApiModel):
+    command_id: UUID
+    status: Literal["queued", "claimed", "acknowledged", "rejected", "expired"]
+    active_requested: Literal[True] = True
+    duplicate: bool
+
+
+class KillSwitchPollResponse(ApiModel):
+    commands: Annotated[list[KillSwitchCommandEnvelope], Field(max_length=1)]
 
 
 class HeartbeatReceipt(ApiModel):
@@ -494,6 +520,64 @@ def create_app(
             "status_url": f"/api/commands/{result.command.id}",
         }
 
+    @app.get("/api/kill-switch/commands", include_in_schema=False)
+    def list_kill_switch_commands(
+        db: db_dep,
+        _operator: operator_dep,
+    ) -> dict[str, list[dict[str, object]]]:
+        rows = db.scalars(
+            select(ControlKillSwitchCommand)
+            .order_by(ControlKillSwitchCommand.created_at.desc())
+            .limit(50)
+        ).all()
+        return {"commands": [_kill_switch_command_view(row) for row in rows]}
+
+    @app.post(
+        "/api/kill-switch",
+        status_code=202,
+        response_model=KillSwitchResponse,
+        include_in_schema=False,
+    )
+    def activate_kill_switch(
+        request: Request,
+        body: KillSwitchRequest,
+        db: db_dep,
+        operator: operator_dep,
+    ) -> dict[str, object]:
+        require_csrf(request, operator, runtime)
+        request_digest = hashlib.sha256(body.model_dump_json().encode("utf-8")).hexdigest()
+        try:
+            result = create_kill_switch_command(
+                db,
+                runtime,
+                client_idempotency_key=body.client_idempotency_key,
+            )
+        except ControlPlaneError as exc:
+            audit(
+                db,
+                action="kill_switch",
+                result="denied",
+                request_digest=request_digest,
+                target_type="runner",
+                target_id=str(runtime.runner_device_id),
+            )
+            db.commit()
+            raise exc
+        audit(
+            db,
+            action="kill_switch",
+            result="accepted",
+            request_digest=request_digest,
+            target_type="kill_command",
+            target_id=result.command.id,
+        )
+        return {
+            "command_id": result.command.id,
+            "status": result.command.status,
+            "active_requested": True,
+            "duplicate": result.duplicate,
+        }
+
     @app.post(
         "/api/runner/heartbeat",
         response_model=HeartbeatReceipt,
@@ -541,6 +625,40 @@ def create_app(
         commands = poll_command(db, runtime, body)
         return {
             "commands": [command.model_dump(mode="json") for command in commands],
+        }
+
+    @app.post(
+        "/api/runner/kill-switch/poll",
+        response_model=KillSwitchPollResponse,
+        include_in_schema=False,
+    )
+    def runner_kill_switch_poll(
+        body: CommandPollEnvelope,
+        db: db_dep,
+    ) -> dict[str, object]:
+        commands = poll_kill_switch_command(db, runtime, body)
+        return {"commands": [command.model_dump(mode="json") for command in commands]}
+
+    @app.post(
+        "/api/runner/kill-switch/{command_id}/ack",
+        response_model=CommandAckReceipt,
+        include_in_schema=False,
+    )
+    def runner_kill_switch_ack(
+        command_id: UUID,
+        body: CommandAckEnvelope,
+        db: db_dep,
+    ) -> dict[str, object]:
+        receipt = acknowledge_kill_switch_command(
+            db,
+            runtime,
+            body,
+            path_command_id=command_id,
+        )
+        return {
+            "accepted": True,
+            "command_id": receipt.identifier,
+            "duplicate": receipt.duplicate,
         }
 
     @app.post(
@@ -593,6 +711,11 @@ def create_app(
         commands = db.scalars(
             select(SubmissionCommand).order_by(SubmissionCommand.created_at.desc()).limit(50)
         ).all()
+        kill_commands = db.scalars(
+            select(ControlKillSwitchCommand)
+            .order_by(ControlKillSwitchCommand.created_at.desc())
+            .limit(20)
+        ).all()
         configured_device = db.get(RunnerDevice, str(runtime.runner_device_id))
         grant_states = {
             row.id: _review_grant_state(
@@ -607,6 +730,7 @@ def create_app(
             _dashboard_html(
                 grants=grants,
                 commands=commands,
+                kill_commands=kill_commands,
                 grant_states=grant_states,
             )
         )
@@ -665,6 +789,22 @@ def _command_view(row: SubmissionCommand) -> dict[str, object]:
     }
 
 
+def _kill_switch_command_view(row: ControlKillSwitchCommand) -> dict[str, object]:
+    effective_status = row.status
+    if effective_status in {"queued", "claimed"} and as_utc(row.expires_at) <= utc_now():
+        effective_status = "expired"
+    return {
+        "command_id": row.id,
+        "status": effective_status,
+        "active_requested": True,
+        "delivery_count": row.delivery_count,
+        "created_at": row.created_at,
+        "expires_at": row.expires_at,
+        "ack_status": row.ack_status,
+        "finished_at": row.finished_at,
+    }
+
+
 def _review_grant_state(
     grant: ReviewGrant,
     *,
@@ -704,6 +844,7 @@ def _dashboard_html(
     *,
     grants: list[ReviewGrant],
     commands: list[SubmissionCommand],
+    kill_commands: list[ControlKillSwitchCommand],
     grant_states: dict[str, str],
 ) -> str:
     grant_rows_parts: list[str] = []
@@ -742,6 +883,16 @@ def _dashboard_html(
         )
         for row in commands
     )
+    kill_rows = "".join(
+        (
+            "<tr>"
+            f"<td><code>{html.escape(row.id)}</code></td>"
+            f"<td>{html.escape(str(_kill_switch_command_view(row)['status']))}</td>"
+            f"<td>{html.escape(row.created_at.isoformat())}</td>"
+            "</tr>"
+        )
+        for row in kill_commands
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -753,10 +904,16 @@ th,td{{border-bottom:1px solid #d8deea;padding:.65rem;text-align:left}}
 code{{font-size:.8rem}} button{{padding:.45rem .7rem}} #result{{min-height:1.5rem}}
 #result.neutral{{color:#2459a9}} #result.warning{{color:#9a4f00}}
 #result.confirmed{{color:#08783e;font-weight:650}}
+.danger{{background:#a11;color:white;border:0;border-radius:4px}}
 </style></head><body>
 <h1>Job Apply Control Plane</h1>
 <p>Redacted command metadata only. Private application content stays on the runner.</p>
 <p id="result" role="status"></p>
+<h2>Emergency stop</h2>
+<p><button id="kill-switch" class="danger">Stop qualified autopilot</button>
+This signed command can only activate the local stop; it cannot clear it.</p>
+<table><thead><tr><th>Kill command</th><th>State</th><th>Created</th></tr></thead>
+<tbody>{kill_rows}</tbody></table>
 <h2>Local review grants</h2>
 <table><thead><tr><th>Grant</th><th>Adapter</th><th>Opaque application</th>
 <th>State</th><th>Explicit action</th></tr></thead><tbody>{grant_rows}</tbody></table>
@@ -769,6 +926,25 @@ const cookie = (name) => document.cookie.split('; ').find(v => v.startsWith(name
 const result = document.getElementById('result');
 const terminalStatuses = new Set(['finished', 'rejected', 'expired']);
 const show = (text, kind) => {{ result.textContent = text; result.className = kind; }};
+document.getElementById('kill-switch').addEventListener('click', async (event) => {{
+  const button = event.currentTarget;
+  button.disabled = true;
+  const response = await fetch('/api/kill-switch', {{
+    method: 'POST',
+    headers: {{'content-type':'application/json','x-csrf-token':cookie('jaa_control_csrf')}},
+    body: JSON.stringify({{
+      acknowledgement: 'ACTIVATE_KILL_SWITCH',
+      client_idempotency_key: crypto.randomUUID()
+    }})
+  }});
+  const data = await response.json();
+  if (response.ok) {{
+    show(`Emergency stop queued: ${{data.command_id}}.`, 'warning');
+  }} else {{
+    show(`Emergency stop not queued: ${{data.code}}`, 'warning');
+    button.disabled = false;
+  }}
+}});
 const pollCommand = async (statusUrl, remaining = 150) => {{
   if (remaining <= 0) return show('Verification timed out. Review the command status.', 'warning');
   const response = await fetch(statusUrl, {{cache:'no-store'}});

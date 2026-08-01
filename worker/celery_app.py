@@ -58,6 +58,8 @@ def create_celery_app(
         # never registers these, so beat's scheduled messages for them
         # arrive as unregistered tasks and silently never run.
         include=[
+            "worker.autopilot",
+            "worker.autopilot_inspection",
             "worker.drainer",
             "worker.discovery_tasks",
             "worker.digest",
@@ -89,6 +91,10 @@ def create_celery_app(
             "worker.submission_commands.execute_submission_command_task": {"queue": "submission"},
             "worker.submission_commands.drain_submission_commands_task": {"queue": "submission"},
             "worker.submission_commands.reconcile_stale_commands_task": {"queue": "submission"},
+            "worker.autopilot.evaluate": {"queue": "submission"},
+            "worker.autopilot.inspect_and_evaluate": {"queue": "submission"},
+            "worker.autopilot.execute_inspection": {"queue": "submission"},
+            "worker.autopilot.scan_inspections": {"queue": "submission"},
             "worker.drainer.drain_apply_queue_task": {"queue": "submission"},
             "worker.drainer.expire_stale_jobs_task": {"queue": "submission"},
             "worker.drainer.reconcile_stale_attempts_task": {"queue": "submission"},
@@ -125,6 +131,10 @@ def create_celery_app(
     app.conf.beat_schedule["reconcile-stale-submission-commands"] = {
         "task": "worker.submission_commands.reconcile_stale_commands_task",
         "schedule": 300.0,
+    }
+    app.conf.beat_schedule["scan-qualified-autopilot-inspections"] = {
+        "task": "worker.autopilot.scan_inspections",
+        "schedule": 60.0,
     }
     app.conf.beat_schedule["discover-jobs"] = {
         "task": "worker.discovery_tasks.discover_jobs_task",

@@ -9,10 +9,12 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from core.automation_policy_service import policy_usage_status
 from core.automation_readiness import current_automation_readiness
 from core.config import get_settings
 from core.operations import readiness_report
 from core.runtime_identity import build_runtime_capabilities
+from db.session import get_session_factory
 
 router = APIRouter(tags=["runtime"])
 
@@ -88,6 +90,18 @@ class AutomationReadinessCapabilities(BaseModel):
     ]
 
 
+class AutomationPolicyCapabilities(BaseModel):
+    active: bool
+    reason_code: str | None = None
+    policy_id: str | None = None
+    revision: int | None = None
+    expires_at: str | None = None
+    daily_remaining: int | None = None
+    hourly_remaining: int | None = None
+    qualified_form_contract_count: int | None = None
+    kill_switch_active: bool
+
+
 class RuntimeCapabilitiesResponse(BaseModel):
     release: ReleaseCapabilities
     mode: ModeCapabilities
@@ -96,6 +110,7 @@ class RuntimeCapabilitiesResponse(BaseModel):
     submission: SubmissionCapabilities
     worker: WorkerCapabilities
     llm: LLMCapabilities | None = None
+    automation_policy: AutomationPolicyCapabilities | None = None
 
 
 @router.get(
@@ -113,11 +128,36 @@ async def get_runtime_capabilities() -> RuntimeCapabilitiesResponse:
         settings=settings,
         dependency_report=report,
     )
+
+    def load_policy_status() -> dict[str, object]:
+        db = get_session_factory()()
+        try:
+            return policy_usage_status(db)
+        finally:
+            db.close()
+
+    policy = await run_in_threadpool(load_policy_status)
     capabilities = build_runtime_capabilities(
         settings,
         report,
         automation_readiness=automation,
+        automation_policy_status=policy,
     )
+    capabilities["automation_policy"] = {
+        key: policy.get(key)
+        for key in (
+            "active",
+            "reason_code",
+            "policy_id",
+            "revision",
+            "expires_at",
+            "daily_remaining",
+            "hourly_remaining",
+            "qualified_form_contract_count",
+            "kill_switch_active",
+        )
+        if key in policy
+    }
     checks = report.get("checks")
     llm = checks.get("llm") if isinstance(checks, Mapping) else None
     if isinstance(llm, Mapping):

@@ -97,6 +97,10 @@ fit_routing_qualification.json
 .gmail_oauth.json
 .job-alerts/
 
+# Local Ed25519 autopilot policy authority (never commit or copy to Vercel).
+.job-agent/
+automation-policy-ed25519.pem
+
 # Local assistant configuration can contain machine-specific paths or permissions.
 .claude/
 

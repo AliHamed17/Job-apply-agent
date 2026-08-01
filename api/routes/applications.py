@@ -78,6 +78,7 @@ from core.submission_service import (
 from core.submission_truth import is_employer_verified
 from db.models import (
     Application,
+    AutomationPolicyRevisionRecord,
     FormPlan,
     JobStatus,
     OperatorApprovedAnswer,
@@ -125,6 +126,9 @@ class SubmissionAttemptResponse(BaseModel):
     verification_kind: str | None
     evidence_digest: str | None
     runner_release: str | None
+    authority_kind: str
+    automation_policy_decision_id: int | None
+    automation_policy_decision_digest: str | None
     reconciliation_source: str | None
     reconciliation_evidence_ref: str | None
     created_at: str | None
@@ -466,6 +470,9 @@ def _attempt_response(attempt) -> SubmissionAttemptResponse:
         verification_kind=attempt.verification_kind,
         evidence_digest=attempt.evidence_digest,
         runner_release=attempt.runner_release,
+        authority_kind=attempt.authority_kind,
+        automation_policy_decision_id=attempt.automation_policy_decision_id,
+        automation_policy_decision_digest=attempt.automation_policy_decision_digest,
         reconciliation_source=attempt.reconciliation_source,
         reconciliation_evidence_ref=attempt.reconciliation_evidence_ref,
         created_at=_utc_iso(attempt.created_at),
@@ -1296,6 +1303,21 @@ async def inspect_application_form(
         ) from exc
     db.commit()
     db.refresh(row)
+    if (
+        db.query(AutomationPolicyRevisionRecord.id)
+        .filter(AutomationPolicyRevisionRecord.active_slot == 1)
+        .first()
+        is not None
+    ):
+        try:
+            from worker.autopilot import evaluate_qualified_autopilot_task
+
+            evaluate_qualified_autopilot_task.delay(app.id, row.id)
+        except Exception:
+            logger.exception(
+                "qualified_autopilot_wake_failed",
+                application_id=app.id,
+            )
     return _form_plan_response(row, app)
 
 

@@ -387,7 +387,45 @@ _PERMIT_REASON_MAP = {
     "FORM_CHANGED": ReasonCode.FORM_CHANGED,
     "ATTACHMENT_CHANGED": ReasonCode.ATTACHMENT_UNVERIFIED,
     "ATTACHMENT_UNVERIFIED": ReasonCode.ATTACHMENT_UNVERIFIED,
+    "SUBMISSION_AUTHORITY_CHANGED": ReasonCode.PERMIT_BINDING_MISMATCH,
+    "AUTOMATION_POLICY_CHANGED": ReasonCode.PERMIT_BINDING_MISMATCH,
+    "PERMIT_BINDING_MISMATCH": ReasonCode.PERMIT_BINDING_MISMATCH,
+    "GOVERNOR_DENIED": ReasonCode.GOVERNOR_DENIED,
 }
+
+
+def _validate_attempt_automation_authority(
+    db,
+    attempt: Submission,
+    *,
+    now: datetime,
+) -> tuple[ReasonCode | None, str | None]:
+    if attempt.authority_kind != "qualified_autopilot":
+        return None, None
+    decision = attempt.automation_policy_decision
+    if (
+        decision is None
+        or attempt.automation_policy_decision_digest is None
+        or decision.decision_digest != attempt.automation_policy_decision_digest
+    ):
+        return ReasonCode.PERMIT_BINDING_MISMATCH, "AUTOMATION_DECISION_BINDING_MISMATCH"
+    try:
+        from core.automation_policy_service import (
+            AutomationPolicyError,
+            validate_current_automation_decision,
+        )
+
+        validate_current_automation_decision(
+            db,
+            decision_record=decision,
+            now=_aware(now),
+            lock=False,
+        )
+    except AutomationPolicyError as exc:
+        if exc.reason_code in {"KILL_SWITCH_ACTIVE", "OUTSIDE_ACTIVE_HOURS"}:
+            return ReasonCode.GOVERNOR_DENIED, exc.reason_code
+        return ReasonCode.PERMIT_BINDING_MISMATCH, exc.reason_code
+    return None, None
 
 
 def _load_domain_plan(plan: FormPlan) -> FormPlanV1:
@@ -475,7 +513,12 @@ def _lock_claimed_context(
     db.refresh(command.attempt)
     db.expire(
         command.attempt,
-        ["application", "form_plan", "final_submit_permit"],
+        [
+            "application",
+            "form_plan",
+            "final_submit_permit",
+            "automation_policy_decision",
+        ],
     )
     db.expire(application, ["job"])
     return application, command.attempt, command
@@ -671,6 +714,20 @@ def _enter_commit_boundary(
     try:
         domain_plan = _load_domain_plan(plan)
         domain_permit = _load_domain_permit(attempt)
+        automation_reason, automation_detail = _validate_attempt_automation_authority(
+            db,
+            attempt,
+            now=validation_at,
+        )
+        if automation_reason is not None:
+            if automation_reason is ReasonCode.GOVERNOR_DENIED:
+                record_governor_denial(
+                    db,
+                    attempt,
+                    occurred_at=validation_at,
+                    reason_code=automation_detail or "AUTOMATION_POLICY_DENIED",
+                )
+            raise PermitValidationError(automation_reason.value)
         validate_final_submit_permit(
             permit,
             attempt=attempt,
@@ -731,6 +788,20 @@ def _enter_commit_boundary(
         db.commit()
         raise _CommitBoundaryRejectedError(ReasonCode.BUILD_MISMATCH.value)
     try:
+        automation_reason, automation_detail = _validate_attempt_automation_authority(
+            db,
+            attempt,
+            now=commit_at,
+        )
+        if automation_reason is not None:
+            if automation_reason is ReasonCode.GOVERNOR_DENIED:
+                record_governor_denial(
+                    db,
+                    attempt,
+                    occurred_at=commit_at,
+                    reason_code=automation_detail or "AUTOMATION_POLICY_DENIED",
+                )
+            raise PermitValidationError(automation_reason.value)
         validate_final_submit_permit(
             permit,
             attempt=attempt,

@@ -145,7 +145,7 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
 
     command.upgrade(config, "head")
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
-    assert current_revision(engine) == "0004_remove_login_throttle"
+    assert current_revision(engine) == "0005_kill_switch_commands"
     table_names = set(inspect(engine).get_table_names())
     assert {
         "control_runner_devices",
@@ -155,6 +155,7 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
         "control_runner_events",
         "control_operator_sessions",
         "control_operator_audit",
+        "control_kill_switch_commands",
     }.issubset(table_names)
     assert "control_login_throttle" not in table_names
     review_grant_columns = {
