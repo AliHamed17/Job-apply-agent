@@ -51,6 +51,13 @@ class AutopilotInspectionError(ValueError):
         self.reason_code = bounded
 
 
+class AutopilotInspectionLeaseLostError(RuntimeError):
+    reason_code = "AUTOPILOT_INSPECTION_LEASE_LOST"
+
+    def __init__(self) -> None:
+        super().__init__(self.reason_code)
+
+
 _REASON_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _INSPECTION_LEASE = timedelta(minutes=15)
 _SCAN_BATCH_SIZE = 25
@@ -211,8 +218,52 @@ def _material_blockers(value: str | None) -> list[object]:
     return parsed if isinstance(parsed, list) else ["MATERIAL_AUDIT_INVALID"]
 
 
-def _mark_quarantined(db, *, application_id: int, reason_code: str) -> None:
+def _fence_inspection_run(
+    db,
+    *,
+    run_id: int,
+    application_id: int,
+    claim_token: str,
+    now: datetime,
+) -> None:
+    """Lock and renew a still-current inspection lease in the caller transaction."""
+
+    query = db.query(AutopilotInspectionRun).filter(AutopilotInspectionRun.id == run_id)
+    if db.bind.dialect.name == "postgresql":
+        query = query.with_for_update()
+    row = query.populate_existing().one_or_none()
+    timestamp = _naive(now)
+    if (
+        row is None
+        or row.application_id != application_id
+        or row.state != "running"
+        or row.claim_token != claim_token
+        or row.lease_expires_at is None
+        or row.lease_expires_at <= timestamp
+    ):
+        db.rollback()
+        raise AutopilotInspectionLeaseLostError
+    row.lease_expires_at = timestamp + _INSPECTION_LEASE
+    db.flush()
+
+
+def _mark_quarantined(
+    db,
+    *,
+    application_id: int,
+    reason_code: str,
+    inspection_run_id: int,
+    claim_token: str,
+    now: datetime,
+) -> None:
     db.rollback()
+    _fence_inspection_run(
+        db,
+        run_id=inspection_run_id,
+        application_id=application_id,
+        claim_token=claim_token,
+        now=now,
+    )
     try:
         locked = lock_application_for_mutation(
             db,
@@ -244,6 +295,9 @@ def _finalize_autopilot_dispatch_result(
     *,
     application_id: int,
     result: AutopilotDispatchResult,
+    inspection_run_id: int,
+    claim_token: str,
+    now: datetime,
 ) -> dict[str, object]:
     """Persist dispatch quarantine state before returning the worker result."""
 
@@ -254,6 +308,9 @@ def _finalize_autopilot_dispatch_result(
             db,
             application_id=application_id,
             reason_code=reason_code,
+            inspection_run_id=inspection_run_id,
+            claim_token=claim_token,
+            now=now,
         )
     return {
         "state": result.state,
@@ -265,7 +322,12 @@ def _finalize_autopilot_dispatch_result(
     }
 
 
-def inspect_and_dispatch_qualified_autopilot(application_id: int) -> dict[str, object]:
+def inspect_and_dispatch_qualified_autopilot(
+    application_id: int,
+    *,
+    inspection_run_id: int,
+    claim_token: str,
+) -> dict[str, object]:
     """Inspect outside locks, persist exact plan, then evaluate signed authority."""
 
     settings = get_settings()
@@ -377,6 +439,13 @@ def inspect_and_dispatch_qualified_autopilot(application_id: int) -> dict[str, o
             raise AutopilotInspectionError(reason_code) from exc
 
         db.rollback()
+        _fence_inspection_run(
+            db,
+            run_id=inspection_run_id,
+            application_id=application_id,
+            claim_token=claim_token,
+            now=datetime.now(UTC),
+        )
         try:
             locked = lock_application_for_mutation(
                 db,
@@ -403,17 +472,31 @@ def inspect_and_dispatch_qualified_autopilot(application_id: int) -> dict[str, o
             )
         except FormPlanPersistenceError as exc:
             raise AutopilotInspectionError(exc.reason_code) from exc
+        form_plan_id = plan.id
         db.commit()
+        _fence_inspection_run(
+            db,
+            run_id=inspection_run_id,
+            application_id=application_id,
+            claim_token=claim_token,
+            now=datetime.now(UTC),
+        )
         result = dispatch_qualified_autopilot(
             db,
             application_id=application_id,
-            form_plan_id=plan.id,
+            form_plan_id=form_plan_id,
         )
         return _finalize_autopilot_dispatch_result(
             db,
             application_id=application_id,
             result=result,
+            inspection_run_id=inspection_run_id,
+            claim_token=claim_token,
+            now=datetime.now(UTC),
         )
+    except AutopilotInspectionLeaseLostError as exc:
+        db.rollback()
+        return {"state": "not_claimed", "reason_code": exc.reason_code}
     except (
         AutopilotInspectionError,
         AutomationPolicyError,
@@ -421,11 +504,18 @@ def inspect_and_dispatch_qualified_autopilot(application_id: int) -> dict[str, o
         ProfileSnapshotError,
     ) as exc:
         reason_code = _bounded_reason(getattr(exc, "reason_code", None) or str(exc))
-        _mark_quarantined(
-            db,
-            application_id=application_id,
-            reason_code=reason_code,
-        )
+        try:
+            _mark_quarantined(
+                db,
+                application_id=application_id,
+                reason_code=reason_code,
+                inspection_run_id=inspection_run_id,
+                claim_token=claim_token,
+                now=datetime.now(UTC),
+            )
+        except AutopilotInspectionLeaseLostError as lease_exc:
+            db.rollback()
+            return {"state": "not_claimed", "reason_code": lease_exc.reason_code}
         return {"state": "quarantined", "reason_code": reason_code}
     finally:
         db.close()
@@ -494,14 +584,21 @@ def _finish_inspection_run(
     if db.bind.dialect.name == "postgresql":
         query = query.with_for_update()
     row = query.populate_existing().one_or_none()
-    if row is None or row.state != "running" or row.claim_token != claim_token:
+    timestamp = _naive(now)
+    if (
+        row is None
+        or row.state != "running"
+        or row.claim_token != claim_token
+        or row.lease_expires_at is None
+        or row.lease_expires_at <= timestamp
+    ):
         db.rollback()
         return False
     row.state = "finished"
     row.reason_code = _bounded_reason(reason_code)
     row.lease_expires_at = None
     row.claim_token = None
-    row.finished_at = _naive(now)
+    row.finished_at = timestamp
     db.commit()
     return True
 
@@ -519,7 +616,11 @@ def execute_qualified_autopilot_inspection(run_id: int) -> dict[str, object]:
         return {"state": "not_claimed", "run_id": run_id}
     application_id, claim_token = claimed
     try:
-        result = inspect_and_dispatch_qualified_autopilot(application_id)
+        result = inspect_and_dispatch_qualified_autopilot(
+            application_id,
+            inspection_run_id=run_id,
+            claim_token=claim_token,
+        )
     except Exception:
         result = {"state": "quarantined", "reason_code": "FORM_INSPECTION_FAILED"}
     terminal_reason = (
@@ -624,10 +725,10 @@ def scan_qualified_autopilot_inspections(*, batch_size: int = _SCAN_BATCH_SIZE) 
 @shared_task(name="worker.autopilot.inspect_and_evaluate", bind=True, max_retries=0)
 def inspect_and_dispatch_qualified_autopilot_task(
     self,
-    application_id: int,
+    run_id: int,
 ) -> dict[str, object]:
     del self
-    return inspect_and_dispatch_qualified_autopilot(application_id)
+    return execute_qualified_autopilot_inspection(run_id)
 
 
 @shared_task(name="worker.autopilot.execute_inspection", bind=True, max_retries=0)
@@ -647,6 +748,7 @@ def scan_qualified_autopilot_inspections_task(self) -> dict[str, int]:
 
 __all__ = [
     "AutopilotInspectionError",
+    "AutopilotInspectionLeaseLostError",
     "AutopilotInspectionEnqueueResult",
     "enqueue_and_wake_qualified_autopilot_inspection",
     "enqueue_qualified_autopilot_inspection",

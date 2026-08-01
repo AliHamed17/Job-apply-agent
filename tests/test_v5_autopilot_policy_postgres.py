@@ -21,7 +21,9 @@ from db.models import (
     JobStatus,
 )
 from worker.autopilot_inspection import (
+    AutopilotInspectionLeaseLostError,
     _claim_inspection_run,
+    _fence_inspection_run,
     enqueue_qualified_autopilot_inspection,
 )
 
@@ -113,6 +115,7 @@ def test_two_workers_create_and_claim_one_exact_inspection(monkeypatch) -> None:
         accepted = [item for item in claims if item is not None]
         assert len(accepted) == 1
         assert accepted[0][0] == application_id
+        original_token = accepted[0][1]
 
         verify = factory()
         try:
@@ -127,9 +130,34 @@ def test_two_workers_create_and_claim_one_exact_inspection(monkeypatch) -> None:
             )
             assert len(rows) == 1
             assert rows[0].state == "running"
-            assert rows[0].claim_token == accepted[0][1]
+            assert rows[0].claim_token == original_token
         finally:
             verify.close()
+
+        reclaimer = factory()
+        try:
+            reclaimed = _claim_inspection_run(
+                reclaimer,
+                run_id=run_id,
+                now=now + timedelta(minutes=16),
+            )
+            assert reclaimed is not None
+            assert reclaimed[1] != original_token
+        finally:
+            reclaimer.close()
+
+        stale_worker = factory()
+        try:
+            with pytest.raises(AutopilotInspectionLeaseLostError):
+                _fence_inspection_run(
+                    stale_worker,
+                    run_id=run_id,
+                    application_id=application_id,
+                    claim_token=original_token,
+                    now=now + timedelta(minutes=16, seconds=1),
+                )
+        finally:
+            stale_worker.close()
     finally:
         cleanup = factory()
         try:

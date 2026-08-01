@@ -77,7 +77,9 @@ from submitters.platforms import (
 )
 from worker.autopilot import AutopilotDispatchResult, dispatch_qualified_autopilot
 from worker.autopilot_inspection import (
+    AutopilotInspectionLeaseLostError,
     _claim_inspection_run,
+    _fence_inspection_run,
     _finalize_autopilot_dispatch_result,
     _finish_inspection_run,
     enqueue_qualified_autopilot_inspection,
@@ -368,6 +370,15 @@ def _scenario(tmp_path, monkeypatch) -> SimpleNamespace:
 def test_dispatch_quarantine_is_persisted_on_the_application(tmp_path, monkeypatch) -> None:
     scenario = _scenario(tmp_path, monkeypatch)
     db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    assert queued.run_id is not None
+    claimed = _claim_inspection_run(db, run_id=queued.run_id, now=_NOW)
+    assert claimed is not None
+    _, claim_token = claimed
     result = _finalize_autopilot_dispatch_result(
         db,
         application_id=scenario.application_id,
@@ -375,6 +386,9 @@ def test_dispatch_quarantine_is_persisted_on_the_application(tmp_path, monkeypat
             state="quarantined",
             reason_code="RUNTIME_NOT_READY",
         ),
+        inspection_run_id=queued.run_id,
+        claim_token=claim_token,
+        now=_NOW + timedelta(seconds=1),
     )
 
     assert result["state"] == "quarantined"
@@ -903,6 +917,18 @@ def test_stale_inspection_lease_is_reclaimed_without_accepting_old_completion(
     second_application_id, second_token = second_claim
     assert second_application_id == scenario.application_id
     assert second_token != first_token
+    with pytest.raises(
+        AutopilotInspectionLeaseLostError,
+        match="AUTOPILOT_INSPECTION_LEASE_LOST",
+    ):
+        _fence_inspection_run(
+            db,
+            run_id=queued.run_id,
+            application_id=scenario.application_id,
+            claim_token=first_token,
+            now=_NOW + timedelta(minutes=16, seconds=1),
+        )
+    assert db.query(SubmissionCommand).count() == 0
     assert (
         _finish_inspection_run(
             db,
