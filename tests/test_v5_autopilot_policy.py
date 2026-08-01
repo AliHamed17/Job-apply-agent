@@ -403,6 +403,173 @@ def test_dispatch_quarantine_is_persisted_on_the_application(tmp_path, monkeypat
     db.close()
 
 
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "KILL_SWITCH_ACTIVE",
+        "OUTSIDE_ACTIVE_HOURS",
+        "AUTOMATION_DAILY_LIMIT_REACHED",
+        "AUTOMATION_HOURLY_LIMIT_REACHED",
+        "AUTOMATION_COMPANY_LIMIT_REACHED",
+    ],
+)
+def test_post_inspection_transient_denial_requeues_exact_run(
+    tmp_path,
+    monkeypatch,
+    reason_code: str,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    assert queued.run_id is not None
+    db.close()
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.get_session_factory",
+        lambda: scenario.factory,
+    )
+    monkeypatch.setattr(
+        "worker.autopilot_inspection._utc_now",
+        lambda: _NOW + timedelta(seconds=2),
+    )
+
+    def transient_after_inspection(
+        application_id: int,
+        *,
+        inspection_run_id: int,
+        claim_token: str,
+    ):
+        finalize_db = scenario.factory()
+        try:
+            application = finalize_db.get(Application, application_id)
+            application.needs_review_reason = reason_code
+            finalize_db.commit()
+            return _finalize_autopilot_dispatch_result(
+                finalize_db,
+                application_id=application_id,
+                result=AutopilotDispatchResult(
+                    state="quarantined",
+                    reason_code=reason_code,
+                ),
+                inspection_run_id=inspection_run_id,
+                claim_token=claim_token,
+                now=_NOW + timedelta(seconds=1),
+            )
+        finally:
+            finalize_db.close()
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.inspect_and_dispatch_qualified_autopilot",
+        transient_after_inspection,
+    )
+    result = execute_qualified_autopilot_inspection(
+        queued.run_id,
+        now=_NOW,
+    )
+
+    assert result == {
+        "state": "retryable",
+        "reason_code": reason_code,
+        "policy_decision_id": None,
+        "attempt_id": None,
+        "command_id": None,
+        "replayed": False,
+        "run_id": queued.run_id,
+        "lease_finished": True,
+    }
+    verify = scenario.factory()
+    application = verify.get(Application, scenario.application_id)
+    run = verify.get(AutopilotInspectionRun, queued.run_id)
+    assert application.needs_review_reason is None
+    assert run.state == "queued"
+    assert run.claimed_at is None
+    assert run.lease_expires_at is None
+    assert run.claim_token is None
+    assert run.finished_at is None
+    assert run.reason_code is None
+    assert verify.query(Submission).count() == 0
+    assert verify.query(SubmissionCommand).count() == 0
+    reclaimed = _claim_inspection_run(
+        verify,
+        run_id=queued.run_id,
+        now=_NOW + timedelta(seconds=3),
+    )
+    assert reclaimed is not None
+    assert reclaimed[0] == scenario.application_id
+    verify.close()
+
+
+def test_mid_inspection_kill_switch_dispatch_remains_retryable(tmp_path, monkeypatch) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    assert queued.run_id is not None
+    claimed = _claim_inspection_run(db, run_id=queued.run_id, now=_NOW)
+    assert claimed is not None
+    application_id, claim_token = claimed
+
+    set_automation_kill_switch(
+        db,
+        active=True,
+        source=PolicyAuthoritySource.LOCAL_OPERATOR,
+        reason_code="OPERATOR_STOP",
+        now=_NOW + timedelta(seconds=1),
+    )
+    db.commit()
+    dispatch_result = dispatch_qualified_autopilot(
+        db,
+        application_id=application_id,
+        form_plan_id=scenario.plan_id,
+        settings=_settings(),
+        capabilities=_capabilities(),
+        now=_NOW + timedelta(seconds=2),
+    )
+    assert dispatch_result.state == "quarantined"
+    assert dispatch_result.reason_code == "KILL_SWITCH_ACTIVE"
+    db.expire_all()
+    assert db.get(Application, application_id).needs_review_reason is None
+
+    result = _finalize_autopilot_dispatch_result(
+        db,
+        application_id=application_id,
+        result=dispatch_result,
+        inspection_run_id=queued.run_id,
+        claim_token=claim_token,
+        now=_NOW + timedelta(seconds=3),
+    )
+    assert result["state"] == "retryable"
+    db.expire_all()
+    assert db.get(Application, application_id).needs_review_reason is None
+    assert db.get(AutopilotInspectionRun, queued.run_id).state == "queued"
+    assert db.query(Submission).count() == 0
+    assert db.query(SubmissionCommand).count() == 0
+
+    set_automation_kill_switch(
+        db,
+        active=False,
+        source=PolicyAuthoritySource.LOCAL_OPERATOR,
+        reason_code="OPERATOR_RESUME",
+        now=_NOW + timedelta(seconds=4),
+    )
+    db.commit()
+    reclaimed = _claim_inspection_run(
+        db,
+        run_id=queued.run_id,
+        now=_NOW + timedelta(seconds=5),
+    )
+    assert reclaimed is not None
+    assert reclaimed[0] == application_id
+    db.close()
+
+
 def test_unexpected_inspection_failure_persists_quarantine(tmp_path, monkeypatch) -> None:
     scenario = _scenario(tmp_path, monkeypatch)
     db = scenario.factory()
@@ -921,6 +1088,7 @@ def test_policy_limits_reserve_before_command_creation(
     )
     assert record.allowed is False
     assert reason_code in json.loads(record.reason_codes_json)
+    assert db.get(Application, scenario.application_id).needs_review_reason is None
     assert db.query(SubmissionCommand).count() == 0
     db.close()
 

@@ -28,6 +28,7 @@ from core.application_mutations import (
     lock_application_for_mutation,
 )
 from core.automation_policy_service import (
+    RETRYABLE_AUTOMATION_DENIALS,
     AutomationPolicyError,
     current_signed_policy,
     validate_automation_inspection_candidate,
@@ -61,7 +62,6 @@ class AutopilotInspectionLeaseLostError(RuntimeError):
 _REASON_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _INSPECTION_LEASE = timedelta(minutes=15)
 _SCAN_BATCH_SIZE = 25
-_TRANSIENT_CLAIM_DENIALS = frozenset({"KILL_SWITCH_ACTIVE", "OUTSIDE_ACTIVE_HOURS"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +295,63 @@ def _mark_quarantined(
     db.commit()
 
 
+def _restore_retryable_inspection(
+    db,
+    *,
+    application_id: int,
+    reason_code: str,
+    inspection_run_id: int,
+    claim_token: str,
+    now: datetime,
+) -> None:
+    """Release an exact lease after a transient, pre-command policy denial."""
+
+    db.rollback()
+    _fence_inspection_run(
+        db,
+        run_id=inspection_run_id,
+        application_id=application_id,
+        claim_token=claim_token,
+        now=now,
+    )
+    row = db.get(AutopilotInspectionRun, inspection_run_id)
+    if row is None:
+        raise AutopilotInspectionLeaseLostError
+    try:
+        locked = lock_application_for_mutation(
+            db,
+            application_id=application_id,
+            intent=ApplicationMutationIntent.CONTENT,
+            expected_revision=row.application_revision,
+        )
+    except ApplicationMutationBlockedError as exc:
+        raise AutopilotInspectionError(exc.reason_code) from exc
+    if locked is None:
+        raise AutopilotInspectionError("APPLICATION_NOT_FOUND")
+    if locked.application.needs_review_reason not in {None, reason_code}:
+        raise AutopilotInspectionError("APPLICATION_REVIEW_CHANGED")
+
+    locked.application.needs_review_reason = None
+    row.state = "queued"
+    row.claimed_at = None
+    row.lease_expires_at = None
+    row.claim_token = None
+    row.finished_at = None
+    row.reason_code = None
+    record_application_event(
+        db,
+        application_id,
+        "qualified_autopilot_deferred",
+        actor="qualified_autopilot",
+        details={
+            "reason_code": reason_code,
+            "external_action_queued": False,
+            "retryable": True,
+        },
+    )
+    db.commit()
+
+
 def _finalize_autopilot_dispatch_result(
     db,
     *,
@@ -306,19 +363,43 @@ def _finalize_autopilot_dispatch_result(
 ) -> dict[str, object]:
     """Persist dispatch quarantine state before returning the worker result."""
 
+    state = result.state
     reason_code = result.reason_code
     if result.state == "quarantined":
         reason_code = _bounded_reason(reason_code)
-        _mark_quarantined(
-            db,
-            application_id=application_id,
-            reason_code=reason_code,
-            inspection_run_id=inspection_run_id,
-            claim_token=claim_token,
-            now=now,
-        )
+        if reason_code in RETRYABLE_AUTOMATION_DENIALS:
+            try:
+                _restore_retryable_inspection(
+                    db,
+                    application_id=application_id,
+                    reason_code=reason_code,
+                    inspection_run_id=inspection_run_id,
+                    claim_token=claim_token,
+                    now=now,
+                )
+            except AutopilotInspectionError as exc:
+                reason_code = exc.reason_code
+                _mark_quarantined(
+                    db,
+                    application_id=application_id,
+                    reason_code=reason_code,
+                    inspection_run_id=inspection_run_id,
+                    claim_token=claim_token,
+                    now=now,
+                )
+            else:
+                state = "retryable"
+        else:
+            _mark_quarantined(
+                db,
+                application_id=application_id,
+                reason_code=reason_code,
+                inspection_run_id=inspection_run_id,
+                claim_token=claim_token,
+                now=now,
+            )
     return {
-        "state": result.state,
+        "state": state,
         "reason_code": reason_code,
         "policy_decision_id": result.policy_decision_id,
         "attempt_id": result.attempt_id,
@@ -557,7 +638,7 @@ def _claim_inspection_run(
         if application is None or application.revision != row.application_revision:
             raise AutomationPolicyError("APPLICATION_REVISION_CHANGED")
     except AutomationPolicyError as exc:
-        if exc.reason_code in _TRANSIENT_CLAIM_DENIALS:
+        if exc.reason_code in RETRYABLE_AUTOMATION_DENIALS:
             row.state = "queued"
             row.claimed_at = None
             row.lease_expires_at = None
@@ -668,6 +749,8 @@ def execute_qualified_autopilot_inspection(
                 }
         finally:
             quarantine_db.close()
+    if result.get("state") == "retryable":
+        return {**result, "run_id": run_id, "lease_finished": True}
     terminal_reason = (
         "COMMAND_QUEUED"
         if result.get("state") == "queued"

@@ -67,6 +67,15 @@ _ZERO_DIGEST = "0" * 64
 _REASON_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _JERUSALEM = ZoneInfo("Asia/Jerusalem")
 _AUTOMATION_AUTHORITY_FENCE_ID = AUTOMATION_AUTHORITY_FENCE_ID
+RETRYABLE_AUTOMATION_DENIALS = frozenset(
+    {
+        "KILL_SWITCH_ACTIVE",
+        "OUTSIDE_ACTIVE_HOURS",
+        "AUTOMATION_DAILY_LIMIT_REACHED",
+        "AUTOMATION_HOURLY_LIMIT_REACHED",
+        "AUTOMATION_COMPANY_LIMIT_REACHED",
+    }
+)
 
 
 class AutomationPolicyError(ValueError):
@@ -987,7 +996,10 @@ def evaluate_auto_submit_policy(
         application.approval_source = "qualified_autopilot_policy"
         mark_application_prepared(application)
     else:
-        application.needs_review_reason = unique_reasons[0]
+        review_reasons = tuple(
+            reason for reason in unique_reasons if reason not in RETRYABLE_AUTOMATION_DENIALS
+        )
+        application.needs_review_reason = review_reasons[0] if review_reasons else None
     db.flush()
     return row
 
@@ -1162,6 +1174,7 @@ def policy_usage_status(
 
 __all__ = [
     "AutomationPolicyError",
+    "RETRYABLE_AUTOMATION_DENIALS",
     "activate_auto_submit_policy",
     "company_identity_digest",
     "confirmed_answer_revision",
