@@ -65,6 +65,9 @@ def issue_final_submit_permit(
         cv_hash=attempt.attached_cv_hash or "",
         authority_kind=attempt.authority_kind,
         automation_policy_decision_digest=attempt.automation_policy_decision_digest,
+        qualification_canary_authorization_digest=(
+            attempt.qualification_canary_authorization_digest
+        ),
         issued_at=timestamp,
         expires_at=expires_at,
     )
@@ -119,6 +122,11 @@ def validate_final_submit_permit(
             permit.automation_policy_decision_digest,
             attempt.automation_policy_decision_digest,
             "AUTOMATION_POLICY_CHANGED",
+        ),
+        (
+            permit.qualification_canary_authorization_digest,
+            attempt.qualification_canary_authorization_digest,
+            "CANARY_AUTHORIZATION_CHANGED",
         ),
     )
     for expected, observed, reason_code in bindings:

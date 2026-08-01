@@ -1815,12 +1815,14 @@ def register_ashby_browser_v1(
     *,
     browser_factory: AshbyBrowserFactory,
     answer_policy: AnswerPolicyV1 | None = None,
+    descriptor: AdapterDescriptor | None = None,
 ) -> AshbyBrowserV1:
     """Register fixture inventory without authorizing arbitrary employer URLs."""
 
     adapter = AshbyBrowserV1(
         browser_factory=browser_factory,
         answer_policy=answer_policy,
+        descriptor=descriptor,
     )
     registry.register_two_phase(adapter)
     return adapter

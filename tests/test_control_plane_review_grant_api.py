@@ -13,8 +13,12 @@ from sqlalchemy.orm import sessionmaker
 
 from api import main as api_main
 from api.routes import applications as applications_route
+from core.adapter_qualification_service import fixture_evidence_digest
+from core.automation_policy_service import form_contract_digest
 from core.config import Settings
+from core.runtime_identity import get_runtime_identity
 from db.models import (
+    AdapterQualificationRecord,
     Application,
     Base,
     ControlPlaneReviewGrant,
@@ -24,6 +28,7 @@ from db.models import (
     Submission,
     SubmissionCommand,
 )
+from ingestion.url_utils import normalize_url, url_hash
 from submitters.platforms import (
     TWO_PHASE_EXECUTION_CONTRACT_VERSION,
     QualificationTier,
@@ -87,6 +92,27 @@ def review_grant_api(tmp_path, monkeypatch):
         expires_at=now + timedelta(minutes=30),
     )
     db.add(plan)
+    db.flush()
+    db.add(
+        AdapterQualificationRecord(
+            qualification_tier="live_canary_qualified",
+            adapter_name=descriptor.platform,
+            adapter_version=descriptor.adapter_version,
+            selector_version=descriptor.selector_version,
+            execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
+            form_fingerprint=fingerprint,
+            form_contract_digest=form_contract_digest(plan),
+            fixture_digest=fixture_evidence_digest(descriptor.platform),
+            application_id=application.id,
+            application_revision=application.revision,
+            form_plan_id=plan.id,
+            attempt_id=900_002,
+            job_url_hash=url_hash(normalize_url(job.apply_url)),
+            evidence_digest="9" * 64,
+            runner_release=get_runtime_identity().release_id,
+            qualified_at=now,
+        )
+    )
     db.commit()
     reviewed = {
         "application_id": application.id,
@@ -319,6 +345,12 @@ def test_review_grant_fails_closed_when_runtime_or_adapter_is_unqualified(
         "adapter_for_url",
         lambda _url: descriptor,
     )
+    db = factory()
+    qualification = db.query(AdapterQualificationRecord).one()
+    qualification.invalidated_at = datetime.now(UTC).replace(tzinfo=None)
+    qualification.invalidation_reason = "TEST_INVALIDATION"
+    db.commit()
+    db.close()
     adapter_response = client.post(url, json=_payload(reviewed), headers=headers)
     assert adapter_response.status_code == 409
     assert adapter_response.json()["detail"]["code"] == "ADAPTER_NOT_QUALIFIED"

@@ -167,7 +167,8 @@ jobs:
           mypy --follow-imports=skip --ignore-missing-imports
           core/automation_authority_fence.py
           core/automation_policy.py core/automation_policy_keys.py
-          core/automation_policy_service.py core/submission_service.py
+          core/automation_policy_service.py core/adapter_qualification_service.py
+          core/submission_service.py
           core/submit_permits.py api/routes/automation.py
           worker/autopilot.py worker/autopilot_inspection.py
           worker/control_plane_client.py worker/control_plane_runner.py
@@ -240,6 +241,7 @@ jobs:
           core/application_audit.py core/automation_authority_fence.py
           core/automation_policy.py
           core/automation_policy_keys.py core/automation_policy_service.py
+          core/adapter_qualification_service.py
           core/config.py core/form_plan_evidence.py
           core/form_planning.py core/form_plan_persistence.py
           core/material_audit.py core/operations.py core/runtime_identity.py

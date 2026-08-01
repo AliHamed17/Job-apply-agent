@@ -2115,12 +2115,14 @@ def register_greenhouse_browser_v1(
     *,
     browser_factory: GreenhouseBrowserFactory,
     answer_policy: AnswerPolicyV1 | None = None,
+    descriptor: AdapterDescriptor | None = None,
 ) -> GreenhouseBrowserV1:
     """Register the fixture adapter without authorizing final execution."""
 
     adapter = GreenhouseBrowserV1(
         browser_factory=browser_factory,
         answer_policy=answer_policy,
+        descriptor=descriptor,
     )
     registry.register_two_phase(adapter)
     return adapter

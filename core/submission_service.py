@@ -25,6 +25,7 @@ from db.models import (
     ApplicationPolicyDecision,
     FormPlan,
     JobStatus,
+    QualificationCanaryAuthorization,
     Submission,
     SubmissionCommand,
     SubmissionStatus,
@@ -38,7 +39,7 @@ from llm.contracts import (
     is_qualified_material_identity,
 )
 from llm.qualification_registry import is_qualified_local_model_identity
-from submitters.platforms import AdapterDescriptor, adapter_for_url
+from submitters.platforms import AdapterDescriptor
 
 
 class SubmissionAdmissionError(ValueError):
@@ -71,6 +72,7 @@ class SubmissionCommandRequest:
     authority_expires_at: datetime | None = None
     authority_kind: str = "explicit_operator"
     automation_policy_decision_id: int | None = None
+    qualification_canary_authorization_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,15 +222,26 @@ def _runtime_release(capabilities: Mapping[str, object]) -> str:
     return value[:64]
 
 
-def _require_runtime(capabilities: Mapping[str, object]) -> str:
+def _require_runtime(
+    capabilities: Mapping[str, object],
+    *,
+    authority_kind: str,
+) -> str:
+    canary_bootstrap = authority_kind == "qualification_canary"
     submission = capabilities.get("submission")
     if not isinstance(submission, Mapping) or submission.get("allowed") is not True:
-        reasons = submission.get("reasons", []) if isinstance(submission, Mapping) else []
-        reason = next(
-            (str(item) for item in reasons if isinstance(item, str) and 1 <= len(item) <= 64),
-            "RUNTIME_NOT_READY",
-        )
-        raise SubmissionAdmissionError(reason)
+        raw_reasons = submission.get("reasons", []) if isinstance(submission, Mapping) else []
+        reasons = [
+            item
+            for item in (raw_reasons if isinstance(raw_reasons, (list, tuple)) else ())
+            if isinstance(item, str)
+        ]
+        if not (canary_bootstrap and reasons and set(reasons) == {"ADAPTER_NOT_QUALIFIED"}):
+            reason = next(
+                (item for item in reasons if 1 <= len(item) <= 64),
+                "RUNTIME_NOT_READY",
+            )
+            raise SubmissionAdmissionError(reason)
     automation = capabilities.get("automation")
     if not isinstance(automation, Mapping) or automation.get("submission_ready") is not True:
         stages = automation.get("stages") if isinstance(automation, Mapping) else None
@@ -236,18 +249,19 @@ def _require_runtime(capabilities: Mapping[str, object]) -> str:
         raw_reasons = (
             submission_stage.get("reason_codes") if isinstance(submission_stage, Mapping) else ()
         )
-        reasons = raw_reasons if isinstance(raw_reasons, (list, tuple)) else ()
-        reason = next(
-            (
-                item
-                for item in reasons
-                if isinstance(item, str)
-                and 1 <= len(item) <= 64
-                and item.replace("_", "").isalnum()
-            ),
-            "AUTOMATION_SUBMISSION_NOT_READY",
-        )
-        raise SubmissionAdmissionError(reason)
+        stage_reasons = raw_reasons if isinstance(raw_reasons, (list, tuple)) else ()
+        bounded_reasons = [
+            item
+            for item in stage_reasons
+            if isinstance(item, str) and 1 <= len(item) <= 64 and item.replace("_", "").isalnum()
+        ]
+        if not (
+            canary_bootstrap
+            and bounded_reasons
+            and set(bounded_reasons) == {"ADAPTER_NOT_QUALIFIED"}
+        ):
+            reason = next(iter(bounded_reasons), "AUTOMATION_SUBMISSION_NOT_READY")
+            raise SubmissionAdmissionError(reason)
     release = _runtime_release(capabilities)
     if release in {"unknown", "unavailable"}:
         raise SubmissionAdmissionError("RUNTIME_NOT_READY")
@@ -313,6 +327,8 @@ def _find_replay(
         or attempt.form_plan.plan_id != request.form_plan_id
         or attempt.authority_kind != request.authority_kind
         or attempt.automation_policy_decision_id != request.automation_policy_decision_id
+        or attempt.qualification_canary_authorization_id
+        != request.qualification_canary_authorization_id
     ):
         raise SubmissionAdmissionError("IDEMPOTENCY_KEY_CONFLICT")
     return CreatedSubmissionCommand(
@@ -500,20 +516,70 @@ def _validate_automation_authority(
     request: SubmissionCommandRequest,
     application: Application,
     plan: FormPlan,
+    job_url: str,
+    runner_release: str,
     now: datetime,
-) -> tuple[ApplicationPolicyDecision | None, datetime | None]:
+) -> tuple[
+    ApplicationPolicyDecision | None,
+    QualificationCanaryAuthorization | None,
+    datetime | None,
+]:
     """Resolve system authority without allowing callers to forge policy state."""
 
     if request.authority_kind not in {
         "explicit_operator",
         "control_plane",
         "qualified_autopilot",
+        "qualification_canary",
     }:
+        raise SubmissionAdmissionError("SUBMISSION_AUTHORITY_INVALID")
+    if request.authority_kind == "qualification_canary":
+        if (
+            request.automation_policy_decision_id is not None
+            or request.qualification_canary_authorization_id is None
+        ):
+            raise SubmissionAdmissionError("SUBMISSION_AUTHORITY_INVALID")
+        query = db.query(QualificationCanaryAuthorization).filter(
+            QualificationCanaryAuthorization.id == request.qualification_canary_authorization_id
+        )
+        if db.bind.dialect.name == "postgresql":
+            query = query.with_for_update()
+        authorization = query.populate_existing().one_or_none()
+        if authorization is None:
+            raise SubmissionAdmissionError("CANARY_AUTHORIZATION_REQUIRED")
+        try:
+            from core.adapter_qualification_service import (
+                AdapterQualificationError,
+                validate_qualification_canary_authorization,
+            )
+
+            authorization = validate_qualification_canary_authorization(
+                db,
+                authorization_id=authorization.id,
+                authorization_digest=authorization.authorization_digest,
+                application=application,
+                plan=plan,
+                job_url=job_url,
+                runner_release=runner_release,
+                consumed=False,
+                now=_aware_utc(now),
+                lock=False,
+            )
+        except AdapterQualificationError as exc:
+            raise SubmissionAdmissionError(exc.reason_code) from exc
+        expiry = _aware_utc(authorization.expires_at)
+        if expiry is None:
+            raise SubmissionAdmissionError("CANARY_AUTHORIZATION_EXPIRED")
+        requested_expiry = _aware_utc(request.authority_expires_at)
+        if requested_expiry is not None:
+            expiry = min(expiry, requested_expiry)
+        return None, authorization, expiry
+    if request.qualification_canary_authorization_id is not None:
         raise SubmissionAdmissionError("SUBMISSION_AUTHORITY_INVALID")
     if request.authority_kind != "qualified_autopilot":
         if request.automation_policy_decision_id is not None:
             raise SubmissionAdmissionError("SUBMISSION_AUTHORITY_INVALID")
-        return None, request.authority_expires_at
+        return None, None, request.authority_expires_at
     if request.automation_policy_decision_id is None:
         raise SubmissionAdmissionError("AUTOMATION_DECISION_REQUIRED")
     query = db.query(ApplicationPolicyDecision).filter(
@@ -551,7 +617,7 @@ def _validate_automation_authority(
         raise SubmissionAdmissionError("AUTOMATION_AUTHORITY_EXPIRED")
     if requested_expiry is not None:
         expiry = min(expiry, requested_expiry)
-    return record, expiry
+    return record, None, expiry
 
 
 def _create_one(
@@ -560,7 +626,7 @@ def _create_one(
     request: SubmissionCommandRequest,
     settings: Settings,
     capabilities: Mapping[str, object],
-    descriptor_resolver: DescriptorResolver,
+    descriptor_resolver: DescriptorResolver | None,
     session_checker: SessionChecker,
     now: datetime,
 ) -> CreatedSubmissionCommand:
@@ -645,18 +711,43 @@ def _create_one(
     _require_profile_snapshot(db, plan.profile_version)
     job = application.job
     job_url = ((job.apply_url or job.source_url) if job else "") or ""
-    descriptor = _validate_adapter(descriptor_resolver(job_url), plan)
+    runner_release = _require_runtime(
+        capabilities,
+        authority_kind=request.authority_kind,
+    )
+    _require_model_binding(application, domain_plan, capabilities)
+    automation_decision, canary_authorization, authority_expires_at = (
+        _validate_automation_authority(
+            db,
+            request=request,
+            application=application,
+            plan=plan,
+            job_url=job_url,
+            runner_release=runner_release,
+            now=now,
+        )
+    )
+    if canary_authorization is not None:
+        from core.adapter_qualification_service import descriptor_for_validated_canary
+
+        descriptor_candidate = descriptor_for_validated_canary(
+            canary_authorization,
+            job_url=job_url,
+            plan=plan,
+        )
+    elif descriptor_resolver is not None:
+        descriptor_candidate = descriptor_resolver(job_url)
+    else:
+        from core.adapter_qualification_service import effective_live_descriptor_for_plan
+
+        descriptor_candidate = effective_live_descriptor_for_plan(
+            db,
+            job_url=job_url,
+            plan=plan,
+        )
+    descriptor = _validate_adapter(descriptor_candidate, plan)
     if not session_checker(job_url, descriptor, settings):
         raise SubmissionAdmissionError("SESSION_EXPIRED")
-    runner_release = _require_runtime(capabilities)
-    _require_model_binding(application, domain_plan, capabilities)
-    automation_decision, authority_expires_at = _validate_automation_authority(
-        db,
-        request=request,
-        application=application,
-        plan=plan,
-        now=now,
-    )
 
     next_attempt_number = (
         db.query(func.coalesce(func.max(Submission.attempt_number), 0))
@@ -693,9 +784,21 @@ def _create_one(
         automation_policy_decision_digest=(
             automation_decision.decision_digest if automation_decision is not None else None
         ),
+        qualification_canary_authorization_id=(
+            canary_authorization.id if canary_authorization is not None else None
+        ),
+        qualification_canary_authorization_digest=(
+            canary_authorization.authorization_digest if canary_authorization is not None else None
+        ),
     )
     db.add(attempt)
     db.flush()
+    if canary_authorization is not None:
+        from core.adapter_qualification_service import (
+            consume_qualification_canary_authorization,
+        )
+
+        consume_qualification_canary_authorization(canary_authorization, now=now)
     record_attempt_stage(
         db,
         attempt,
@@ -760,7 +863,7 @@ def create_submission_commands(
     *,
     settings: Settings | None = None,
     capabilities: Mapping[str, object] | None = None,
-    descriptor_resolver: DescriptorResolver = adapter_for_url,
+    descriptor_resolver: DescriptorResolver | None = None,
     session_checker: SessionChecker = _default_session_checker,
     now: datetime | None = None,
 ) -> list[CreatedSubmissionCommand]:

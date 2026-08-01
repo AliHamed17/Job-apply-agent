@@ -9,11 +9,12 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from api.routes import applications as applications_route
+from core.config import Settings
 from core.submission_domain import (
     VERIFIED_ATTACHMENT_EVIDENCE_REF,
     VERIFIED_ATTACHMENT_SENTINEL,
@@ -26,6 +27,7 @@ from core.submission_domain import (
     FormPlanV1,
 )
 from db.models import (
+    AdapterQualificationRecord,
     Application,
     Base,
     FormPlan,
@@ -202,12 +204,10 @@ async def test_injected_offline_inspector_persists_greenhouse_plan_without_comma
     application = _application(factory)
     inspector = _OfflineInspector(_domain_plan(application.id, application.revision))
     _patch_private_inputs(monkeypatch, tmp_path)
-    import submitters.registry
-
     monkeypatch.setattr(
-        submitters.registry,
-        "get_two_phase_registry",
-        lambda: SimpleNamespace(get_inspector=lambda _job: inspector),
+        applications_route,
+        "_scoped_inspection_registry",
+        lambda *_args, **_kwargs: SimpleNamespace(get_inspector=lambda _job: inspector),
     )
     db = factory()
 
@@ -260,4 +260,136 @@ async def test_injected_offline_inspector_persists_greenhouse_plan_without_comma
     current = db.get(Application, application.id)
     assert current.status == JobStatus.DRAFT
     assert current.prepared_revision is None
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_guarded_real_url_dry_run_records_authority_without_command(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    factory = _factory(tmp_path)
+    application = _application(factory)
+    inspector = _OfflineInspector(_domain_plan(application.id, application.revision))
+    _patch_private_inputs(monkeypatch, tmp_path)
+    secret = "qualification-dry-run-secret-" + "x" * 40
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        secret_key=secret,
+        dry_run=True,
+        draft_only=True,
+        portal_final_submit_enabled=False,
+    )
+    monkeypatch.setattr(applications_route, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        applications_route,
+        "_scoped_inspection_registry",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            get_qualification_inspector=lambda _job: inspector
+        ),
+    )
+    monkeypatch.setattr(
+        applications_route,
+        "get_runtime_identity",
+        lambda: SimpleNamespace(release_id="exact-main-test-release"),
+    )
+    monkeypatch.setattr(applications_route, "runtime_source_is_current", lambda _identity: True)
+    lock_events: list[str] = []
+    original_lock = applications_route._lock_mutation_or_http
+
+    def tracked_application_lock(*args, **kwargs):
+        lock_events.append("application_lock")
+        return original_lock(*args, **kwargs)
+
+    monkeypatch.setattr(applications_route, "_lock_mutation_or_http", tracked_application_lock)
+    monkeypatch.setattr(
+        applications_route,
+        "lock_automation_authority_fence",
+        lambda _db: lock_events.append("authority_fence"),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/applications/1/qualification/dry-run",
+            "headers": [(b"authorization", f"Bearer {secret}".encode("ascii"))],
+            "query_string": b"",
+        }
+    )
+    db = factory()
+
+    response = await applications_route.qualify_application_dry_run(
+        application.id,
+        applications_route.QualificationDryRunRequest(
+            application_revision=1,
+            acknowledgement="RUN_REAL_URL_DRY_RUN",
+        ),
+        request,
+        db,
+    )
+
+    assert response.qualification_tier == "dry_run_qualified"
+    assert response.final_action_enabled is False
+    assert response.adapter_name == "greenhouse"
+    assert lock_events == ["application_lock", "authority_fence", "application_lock"]
+    assert db.query(AdapterQualificationRecord).count() == 1
+    assert db.query(Submission).count() == 0
+    assert db.query(SubmissionCommand).count() == 0
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_real_url_dry_run_refuses_live_mode_before_inspection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    factory = _factory(tmp_path)
+    application = _application(factory)
+    _patch_private_inputs(monkeypatch, tmp_path)
+    secret = "qualification-live-guard-secret-" + "x" * 40
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        secret_key=secret,
+        dry_run=False,
+        draft_only=False,
+        portal_final_submit_enabled=True,
+        live_automation_acknowledged=True,
+    )
+    monkeypatch.setattr(applications_route, "get_settings", lambda: settings)
+    forbidden = AsyncMock(side_effect=AssertionError("guard must run before inspection"))
+    monkeypatch.setattr(
+        applications_route,
+        "_scoped_inspection_registry",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            get_qualification_inspector=lambda _job: forbidden
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/applications/1/qualification/dry-run",
+            "headers": [(b"authorization", f"Bearer {secret}".encode("ascii"))],
+            "query_string": b"",
+        }
+    )
+    db = factory()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await applications_route.qualify_application_dry_run(
+            application.id,
+            applications_route.QualificationDryRunRequest(
+                application_revision=1,
+                acknowledgement="RUN_REAL_URL_DRY_RUN",
+            ),
+            request,
+            db,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "QUALIFICATION_DRY_RUN_GUARD_REQUIRED"
+    forbidden.assert_not_awaited()
+    assert db.query(AdapterQualificationRecord).count() == 0
     db.close()

@@ -61,7 +61,11 @@ from core.form_planning import (
 )
 from core.operational_metrics import record_attempt_outcome, record_form_decision
 from core.operations import readiness_report
-from core.runtime_identity import build_runtime_capabilities, get_runtime_identity
+from core.runtime_identity import (
+    build_runtime_capabilities,
+    get_runtime_identity,
+    runtime_source_is_current,
+)
 from core.submission_domain import (
     AnswerDecisionV1,
     AnswerDisposition,
@@ -84,6 +88,7 @@ from db.models import (
     JobStatus,
     OperatorApprovedAnswer,
     Submission,
+    SubmissionCommand,
     SubmissionStatus,
 )
 from db.session import get_db
@@ -130,6 +135,8 @@ class SubmissionAttemptResponse(BaseModel):
     authority_kind: str
     automation_policy_decision_id: int | None
     automation_policy_decision_digest: str | None
+    qualification_canary_authorization_id: int | None
+    qualification_canary_authorization_digest: str | None
     reconciliation_source: str | None
     reconciliation_evidence_ref: str | None
     created_at: str | None
@@ -218,6 +225,10 @@ class InspectApplicationRequest(BaseModel):
     application_revision: PositiveInt
 
 
+class QualificationDryRunRequest(InspectApplicationRequest):
+    acknowledgement: Literal["RUN_REAL_URL_DRY_RUN"]
+
+
 class ReconcileRequest(BaseModel):
     outcome: str
     note: str = Field(min_length=3, max_length=500)
@@ -235,6 +246,14 @@ class ClientReleaseIdentityRequest(BaseModel):
 
 class SubmitApplicationRequest(BaseModel):
     acknowledgement: Literal["SEND_APPLICATION"]
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    application_revision: PositiveInt
+    form_plan_id: str = Field(min_length=36, max_length=36)
+    client_release: ClientReleaseIdentityRequest
+
+
+class QualificationCanaryRequest(BaseModel):
+    acknowledgement: Literal["SEND_QUALIFICATION_CANARY"]
     idempotency_key: str = Field(min_length=8, max_length=128)
     application_revision: PositiveInt
     form_plan_id: str = Field(min_length=36, max_length=36)
@@ -321,6 +340,18 @@ class FormPlanResponse(BaseModel):
     invalidated_at: str | None
     invalidation_reason: str | None
     valid: bool
+
+
+class QualificationDryRunResponse(BaseModel):
+    form_plan: FormPlanResponse
+    qualification_id: int
+    qualification_tier: Literal["dry_run_qualified"] = "dry_run_qualified"
+    adapter_name: str
+    adapter_version: str
+    selector_version: str
+    form_fingerprint: str
+    evidence_digest: str
+    final_action_enabled: Literal[False] = False
 
 
 class ConfirmAnswerRequest(BaseModel):
@@ -474,6 +505,10 @@ def _attempt_response(attempt) -> SubmissionAttemptResponse:
         authority_kind=attempt.authority_kind,
         automation_policy_decision_id=attempt.automation_policy_decision_id,
         automation_policy_decision_digest=attempt.automation_policy_decision_digest,
+        qualification_canary_authorization_id=(attempt.qualification_canary_authorization_id),
+        qualification_canary_authorization_digest=(
+            attempt.qualification_canary_authorization_digest
+        ),
         reconciliation_source=attempt.reconciliation_source,
         reconciliation_evidence_ref=attempt.reconciliation_evidence_ref,
         created_at=_utc_iso(attempt.created_at),
@@ -1106,6 +1141,25 @@ async def batch_approve_applications(
     )
 
 
+def _scoped_inspection_registry(
+    db: Session,
+    *,
+    job_url: str,
+    qualification_mode: bool,
+):
+    """Resolve a fresh registry without exposing a process-global authority seam."""
+
+    from core.adapter_qualification_service import effective_inspection_descriptor
+    from submitters.registry import build_scoped_two_phase_registry
+
+    descriptor = (
+        adapter_for_url(job_url)
+        if qualification_mode
+        else effective_inspection_descriptor(db, job_url)
+    )
+    return build_scoped_two_phase_registry(descriptor) if descriptor is not None else None
+
+
 @router.post(
     "/applications/{app_id}/inspect",
     response_model=FormPlanResponse,
@@ -1114,6 +1168,22 @@ async def inspect_application_form(
     app_id: int,
     body: InspectApplicationRequest,
     db: Session = Depends(get_db),
+):
+    response, _qualification = await _inspect_application_form_impl(
+        app_id,
+        body,
+        db,
+        qualification_mode=False,
+    )
+    return response
+
+
+async def _inspect_application_form_impl(
+    app_id: int,
+    body: InspectApplicationRequest,
+    db: Session,
+    *,
+    qualification_mode: bool,
 ):
     """Observe and plan one candidate form without creating a submission attempt."""
 
@@ -1170,7 +1240,6 @@ async def inspect_application_form(
         raise
 
     from jobs.models import JobData
-    from submitters.registry import get_two_phase_registry
 
     job = locked.job
     job_data = JobData(
@@ -1197,7 +1266,21 @@ async def inspect_application_form(
     profile_version = app.profile_version
     profile_payload = profile_snapshot.profile.model_dump(mode="python")
     resume_path = selected.resolved_path
-    inspector = get_two_phase_registry().get_inspector(job_data)
+    job_url = job.apply_url or job.source_url or ""
+    scoped_registry = _scoped_inspection_registry(
+        db,
+        job_url=job_url,
+        qualification_mode=qualification_mode,
+    )
+    inspector = (
+        (
+            scoped_registry.get_qualification_inspector(job_data)
+            if qualification_mode
+            else scoped_registry.get_inspector(job_data)
+        )
+        if scoped_registry is not None
+        else None
+    )
     db.rollback()
 
     if inspector is None:
@@ -1270,6 +1353,12 @@ async def inspect_application_form(
         ) from exc
 
     # Re-lock after browser navigation and prove that no review input changed.
+    # Qualification records participate in final-action authority, so acquire
+    # the shared authority fence before the application row.  The first
+    # transaction was rolled back above: no database lock is held while the
+    # browser is inspecting the external form.
+    if qualification_mode:
+        lock_automation_authority_fence(db)
     locked = _lock_mutation_or_http(
         db,
         application_id=app_id,
@@ -1302,10 +1391,44 @@ async def inspect_application_form(
                 "message": "The observed form no longer matches this application revision.",
             },
         ) from exc
+    qualification = None
+    if qualification_mode:
+        from core.adapter_qualification_service import (
+            AdapterQualificationError,
+            record_dry_run_qualification,
+        )
+
+        identity = get_runtime_identity()
+        if identity.release_id in {"", "unknown", "unavailable"} or not runtime_source_is_current(
+            identity
+        ):
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "BUILD_MISMATCH", "message": "Use an exact-main runner."},
+            )
+        try:
+            qualification = record_dry_run_qualification(
+                db,
+                application=app,
+                plan=row,
+                job_url=job_url,
+                runner_release=identity.release_id,
+            )
+        except AdapterQualificationError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": exc.reason_code,
+                    "message": "The real-URL inspection did not qualify this adapter build.",
+                },
+            ) from exc
     db.commit()
     db.refresh(row)
     if (
-        db.query(AutomationPolicyRevisionRecord.id)
+        not qualification_mode
+        and db.query(AutomationPolicyRevisionRecord.id)
         .filter(AutomationPolicyRevisionRecord.active_slot == 1)
         .first()
         is not None
@@ -1319,7 +1442,48 @@ async def inspect_application_form(
                 "qualified_autopilot_wake_failed",
                 application_id=app.id,
             )
-    return _form_plan_response(row, app)
+    return _form_plan_response(row, app), qualification
+
+
+@router.post(
+    "/applications/{app_id}/qualification/dry-run",
+    response_model=QualificationDryRunResponse,
+)
+async def qualify_application_dry_run(
+    app_id: int,
+    body: QualificationDryRunRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Inspect one explicit real URL with final submission mechanically disabled."""
+
+    _require_live_operator_auth(request)
+    settings = get_settings()
+    if not (settings.dry_run and settings.draft_only and not settings.portal_final_submit_enabled):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "QUALIFICATION_DRY_RUN_GUARD_REQUIRED",
+                "message": "Enable DRY_RUN and DRAFT_ONLY and disable final submission.",
+            },
+        )
+    form_plan, qualification = await _inspect_application_form_impl(
+        app_id,
+        body,
+        db,
+        qualification_mode=True,
+    )
+    if qualification is None:
+        raise HTTPException(status_code=409, detail={"code": "DRY_RUN_NOT_QUALIFIED"})
+    return QualificationDryRunResponse(
+        form_plan=form_plan,
+        qualification_id=qualification.id,
+        adapter_name=qualification.adapter_name,
+        adapter_version=qualification.adapter_version,
+        selector_version=qualification.selector_version,
+        form_fingerprint=qualification.form_fingerprint,
+        evidence_digest=qualification.evidence_digest,
+    )
 
 
 @router.get(
@@ -1770,7 +1934,28 @@ async def allow_remote_send(
         if application.job is not None
         else ""
     ) or ""
-    descriptor = adapter_for_url(job_url)
+    from core.adapter_qualification_service import effective_live_descriptor_for_plan
+
+    code_descriptor = adapter_for_url(job_url)
+    if code_descriptor is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ADAPTER_NOT_QUALIFIED"},
+        )
+    if (
+        code_descriptor.platform != plan.adapter_name
+        or code_descriptor.adapter_version != plan.adapter_version
+        or code_descriptor.selector_version != plan.selector_version
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ADAPTER_VERSION_CHANGED"},
+        )
+    descriptor = effective_live_descriptor_for_plan(
+        db,
+        job_url=job_url,
+        plan=plan,
+    )
     if descriptor is None:
         raise HTTPException(
             status_code=409,
@@ -1854,6 +2039,130 @@ async def submit_application(
                     client_release=ClientReleaseIdentity(
                         **payload.client_release.model_dump(),
                     ),
+                )
+            ],
+        )[0]
+    except SubmissionAdmissionError as exc:
+        raise _admission_http_error(exc) from exc
+    if not result.replayed:
+        _wake_submission_command(result.command_id)
+    return SubmitAcceptedResponse(
+        application_id=result.application_id,
+        attempt_id=result.attempt_id,
+        command_id=result.command_id,
+        status_url=f"/api/submission-attempts/{result.attempt_id}",
+        replayed=result.replayed,
+    )
+
+
+@router.post(
+    "/applications/{app_id}/qualification/canary",
+    response_model=SubmitAcceptedResponse,
+    status_code=202,
+)
+async def submit_qualification_canary(
+    app_id: int,
+    payload: QualificationCanaryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Authorize one exact employer canary; never grants reusable authority itself."""
+
+    _require_live_operator_auth(request)
+    lock_automation_authority_fence(db)
+    existing = (
+        db.query(SubmissionCommand)
+        .filter(SubmissionCommand.idempotency_key == payload.idempotency_key)
+        .first()
+    )
+    authorization_id = None
+    authority_expires_at = None
+    if existing is not None:
+        existing_attempt = existing.attempt
+        if (
+            existing_attempt.application_id != app_id
+            or existing_attempt.application_revision != payload.application_revision
+            or existing_attempt.authority_kind != "qualification_canary"
+            or existing_attempt.form_plan is None
+            or existing_attempt.form_plan.plan_id != payload.form_plan_id
+            or existing_attempt.qualification_canary_authorization_id is None
+        ):
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "IDEMPOTENCY_KEY_CONFLICT"},
+            )
+        authorization_id = existing_attempt.qualification_canary_authorization_id
+        # A replay returns the already-created command; it does not acquire new
+        # authority and therefore must not be rejected merely because the
+        # original one-use grant has since expired.
+        authority_expires_at = None
+    else:
+        application_query = db.query(Application).filter(Application.id == app_id)
+        if db.bind.dialect.name == "postgresql":
+            application_query = application_query.with_for_update()
+        application = application_query.populate_existing().one_or_none()
+        if application is None:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Application not found")
+        plan_query = db.query(FormPlan).filter(
+            FormPlan.application_id == app_id,
+            FormPlan.plan_id == payload.form_plan_id,
+        )
+        if db.bind.dialect.name == "postgresql":
+            plan_query = plan_query.with_for_update()
+        plan = plan_query.populate_existing().one_or_none()
+        if plan is None:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Form plan not found")
+        job_url = (
+            (application.job.apply_url or application.job.source_url)
+            if application.job is not None
+            else ""
+        ) or ""
+        identity = get_runtime_identity()
+        if identity.release_id in {"", "unknown", "unavailable"} or not runtime_source_is_current(
+            identity
+        ):
+            db.rollback()
+            raise HTTPException(status_code=409, detail={"code": "BUILD_MISMATCH"})
+        from core.adapter_qualification_service import (
+            AdapterQualificationError,
+            mint_qualification_canary_authorization,
+        )
+
+        try:
+            authorization = mint_qualification_canary_authorization(
+                db,
+                application=application,
+                plan=plan,
+                job_url=job_url,
+                runner_release=identity.release_id,
+            )
+        except AdapterQualificationError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.reason_code},
+            ) from exc
+        authorization_id = authorization.id
+        authority_expires_at = authorization.expires_at
+
+    try:
+        result = create_submission_commands(
+            db,
+            [
+                SubmissionCommandRequest(
+                    application_id=app_id,
+                    client_idempotency_key=payload.idempotency_key,
+                    application_revision=payload.application_revision,
+                    form_plan_id=payload.form_plan_id,
+                    client_release=ClientReleaseIdentity(
+                        **payload.client_release.model_dump(),
+                    ),
+                    authority_expires_at=authority_expires_at,
+                    authority_kind="qualification_canary",
+                    qualification_canary_authorization_id=authorization_id,
                 )
             ],
         )[0]

@@ -2013,12 +2013,14 @@ def register_workday_browser_v2(
     *,
     browser_factory: WorkdayBrowserFactory,
     answer_policy: AnswerPolicyV1 | None = None,
+    descriptor: AdapterDescriptor | None = None,
 ) -> WorkdayBrowserV2:
     """Register the fixture-qualified inspector without authorizing final action."""
 
     adapter = WorkdayBrowserV2(
         browser_factory=browser_factory,
         answer_policy=answer_policy,
+        descriptor=descriptor,
     )
     registry.register_two_phase(adapter)
     return adapter

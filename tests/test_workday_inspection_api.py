@@ -127,12 +127,10 @@ def _patch_private_inputs(monkeypatch, inspector, tmp_path) -> None:
         "load_versioned_profile_snapshot",
         lambda _db, **_kwargs: SimpleNamespace(profile=UserProfile()),
     )
-    import submitters.registry
-
     monkeypatch.setattr(
-        submitters.registry,
-        "get_two_phase_registry",
-        lambda: SimpleNamespace(get_inspector=lambda _job: inspector),
+        applications_route,
+        "_scoped_inspection_registry",
+        lambda *_args, **_kwargs: SimpleNamespace(get_inspector=lambda _job: inspector),
     )
 
 

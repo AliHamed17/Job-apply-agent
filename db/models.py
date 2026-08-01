@@ -295,6 +295,18 @@ class Application(Base):
         order_by="AutopilotInspectionRun.id",
         cascade="all, delete-orphan",
     )
+    adapter_qualification_records = relationship(
+        "AdapterQualificationRecord",
+        back_populates="application",
+        order_by="AdapterQualificationRecord.id",
+        cascade="all, delete-orphan",
+    )
+    qualification_canary_authorizations = relationship(
+        "QualificationCanaryAuthorization",
+        back_populates="application",
+        order_by="QualificationCanaryAuthorization.id",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -413,6 +425,8 @@ class Submission(Base):
     )
     automation_policy_decision_id = Column(Integer, nullable=True)
     automation_policy_decision_digest = Column(String(64), nullable=True)
+    qualification_canary_authorization_id = Column(Integer, nullable=True)
+    qualification_canary_authorization_digest = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     application = relationship("Application", back_populates="submissions")
@@ -446,6 +460,11 @@ class Submission(Base):
         back_populates="attempt",
         foreign_keys=[automation_policy_decision_id],
     )
+    qualification_canary_authorization = relationship(
+        "QualificationCanaryAuthorization",
+        back_populates="attempt",
+        foreign_keys=[qualification_canary_authorization_id],
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -462,16 +481,25 @@ class Submission(Base):
         ),
         CheckConstraint(
             "authority_kind IN ('explicit_operator', 'control_plane', "
-            "'qualified_autopilot', 'legacy')",
+            "'qualified_autopilot', 'qualification_canary', 'legacy')",
             name="ck_submissions_authority_kind",
         ),
         CheckConstraint(
             "(authority_kind = 'qualified_autopilot' "
             "AND automation_policy_decision_id IS NOT NULL "
-            "AND automation_policy_decision_digest IS NOT NULL) OR "
-            "(authority_kind <> 'qualified_autopilot' "
+            "AND automation_policy_decision_digest IS NOT NULL "
+            "AND qualification_canary_authorization_id IS NULL "
+            "AND qualification_canary_authorization_digest IS NULL) OR "
+            "(authority_kind = 'qualification_canary' "
             "AND automation_policy_decision_id IS NULL "
-            "AND automation_policy_decision_digest IS NULL)",
+            "AND automation_policy_decision_digest IS NULL "
+            "AND qualification_canary_authorization_id IS NOT NULL "
+            "AND qualification_canary_authorization_digest IS NOT NULL) OR "
+            "(authority_kind NOT IN ('qualified_autopilot', 'qualification_canary') "
+            "AND automation_policy_decision_id IS NULL "
+            "AND automation_policy_decision_digest IS NULL "
+            "AND qualification_canary_authorization_id IS NULL "
+            "AND qualification_canary_authorization_digest IS NULL)",
             name="ck_submissions_automation_authority",
         ),
         CheckConstraint(
@@ -585,6 +613,21 @@ class Submission(Base):
             ["automation_policy_decision_id", "automation_policy_decision_digest"],
             ["application_policy_decisions.id", "application_policy_decisions.decision_digest"],
             name="fk_submissions_automation_policy_decision",
+        ),
+        ForeignKeyConstraint(
+            [
+                "qualification_canary_authorization_id",
+                "qualification_canary_authorization_digest",
+            ],
+            [
+                "qualification_canary_authorizations.id",
+                "qualification_canary_authorizations.authorization_digest",
+            ],
+            name="fk_submissions_qualification_canary_authorization",
+        ),
+        UniqueConstraint(
+            "qualification_canary_authorization_id",
+            name="uq_submissions_qualification_canary_authorization",
         ),
         Index("ix_submissions_application_id", "application_id"),
         Index("ix_submissions_status", "status"),
@@ -757,6 +800,7 @@ class FinalSubmitPermit(Base):
         server_default="explicit_operator",
     )
     automation_policy_decision_digest = Column(String(64), nullable=True)
+    qualification_canary_authorization_digest = Column(String(64), nullable=True)
 
     attempt = relationship("Submission", back_populates="final_submit_permit")
 
@@ -766,20 +810,30 @@ class FinalSubmitPermit(Base):
         Index("ix_final_submit_permits_expires_at", "expires_at"),
         CheckConstraint(
             "authority_kind IN ('explicit_operator', 'control_plane', "
-            "'qualified_autopilot', 'legacy')",
+            "'qualified_autopilot', 'qualification_canary', 'legacy')",
             name="ck_final_submit_permits_authority_kind",
         ),
         CheckConstraint(
             "(authority_kind = 'qualified_autopilot' "
-            "AND automation_policy_decision_digest IS NOT NULL) OR "
-            "(authority_kind <> 'qualified_autopilot' "
-            "AND automation_policy_decision_digest IS NULL)",
+            "AND automation_policy_decision_digest IS NOT NULL "
+            "AND qualification_canary_authorization_digest IS NULL) OR "
+            "(authority_kind = 'qualification_canary' "
+            "AND automation_policy_decision_digest IS NULL "
+            "AND qualification_canary_authorization_digest IS NOT NULL) OR "
+            "(authority_kind NOT IN ('qualified_autopilot', 'qualification_canary') "
+            "AND automation_policy_decision_digest IS NULL "
+            "AND qualification_canary_authorization_digest IS NULL)",
             name="ck_final_submit_permits_automation_authority",
         ),
         CheckConstraint(
             "automation_policy_decision_digest IS NULL OR "
             f"{_sha256_check_sql('automation_policy_decision_digest')}",
             name="ck_final_submit_permits_policy_digest",
+        ),
+        CheckConstraint(
+            "qualification_canary_authorization_digest IS NULL OR "
+            f"{_sha256_check_sql('qualification_canary_authorization_digest')}",
+            name="ck_final_submit_permits_canary_digest",
         ),
     )
 
@@ -1430,6 +1484,235 @@ class BrowserQualificationRun(Base):
             "adapter_name",
             "adapter_version",
             "form_fingerprint",
+        ),
+    )
+
+
+class AdapterQualificationRecord(Base):
+    """Strict authority record for one observed ATS form qualification.
+
+    BrowserQualificationRun remains privacy-safe telemetry. Only this table can
+    authorize scoped inspection or final execution, and every row is bound to
+    an exact private application revision, persisted form plan, adapter code
+    identity, current fixture evidence, and redacted URL/evidence digests.
+    """
+
+    __tablename__ = "adapter_qualification_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    qualification_tier = Column(String(32), nullable=False)
+    adapter_name = Column(String(64), nullable=False)
+    adapter_version = Column(String(32), nullable=False)
+    selector_version = Column(String(64), nullable=False)
+    execution_contract_version = Column(String(32), nullable=False)
+    form_fingerprint = Column(String(64), nullable=False)
+    form_contract_digest = Column(String(64), nullable=False)
+    fixture_digest = Column(String(64), nullable=False)
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
+    application_revision = Column(Integer, nullable=False)
+    form_plan_id = Column(Integer, ForeignKey("form_plans.id"), nullable=False)
+    # Added as a post-create FK in Alembic because Submission also points to the
+    # one-use canary authorization. The cycle is ordered explicitly rather than
+    # weakening this employer-evidence audit binding.
+    attempt_id = Column(Integer, nullable=True)
+    job_url_hash = Column(String(64), nullable=False)
+    evidence_digest = Column(String(64), nullable=False)
+    runner_release = Column(String(64), nullable=False)
+    qualified_at = Column(DateTime, nullable=False)
+    invalidated_at = Column(DateTime, nullable=True)
+    invalidation_reason = Column(String(64), nullable=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+
+    application = relationship(
+        "Application",
+        back_populates="adapter_qualification_records",
+    )
+    form_plan = relationship("FormPlan", foreign_keys=[form_plan_id])
+    attempt = relationship("Submission", foreign_keys=[attempt_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "qualification_tier IN ('dry_run_qualified', 'live_canary_qualified')",
+            name="ck_adapter_qualification_records_tier",
+        ),
+        CheckConstraint(
+            "length(trim(adapter_name)) BETWEEN 1 AND 64 "
+            "AND length(trim(adapter_version)) BETWEEN 1 AND 32 "
+            "AND length(trim(selector_version)) BETWEEN 1 AND 64 "
+            "AND length(trim(execution_contract_version)) BETWEEN 1 AND 32 "
+            "AND length(trim(runner_release)) BETWEEN 1 AND 64 "
+            "AND application_revision > 0",
+            name="ck_adapter_qualification_records_metadata",
+        ),
+        CheckConstraint(
+            f"{_sha256_check_sql('form_fingerprint')} "
+            f"AND {_sha256_check_sql('form_contract_digest')} "
+            f"AND {_sha256_check_sql('fixture_digest')} "
+            f"AND {_sha256_check_sql('job_url_hash')} "
+            f"AND {_sha256_check_sql('evidence_digest')}",
+            name="ck_adapter_qualification_records_digests",
+        ),
+        CheckConstraint(
+            "(qualification_tier = 'dry_run_qualified' AND attempt_id IS NULL) OR "
+            "(qualification_tier = 'live_canary_qualified' AND attempt_id IS NOT NULL)",
+            name="ck_adapter_qualification_records_attempt",
+        ),
+        CheckConstraint(
+            "(invalidated_at IS NULL AND invalidation_reason IS NULL) OR "
+            "(invalidated_at IS NOT NULL AND invalidation_reason IS NOT NULL "
+            "AND length(trim(invalidation_reason)) BETWEEN 2 AND 64)",
+            name="ck_adapter_qualification_records_invalidation",
+        ),
+        UniqueConstraint(
+            "qualification_tier",
+            "application_id",
+            "application_revision",
+            "form_plan_id",
+            "adapter_name",
+            "adapter_version",
+            "selector_version",
+            "form_fingerprint",
+            "runner_release",
+            name="uq_adapter_qualification_records_observation",
+        ),
+        UniqueConstraint(
+            "attempt_id",
+            name="uq_adapter_qualification_records_attempt",
+        ),
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["submissions.id"],
+            name="fk_adapter_qualification_records_attempt",
+            use_alter=True,
+        ),
+        Index(
+            "ix_adapter_qualification_records_effective",
+            "adapter_name",
+            "adapter_version",
+            "selector_version",
+            "qualification_tier",
+            "form_contract_digest",
+            "runner_release",
+            "invalidated_at",
+        ),
+        Index(
+            "ix_adapter_qualification_records_application",
+            "application_id",
+            "application_revision",
+            "form_plan_id",
+        ),
+    )
+
+
+class QualificationCanaryAuthorization(Base):
+    """One-use local authority for one exact live qualification canary."""
+
+    __tablename__ = "qualification_canary_authorizations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    authorization_digest = Column(String(64), nullable=False)
+    nonce_hash = Column(String(64), nullable=False)
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
+    application_revision = Column(Integer, nullable=False)
+    form_plan_id = Column(Integer, ForeignKey("form_plans.id"), nullable=False)
+    dry_run_qualification_id = Column(
+        Integer,
+        ForeignKey("adapter_qualification_records.id"),
+        nullable=False,
+    )
+    adapter_name = Column(String(64), nullable=False)
+    adapter_version = Column(String(32), nullable=False)
+    selector_version = Column(String(64), nullable=False)
+    execution_contract_version = Column(String(32), nullable=False)
+    form_fingerprint = Column(String(64), nullable=False)
+    form_contract_digest = Column(String(64), nullable=False)
+    selected_cv_hash = Column(String(64), nullable=False)
+    job_url_hash = Column(String(64), nullable=False)
+    runner_release = Column(String(64), nullable=False)
+    issued_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revocation_reason = Column(String(64), nullable=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        server_default=func.now(),
+    )
+
+    application = relationship(
+        "Application",
+        back_populates="qualification_canary_authorizations",
+    )
+    form_plan = relationship("FormPlan", foreign_keys=[form_plan_id])
+    dry_run_qualification = relationship(
+        "AdapterQualificationRecord",
+        foreign_keys=[dry_run_qualification_id],
+    )
+    attempt = relationship(
+        "Submission",
+        back_populates="qualification_canary_authorization",
+        foreign_keys="Submission.qualification_canary_authorization_id",
+        uselist=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "id",
+            "authorization_digest",
+            name="uq_qualification_canary_authorizations_id_digest",
+        ),
+        UniqueConstraint(
+            "authorization_digest",
+            name="uq_qualification_canary_authorizations_digest",
+        ),
+        UniqueConstraint(
+            "nonce_hash",
+            name="uq_qualification_canary_authorizations_nonce",
+        ),
+        CheckConstraint(
+            "application_revision > 0 AND expires_at > issued_at "
+            "AND length(trim(adapter_name)) BETWEEN 1 AND 64 "
+            "AND length(trim(adapter_version)) BETWEEN 1 AND 32 "
+            "AND length(trim(selector_version)) BETWEEN 1 AND 64 "
+            "AND length(trim(execution_contract_version)) BETWEEN 1 AND 32 "
+            "AND length(trim(runner_release)) BETWEEN 1 AND 64",
+            name="ck_qualification_canary_authorizations_metadata",
+        ),
+        CheckConstraint(
+            f"{_sha256_check_sql('authorization_digest')} "
+            f"AND {_sha256_check_sql('nonce_hash')} "
+            f"AND {_sha256_check_sql('form_fingerprint')} "
+            f"AND {_sha256_check_sql('form_contract_digest')} "
+            f"AND {_sha256_check_sql('selected_cv_hash')} "
+            f"AND {_sha256_check_sql('job_url_hash')}",
+            name="ck_qualification_canary_authorizations_digests",
+        ),
+        CheckConstraint(
+            "(consumed_at IS NULL AND revoked_at IS NULL AND revocation_reason IS NULL) OR "
+            "(consumed_at IS NOT NULL AND revoked_at IS NULL AND revocation_reason IS NULL) OR "
+            "(consumed_at IS NULL AND revoked_at IS NOT NULL "
+            "AND revocation_reason IS NOT NULL "
+            "AND length(trim(revocation_reason)) BETWEEN 2 AND 64)",
+            name="ck_qualification_canary_authorizations_state",
+        ),
+        Index(
+            "ix_qualification_canary_authorizations_application",
+            "application_id",
+            "application_revision",
+            "form_plan_id",
+        ),
+        Index(
+            "ix_qualification_canary_authorizations_expiry",
+            "expires_at",
+            "consumed_at",
+            "revoked_at",
         ),
     )
 

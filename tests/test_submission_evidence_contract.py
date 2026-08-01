@@ -318,7 +318,10 @@ def test_final_executor_requires_every_pinned_version_and_exact_form_scope():
         qualified_form_scope=("qualified-form",),
     )
     adapter = _TwoPhaseAdapter(qualified)
-    registry = SubmitterRegistry()
+    registry = SubmitterRegistry(
+        platform_descriptor_resolver=lambda _platform: qualified,
+        url_descriptor_resolver=lambda _url: qualified,
+    )
 
     with (
         patch("submitters.base.adapter_for_platform", return_value=qualified),
@@ -402,7 +405,10 @@ def test_strong_executor_resolution_requires_bound_unexpired_plan_and_permit():
         nonce="one-use-nonce",
     )
     adapter = _TwoPhaseAdapter(qualified)
-    registry = SubmitterRegistry()
+    registry = SubmitterRegistry(
+        platform_descriptor_resolver=lambda _platform: qualified,
+        url_descriptor_resolver=lambda _url: qualified,
+    )
 
     with (
         patch("submitters.base.adapter_for_platform", return_value=qualified),
