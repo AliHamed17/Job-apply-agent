@@ -614,6 +614,12 @@ def create_kill_switch_command(
         )
     )
     if prior is not None:
+        _expire_undeliverable_kill_command_replay(
+            db,
+            settings,
+            command=prior,
+            checked_at=checked_at,
+        )
         return KillCommandCreation(command=prior, duplicate=True)
     device = db.scalar(
         select(RunnerDevice)
@@ -677,8 +683,40 @@ def create_kill_switch_command(
         )
         if replay is None:
             raise ControlPlaneError("KILL_SWITCH_COMMAND_CONFLICT") from None
+        _expire_undeliverable_kill_command_replay(
+            db,
+            settings,
+            command=replay,
+            checked_at=checked_at,
+        )
         return KillCommandCreation(command=replay, duplicate=True)
     return KillCommandCreation(command=command, duplicate=False)
+
+
+def _expire_undeliverable_kill_command_replay(
+    db: Session,
+    settings: Settings,
+    *,
+    command: ControlKillSwitchCommand,
+    checked_at: datetime,
+) -> None:
+    """Persist the effective terminal state of an obsolete idempotent replay."""
+
+    if command.status not in {"queued", "claimed"}:
+        return
+    device = db.get(RunnerDevice, str(settings.runner_device_id))
+    expired = as_utc(command.expires_at) <= checked_at
+    boot_changed = (
+        device is None
+        or command.device_id != str(settings.runner_device_id)
+        or not device.boot_id
+        or command.runner_boot_id != str(device.boot_id)
+    )
+    if not expired and not boot_changed:
+        return
+    command.status = "expired"
+    command.claim_lease_expires_at = None
+    command.finished_at = command.finished_at or checked_at
 
 
 def poll_kill_switch_command(

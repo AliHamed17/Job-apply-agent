@@ -1640,6 +1640,47 @@ def test_stale_inspection_lease_is_reclaimed_without_accepting_old_completion(
     db.close()
 
 
+def test_inspection_lease_fence_uses_authority_before_run_row(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    claimed = _claim_inspection_run(db, run_id=queued.run_id, now=_NOW)
+    assert claimed is not None
+    _application_id, claim_token = claimed
+    observed: list[str] = []
+    original_query = db.query
+
+    def observe_query(*entities, **kwargs):
+        if AutopilotInspectionRun in entities:
+            observed.append("run")
+        return original_query(*entities, **kwargs)
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.lock_automation_authority_fence",
+        lambda _db: observed.append("authority"),
+    )
+    monkeypatch.setattr(db, "query", observe_query)
+
+    _fence_inspection_run(
+        db,
+        run_id=queued.run_id,
+        application_id=scenario.application_id,
+        claim_token=claim_token,
+        now=_NOW + timedelta(seconds=1),
+    )
+
+    assert observed[:2] == ["authority", "run"]
+    db.rollback()
+    db.close()
+
+
 def test_transient_claim_denial_remains_retryable(tmp_path, monkeypatch) -> None:
     scenario = _scenario(tmp_path, monkeypatch)
     db = scenario.factory()

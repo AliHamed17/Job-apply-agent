@@ -235,6 +235,7 @@ def _fence_inspection_run(
 ) -> None:
     """Lock and renew a still-current inspection lease in the caller transaction."""
 
+    lock_automation_authority_fence(db)
     query = db.query(AutopilotInspectionRun).filter(AutopilotInspectionRun.id == run_id)
     if db.bind.dialect.name == "postgresql":
         query = query.with_for_update()

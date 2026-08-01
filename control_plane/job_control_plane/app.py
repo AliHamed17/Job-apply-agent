@@ -566,7 +566,7 @@ def create_app(
         audit(
             db,
             action="kill_switch",
-            result="accepted",
+            result=("expired" if result.command.status == "expired" else "accepted"),
             request_digest=request_digest,
             target_type="kill_command",
             target_id=result.command.id,

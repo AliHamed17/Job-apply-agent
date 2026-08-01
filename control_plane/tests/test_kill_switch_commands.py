@@ -8,10 +8,11 @@ from uuid import UUID, uuid4
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from job_control_plane.config import Settings
 from job_control_plane.crypto import verify_envelope
-from job_control_plane.models import RunnerDevice
+from job_control_plane.models import ControlKillSwitchCommand, RunnerDevice
 from job_control_plane.protocol import (
     RUNNER_AUDIENCE,
     CommandAckEnvelope,
@@ -127,6 +128,50 @@ def test_kill_switch_requires_a_current_ready_runner_boot(
     assert client.get("/api/kill-switch/commands").json() == {"commands": []}
 
 
+def test_expired_kill_switch_idempotency_replay_reports_terminal_state(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    heartbeat: HeartbeatEnvelope,
+) -> None:
+    del heartbeat
+    key = uuid4()
+    created = client.post(
+        "/api/kill-switch",
+        headers=_headers(settings, authenticated),
+        json=_body(key),
+    )
+    assert created.status_code == 202
+    command_id = created.json()["command_id"]
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        command = db.get(ControlKillSwitchCommand, command_id)
+        assert command is not None
+        command.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    replay = client.post(
+        "/api/kill-switch",
+        headers=_headers(settings, authenticated),
+        json=_body(key),
+    )
+
+    assert replay.status_code == 202
+    assert replay.json() == {
+        "command_id": command_id,
+        "status": "expired",
+        "active_requested": True,
+        "duplicate": True,
+    }
+    with factory() as db:
+        persisted = db.scalar(
+            select(ControlKillSwitchCommand).where(ControlKillSwitchCommand.id == command_id)
+        )
+        assert persisted is not None
+        assert persisted.status == "expired"
+        assert persisted.claim_lease_expires_at is None
+        assert persisted.finished_at is not None
+
+
 def test_signed_kill_switch_poll_ack_and_replay_are_bounded(
     client: TestClient,
     settings: Settings,
@@ -226,10 +271,11 @@ def test_pre_restart_kill_command_is_not_delivered_to_replacement_runner(
     heartbeat: HeartbeatEnvelope,
     sign_runner: Callable[..., Any],
 ) -> None:
+    key = uuid4()
     created = client.post(
         "/api/kill-switch",
         headers=_headers(settings, authenticated),
-        json=_body(uuid4()),
+        json=_body(key),
     )
     assert created.status_code == 202
 
@@ -247,6 +293,19 @@ def test_pre_restart_kill_command_is_not_delivered_to_replacement_runner(
         json=replacement.model_dump(mode="json"),
     )
     assert accepted.status_code == 200
+
+    replay = client.post(
+        "/api/kill-switch",
+        headers=_headers(settings, authenticated),
+        json=_body(key),
+    )
+    assert replay.status_code == 202
+    assert replay.json() == {
+        "command_id": created.json()["command_id"],
+        "status": "expired",
+        "active_requested": True,
+        "duplicate": True,
+    }
 
     poll = sign_runner(
         CommandPollEnvelope,
