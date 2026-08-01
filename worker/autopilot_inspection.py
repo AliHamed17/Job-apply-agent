@@ -363,7 +363,7 @@ def _finalize_autopilot_dispatch_result(
     claim_token: str,
     now: datetime,
 ) -> dict[str, object]:
-    """Persist dispatch quarantine state before returning the worker result."""
+    """Persist permanent quarantine or defer one retryable policy denial."""
 
     state = result.state
     reason_code = result.reason_code
@@ -593,10 +593,13 @@ def inspect_and_dispatch_qualified_autopilot(
     ) as exc:
         reason_code = _bounded_reason(getattr(exc, "reason_code", None) or str(exc))
         try:
-            _mark_quarantined(
+            return _finalize_autopilot_dispatch_result(
                 db,
                 application_id=application_id,
-                reason_code=reason_code,
+                result=AutopilotDispatchResult(
+                    state="quarantined",
+                    reason_code=reason_code,
+                ),
                 inspection_run_id=inspection_run_id,
                 claim_token=claim_token,
                 now=datetime.now(UTC),
@@ -604,7 +607,6 @@ def inspect_and_dispatch_qualified_autopilot(
         except AutopilotInspectionLeaseLostError as lease_exc:
             db.rollback()
             return {"state": "not_claimed", "reason_code": lease_exc.reason_code}
-        return {"state": "quarantined", "reason_code": reason_code}
     finally:
         db.close()
 

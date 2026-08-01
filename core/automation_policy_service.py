@@ -1180,6 +1180,10 @@ def policy_usage_status(
         artifact_bindings_changed = True
     else:
         artifact_bindings_changed = False
+    answer_revision_changed = not hmac.compare_digest(
+        confirmed_answer_revision(db, profile_version=policy.profile_version),
+        policy.confirmed_answer_revision,
+    )
     daily, hourly, _company = _usage_counts(
         db,
         company_digest=_ZERO_DIGEST,
@@ -1191,6 +1195,7 @@ def policy_usage_status(
             not expired
             and not profile_changed
             and not artifact_bindings_changed
+            and not answer_revision_changed
             and not bool(kill and kill.active)
         ),
         "reason_code": (
@@ -1202,6 +1207,8 @@ def policy_usage_status(
             if profile_changed
             else "FIT_QUALIFICATION_CHANGED"
             if artifact_bindings_changed
+            else "CONFIRMED_ANSWERS_CHANGED"
+            if answer_revision_changed
             else None
         ),
         "policy_id": str(policy.policy_id),

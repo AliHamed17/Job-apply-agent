@@ -31,9 +31,18 @@ router = APIRouter(prefix="/automation", tags=["automation"])
 
 
 class QualifiedFormContractRequest(BaseModel):
-    adapter_name: str = Field(min_length=1, max_length=64)
-    adapter_version: str = Field(min_length=5, max_length=32)
-    selector_version: str = Field(min_length=1, max_length=64)
+    adapter_name: str = Field(
+        pattern=r"^[a-z][a-z0-9_-]{0,63}$",
+        max_length=64,
+    )
+    adapter_version: str = Field(
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$",
+        max_length=32,
+    )
+    selector_version: str = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+        max_length=64,
+    )
     form_contract_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 

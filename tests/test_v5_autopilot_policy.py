@@ -55,6 +55,7 @@ from db.models import (
     FormPlan,
     Job,
     JobStatus,
+    OperatorApprovedAnswer,
     Submission,
     SubmissionCommand,
     UserProfileVersion,
@@ -586,6 +587,84 @@ def test_mid_inspection_kill_switch_dispatch_remains_retryable(tmp_path, monkeyp
     db.close()
 
 
+@pytest.mark.parametrize("reason_code", ["KILL_SWITCH_ACTIVE", "OUTSIDE_ACTIVE_HOURS"])
+def test_transient_denial_immediately_after_claim_requeues_exact_run(
+    tmp_path,
+    monkeypatch,
+    reason_code: str,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    assert queued.run_id is not None
+    db.close()
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.get_session_factory",
+        lambda: scenario.factory,
+    )
+    monkeypatch.setattr(
+        "worker.autopilot_inspection._utc_now",
+        lambda: _NOW + timedelta(seconds=2),
+    )
+
+    class InspectionClock:
+        @classmethod
+        def now(cls, _timezone=None):
+            return _NOW + timedelta(seconds=1)
+
+    monkeypatch.setattr("worker.autopilot_inspection.datetime", InspectionClock)
+    validation_calls = 0
+
+    def deny_second_validation(*args, **kwargs):
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 2:
+            raise AutomationPolicyError(reason_code)
+        return validate_automation_inspection_candidate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.validate_automation_inspection_candidate",
+        deny_second_validation,
+    )
+    result = execute_qualified_autopilot_inspection(queued.run_id, now=_NOW)
+
+    assert result == {
+        "state": "retryable",
+        "reason_code": reason_code,
+        "policy_decision_id": None,
+        "attempt_id": None,
+        "command_id": None,
+        "replayed": False,
+        "run_id": queued.run_id,
+        "lease_finished": True,
+    }
+    verify = scenario.factory()
+    application = verify.get(Application, scenario.application_id)
+    run = verify.get(AutopilotInspectionRun, queued.run_id)
+    assert application.needs_review_reason is None
+    assert run.state == "queued"
+    assert run.claimed_at is None
+    assert run.lease_expires_at is None
+    assert run.claim_token is None
+    assert run.finished_at is None
+    assert run.reason_code is None
+    assert verify.query(Submission).count() == 0
+    assert verify.query(SubmissionCommand).count() == 0
+    reclaimed = _claim_inspection_run(
+        verify,
+        run_id=queued.run_id,
+        now=_NOW + timedelta(seconds=3),
+    )
+    assert reclaimed is not None
+    assert reclaimed[0] == scenario.application_id
+    verify.close()
+
+
 def test_unexpected_inspection_failure_persists_quarantine(tmp_path, monkeypatch) -> None:
     scenario = _scenario(tmp_path, monkeypatch)
     db = scenario.factory()
@@ -748,7 +827,7 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
     monkeypatch.setattr(automation_route, "get_settings", lambda: settings)
     activation_calls: list[str] = []
 
-    def private_bindings(*_args, **_kwargs):
+    def private_bindings(db, *_args, **_kwargs):
         activation_calls.append("bindings")
         return {
             "profile_version": 1,
@@ -756,7 +835,10 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
             "routing_config_digest": _ROUTING_DIGEST,
             "cv_manifest_digest": _MANIFEST_DIGEST,
             "fit_qualification_digest": _QUALIFICATION_DIGEST,
-            "confirmed_answer_revision": "e" * 64,
+            "confirmed_answer_revision": confirmed_answer_revision(
+                db,
+                profile_version=1,
+            ),
         }
 
     monkeypatch.setattr(
@@ -857,6 +939,24 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
         headers={"Authorization": f"Bearer {settings.secret_key}"},
     )
     assert invalid_ack.status_code == 422
+    activation_count = len(activation_calls)
+    for invalid_scope in (
+        {"adapter_name": "Greenhouse"},
+        {"adapter_version": "abcde"},
+        {"selector_version": "selector with spaces"},
+    ):
+        malformed = client.post(
+            "/api/automation/policy/activate",
+            json={
+                **payload,
+                "qualified_form_contracts": [
+                    {**payload["qualified_form_contracts"][0], **invalid_scope}
+                ],
+            },
+            headers={"Authorization": f"Bearer {settings.secret_key}"},
+        )
+        assert malformed.status_code == 422
+    assert len(activation_calls) == activation_count
     activated = client.post(
         "/api/automation/policy/activate",
         json=payload,
@@ -944,6 +1044,42 @@ def test_new_profile_version_invalidates_inspection_reservation_and_status(
         status = policy_usage_status(db, now=_NOW + timedelta(minutes=1))
         assert status["active"] is False
         assert status["reason_code"] == "PROFILE_VERSION_CHANGED"
+    finally:
+        db.close()
+
+
+def test_changed_confirmed_answer_revision_invalidates_policy_status(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    try:
+        assert policy_usage_status(db, now=_NOW)["active"] is True
+        db.add(
+            OperatorApprovedAnswer(
+                canonical_field="non_sensitive_example",
+                field_type="text",
+                option_set_hash="0" * 64,
+                locale="en",
+                profile_version=1,
+                selected_cv_id="cv-ai",
+                selected_cv_hash=_CV_HASH,
+                adapter_name=scenario.live_descriptor.platform,
+                adapter_version=scenario.live_descriptor.adapter_version,
+                selector_version=scenario.live_descriptor.selector_version,
+                form_fingerprint=_FINGERPRINT,
+                policy_version="answer-policy-v1",
+                answer_json='"operator-confirmed"',
+                evidence_reference="operator-confirmation-test",
+                approved_at=_NOW.replace(tzinfo=None),
+            )
+        )
+        db.commit()
+
+        status = policy_usage_status(db, now=_NOW + timedelta(minutes=1))
+        assert status["active"] is False
+        assert status["reason_code"] == "CONFIRMED_ANSWERS_CHANGED"
     finally:
         db.close()
 
