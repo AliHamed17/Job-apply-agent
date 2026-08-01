@@ -425,6 +425,10 @@ def test_unexpected_inspection_failure_persists_quarantine(tmp_path, monkeypatch
         "worker.autopilot_inspection.inspect_and_dispatch_qualified_autopilot",
         fail_inspection,
     )
+    monkeypatch.setattr(
+        "worker.autopilot_inspection._utc_now",
+        lambda: _NOW + timedelta(seconds=2),
+    )
     result = execute_qualified_autopilot_inspection(
         queued.run_id,
         now=_NOW + timedelta(seconds=1),
@@ -439,6 +443,54 @@ def test_unexpected_inspection_failure_persists_quarantine(tmp_path, monkeypatch
     assert application.needs_review_reason == "FORM_INSPECTION_FAILED"
     assert run.state == "finished"
     assert run.reason_code == "FORM_INSPECTION_FAILED"
+    verify.close()
+
+
+def test_unexpected_inspection_failure_after_lease_expiry_has_no_side_effect(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    assert queued.run_id is not None
+    db.close()
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.get_session_factory",
+        lambda: scenario.factory,
+    )
+
+    def fail_after_lease_expiry(*_args, **_kwargs):
+        raise RuntimeError("late failure")
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.inspect_and_dispatch_qualified_autopilot",
+        fail_after_lease_expiry,
+    )
+    monkeypatch.setattr(
+        "worker.autopilot_inspection._utc_now",
+        lambda: _NOW + timedelta(minutes=16),
+    )
+
+    result = execute_qualified_autopilot_inspection(queued.run_id, now=_NOW)
+
+    assert result == {
+        "state": "not_claimed",
+        "reason_code": "AUTOPILOT_INSPECTION_LEASE_LOST",
+        "run_id": queued.run_id,
+        "lease_finished": False,
+    }
+    verify = scenario.factory()
+    application = verify.get(Application, scenario.application_id)
+    run = verify.get(AutopilotInspectionRun, queued.run_id)
+    assert application.needs_review_reason is None
+    assert run.state == "running"
+    assert run.reason_code is None
     verify.close()
 
 

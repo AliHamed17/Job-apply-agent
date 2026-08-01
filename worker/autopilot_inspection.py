@@ -83,6 +83,10 @@ def _naive(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 def enqueue_qualified_autopilot_inspection(
     db,
     *,
@@ -621,7 +625,7 @@ def execute_qualified_autopilot_inspection(
     """Claim one reversible inspection lease, execute it, and close the lease."""
 
     db = get_session_factory()()
-    execution_at = now or datetime.now(UTC)
+    execution_at = now or _utc_now()
     try:
         claimed = _claim_inspection_run(db, run_id=run_id, now=execution_at)
     finally:
@@ -645,7 +649,7 @@ def execute_qualified_autopilot_inspection(
                     reason_code="FORM_INSPECTION_FAILED",
                     inspection_run_id=run_id,
                     claim_token=claim_token,
-                    now=execution_at,
+                    now=_utc_now(),
                 )
             except AutopilotInspectionLeaseLostError as exc:
                 result = {"state": "not_claimed", "reason_code": exc.reason_code}
@@ -676,7 +680,7 @@ def execute_qualified_autopilot_inspection(
             run_id=run_id,
             claim_token=claim_token,
             reason_code=terminal_reason,
-            now=execution_at if now is not None else datetime.now(UTC),
+            now=_utc_now(),
         )
     finally:
         finish_db.close()

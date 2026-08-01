@@ -622,6 +622,14 @@ def create_kill_switch_command(
     )
     if device is None or not device.active:
         raise ControlPlaneError("RUNNER_DISABLED")
+    if (
+        device.last_seen_at is None
+        or checked_at - as_utc(device.last_seen_at)
+        > timedelta(seconds=settings.runner_offline_seconds)
+        or device.status != "ready"
+        or not device.boot_id
+    ):
+        raise ControlPlaneError("RUNNER_OFFLINE")
     try:
         runner_boot_id = UUID(str(device.boot_id))
     except (TypeError, ValueError) as exc:

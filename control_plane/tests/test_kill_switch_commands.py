@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from job_control_plane.config import Settings
 from job_control_plane.crypto import verify_envelope
+from job_control_plane.models import RunnerDevice
 from job_control_plane.protocol import (
     RUNNER_AUDIENCE,
     CommandAckEnvelope,
@@ -83,6 +86,45 @@ def test_kill_switch_requires_operator_csrf_and_exact_activation_acknowledgement
     assert "application_ref" not in encoded
     assert "email" not in encoded
     assert listing.json()["commands"][0]["active_requested"] is True
+
+
+@pytest.mark.parametrize(
+    "runner_state",
+    ("missing_heartbeat", "stale_heartbeat", "not_ready", "missing_boot"),
+)
+def test_kill_switch_requires_a_current_ready_runner_boot(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    heartbeat: HeartbeatEnvelope,
+    runner_state: str,
+) -> None:
+    del heartbeat
+    now = datetime.now(UTC)
+    factory = client.app.state.sessions
+    with factory.begin() as db:
+        device = db.get(RunnerDevice, str(settings.runner_device_id))
+        assert device is not None
+        if runner_state == "missing_heartbeat":
+            device.last_seen_at = None
+        elif runner_state == "stale_heartbeat":
+            device.last_seen_at = now - timedelta(seconds=settings.runner_offline_seconds + 1)
+        elif runner_state == "not_ready":
+            device.last_seen_at = now
+            device.status = "degraded"
+        else:
+            device.last_seen_at = now
+            device.boot_id = None
+
+    response = client.post(
+        "/api/kill-switch",
+        headers=_headers(settings, authenticated),
+        json=_body(uuid4()),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"code": "RUNNER_OFFLINE"}
+    assert client.get("/api/kill-switch/commands").json() == {"commands": []}
 
 
 def test_signed_kill_switch_poll_ack_and_replay_are_bounded(
