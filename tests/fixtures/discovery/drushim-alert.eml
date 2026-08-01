@@ -1,0 +1,9 @@
+From: jobs@example.drushim.co.il
+To: candidate@example.test
+Subject: New matching position
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<a href="https://www.drushim.co.il/job/12345/">Data Engineer</a>
+</body></html>

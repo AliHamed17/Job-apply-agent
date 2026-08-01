@@ -76,7 +76,7 @@ email = [
 
 [tool.setuptools.packages.find]
 include = [
-    "api*", "control_plane*", "core*", "db*", "ingestion*", "jobs*",
+    "api*", "control_plane*", "core*", "db*", "discovery*", "ingestion*", "jobs*",
     "llm*", "match*", "profile*", "submitters*", "worker*",
 ]
 

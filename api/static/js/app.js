@@ -602,10 +602,23 @@ function renderOverview(data) {
 
     const discoveryRow = $('discovery-status-row');
     if (discoveryRow) {
+        const sourceLabels = {
+            ashby: 'Ashby',
+            generic_feed: 'Employer feeds',
+            generic_jsonld: 'Employer career sites',
+            gmail_alert: 'Gmail job alerts',
+            greenhouse: 'Greenhouse',
+            lever: 'Lever',
+            linkedin_partner: 'LinkedIn partner feed',
+            remotive: 'Remotive',
+            smartrecruiters: 'SmartRecruiters',
+        };
         discoveryRow.innerHTML = discovery.length
             ? discovery.map(run => {
-                const label = run.source === 'linkedin_search' ? 'LinkedIn' : 'Public Remote Jobs';
-                const blocked = ['challenge', 'failed', 'blocked'].includes(run.status);
+                const sourceType = run.source_type || run.source || 'unknown';
+                const label = sourceLabels[sourceType] || humanizeReasonCode(sourceType);
+                const blocked = ['challenge', 'failed', 'blocked', 'degraded', 'disabled']
+                    .includes(run.status);
                 const detail = run.reason_code === 'CHALLENGE_DETECTED'
                     ? 'Sign-in/security check required'
                     : run.reason_code === 'PROFILE_INCOMPLETE'

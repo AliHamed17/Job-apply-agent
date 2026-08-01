@@ -1,0 +1,9 @@
+From: jobs-noreply@linkedin.com
+To: candidate@example.test
+Subject: New jobs matching your alert
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<a href="https://www.linkedin.com/jobs/view/1234567890">Machine Learning Engineer</a>
+</body></html>

@@ -57,6 +57,7 @@ from api.routes.culture_fit import router as culture_fit_router
 from api.routes.cv_routing import router as cv_routing_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.digest import router as digest_router
+from api.routes.discovery import router as discovery_router
 from api.routes.dispatch import router as dispatch_router
 from api.routes.dry_run import router as dry_run_router
 from api.routes.export import router as export_router
@@ -308,6 +309,7 @@ app.include_router(export_router, prefix="/api")
 app.include_router(outreach_router, prefix="/api")
 app.include_router(batch_rescore_router, prefix="/api")
 app.include_router(digest_router, prefix="/api")
+app.include_router(discovery_router)
 app.include_router(health_inspector_router, prefix="/api")
 app.include_router(interview_simulate_router, prefix="/api")
 app.include_router(batch_apply_router, prefix="/api")

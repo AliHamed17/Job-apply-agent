@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from core.config import Settings
 from db.models import Base, UserProfileVersion
 from discovery.public_sources import parse_remotive_jobs
+from discovery.search_intents import derive_search_intents
 
 
 def _profile() -> UserProfile:
@@ -64,6 +65,40 @@ def test_parse_remotive_jobs_honors_bound():
     payload = {"jobs": [{**row, "url": f"https://remotive.com/job/{index}"} for index in range(5)]}
 
     assert len(parse_remotive_jobs(payload, _profile(), 2)) == 2
+
+
+def test_remotive_filter_uses_every_cv_derived_intent():
+    from profile.cv_routing import CVDefinition, CVRoutingConfig
+
+    routing = CVRoutingConfig(
+        cvs=[
+            CVDefinition(
+                id="embedded",
+                file="embedded.pdf",
+                title_terms=["Embedded Engineer"],
+                skills=["C++", "RTOS"],
+            )
+        ]
+    )
+    payload = {
+        "jobs": [
+            {
+                "title": "Embedded Engineer",
+                "company_name": "Example",
+                "description": "Build C++ RTOS firmware.",
+                "url": "https://remotive.com/remote-jobs/software-dev/embedded",
+            }
+        ]
+    }
+
+    jobs = parse_remotive_jobs(
+        payload,
+        _profile(),
+        10,
+        intents=derive_search_intents(routing),
+    )
+
+    assert [job.title for job in jobs] == ["Embedded Engineer"]
 
 
 def test_discovery_profile_prefers_immutable_version_over_edited_yaml(tmp_path):
@@ -174,7 +209,24 @@ def test_global_discovery_switch_still_drains_preparation_backlog(monkeypatch):
 
 def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypatch):
     database_url = f"sqlite:///{tmp_path / 'public-discovery.db'}"
+    routing_path = tmp_path / "cv_routing.yaml"
+    routing_path.write_text(
+        yaml.safe_dump(
+            {
+                "cvs": [
+                    {
+                        "id": "ml-engineer",
+                        "file": "ml-engineer.pdf",
+                        "title_terms": ["Machine Learning Engineer"],
+                        "skills": ["Python", "PyTorch"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("CV_ROUTING_PATH", str(routing_path))
     monkeypatch.setenv("PUBLIC_DISCOVERY_ENABLED", "true")
     monkeypatch.setenv("PUBLIC_DISCOVERY_INTERVAL_H", "6")
     monkeypatch.setenv("TASKS_ALWAYS_EAGER", "true")
@@ -184,10 +236,8 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
 
     import core.config as config_module
     import db.session as session_module
-    import discovery.ingest as ingest_module
     import discovery.linkedin_search as linkedin_module
-    import discovery.public_sources as public_module
-    from db.models import DiscoveryRun
+    import discovery.mesh as mesh_module
     from worker import discovery_tasks
 
     config_module.get_settings.cache_clear()
@@ -195,27 +245,36 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
     session_module._SessionLocal = None
     session_module.init_db()
 
-    calls = {"public": 0, "linkedin": 0}
-
-    async def fake_public(_profile, _settings):
-        calls["public"] += 1
-        return []
+    calls = {"mesh": 0, "linkedin": 0}
 
     async def fake_linkedin(
-        _db,
-        _profile,
-        _settings,
-        _governor,
-        *,
-        preparation_ready,
+        *_args,
+        **_kwargs,
     ):
-        assert preparation_ready is False
         calls["linkedin"] += 1
-        return 0
+        raise AssertionError("scheduled LinkedIn crawling must remain disabled")
 
-    def fake_ingest(_db, _jobs, **kwargs):
-        assert kwargs["preparation_ready"] is False
-        return 2 if kwargs["source"] == "remotive" else 0
+    async def fake_mesh(
+        _db,
+        *,
+        settings,
+        profile,
+        preparation_ready,
+        force,
+        source_filter,
+    ):
+        assert settings.public_discovery_enabled is True
+        assert profile.preferences.roles == _profile().preferences.roles
+        assert preparation_ready is False
+        assert force is False
+        assert source_filter is None
+        calls["mesh"] += 1
+        return {
+            "inserted": 2 if calls["mesh"] == 1 else 0,
+            "updated": 0,
+            "closed": 0,
+            "skipped_overlap": 0,
+        }
 
     class CooldownGovernor:
         def can_act(self):
@@ -224,9 +283,8 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
         def status(self):
             return {"in_cooldown": True}
 
-    monkeypatch.setattr(public_module, "fetch_remotive_jobs", fake_public)
     monkeypatch.setattr(linkedin_module, "run_discovery", fake_linkedin)
-    monkeypatch.setattr(ingest_module, "ingest_discovered_jobs", fake_ingest)
+    monkeypatch.setattr(mesh_module, "run_discovery_mesh", fake_mesh)
     snapshot_calls = 0
 
     def latest_profile(_path):
@@ -245,13 +303,13 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
         lambda _settings: {"status": "degraded", "checks": {}},
     )
     monkeypatch.setattr(
-        "core.automation_readiness.current_automation_readiness",
+        "core.automation_readiness.build_automation_readiness",
         lambda **_kwargs: {
-            "preparation_ready": True,
+            "preparation_ready": False,
             "stages": {
                 "preparation": {
-                    "ready": True,
-                    "reason_codes": [],
+                    "ready": False,
+                    "reason_codes": ["AUTO_PREPARE_DISABLED"],
                 }
             },
         },
@@ -260,16 +318,7 @@ def test_public_discovery_continues_during_linkedin_cooldown(tmp_path, monkeypat
 
     assert discovery_tasks.discover_jobs_task() == 2
     assert discovery_tasks.discover_jobs_task() == 0
-    assert calls == {"public": 1, "linkedin": 0}
+    assert calls == {"mesh": 2, "linkedin": 0}
     assert snapshot_calls == 2
-
-    db = session_module.get_session_factory()()
-    try:
-        runs = db.query(DiscoveryRun).order_by(DiscoveryRun.id).all()
-        assert [(run.source, run.status) for run in runs] == [
-            ("remotive", "success"),
-            ("linkedin_search", "skipped"),
-            ("linkedin_search", "skipped"),
-        ]
-    finally:
-        db.close()
+    assert mesh_module.LINKEDIN_DESCRIPTOR.enabled is False
+    assert mesh_module.LINKEDIN_DESCRIPTOR.disabled_reason == "WRITTEN_PARTNER_ACCESS_REQUIRED"
