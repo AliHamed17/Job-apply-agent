@@ -877,12 +877,13 @@ def evaluate_auto_submit_policy(
         reasons.append("FIT_QUALIFICATION_CHANGED")
     if not hmac.compare_digest(answer_revision, policy.confirmed_answer_revision):
         reasons.append("CONFIRMED_ANSWERS_CHANGED")
+    application_cv_hash = str(application.selected_cv_hash or "")
     if (
-        application.selected_cv_hash is None
+        not application_cv_hash
         or fit.selected_cv_hash is None
-        or plan.selected_cv_hash != application.selected_cv_hash
-        or plan.attached_cv_hash != application.selected_cv_hash
-        or not hmac.compare_digest(fit.selected_cv_hash, application.selected_cv_hash)
+        or plan.selected_cv_hash != application_cv_hash
+        or plan.attached_cv_hash != application_cv_hash
+        or not hmac.compare_digest(fit.selected_cv_hash, application_cv_hash)
         or not plan.attachment_verified
     ):
         reasons.append("ATTACHMENT_UNVERIFIED")
@@ -951,7 +952,7 @@ def evaluate_auto_submit_policy(
         form_plan_id=UUID(plan.plan_id),
         form_fingerprint=plan.fingerprint,
         form_contract_digest=contract_digest,
-        selected_cv_hash=application.selected_cv_hash or _ZERO_DIGEST,
+        selected_cv_hash=application_cv_hash or _ZERO_DIGEST,
         profile_version=policy.profile_version,
         confirmed_answer_revision=answer_revision,
         adapter_name=plan.adapter_name,
