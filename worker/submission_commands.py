@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import secrets
@@ -17,6 +18,17 @@ from core.application_revision import preparation_is_current
 from core.async_lifecycle import (
     SameEventLoopLifecycle,
     cleanup_prepared_action_if_supported,
+)
+from core.automation_artifact_snapshot import (
+    AutomationArtifactSnapshotError,
+    policy_artifact_snapshot_id,
+    require_policy_artifact_snapshot,
+    resolve_selected_cv_artifact_snapshot,
+)
+from core.automation_policy_service import (
+    AutomationPolicyError,
+    lock_automation_authority_fence,
+    verified_policy_for_decision,
 )
 from core.config import Settings, get_settings
 from core.metrics import GOVERNOR_DENIALS
@@ -387,7 +399,73 @@ _PERMIT_REASON_MAP = {
     "FORM_CHANGED": ReasonCode.FORM_CHANGED,
     "ATTACHMENT_CHANGED": ReasonCode.ATTACHMENT_UNVERIFIED,
     "ATTACHMENT_UNVERIFIED": ReasonCode.ATTACHMENT_UNVERIFIED,
+    "SUBMISSION_AUTHORITY_CHANGED": ReasonCode.PERMIT_BINDING_MISMATCH,
+    "AUTOMATION_POLICY_CHANGED": ReasonCode.PERMIT_BINDING_MISMATCH,
+    "PERMIT_BINDING_MISMATCH": ReasonCode.PERMIT_BINDING_MISMATCH,
+    "GOVERNOR_DENIED": ReasonCode.GOVERNOR_DENIED,
 }
+
+
+def _validate_attempt_automation_authority(
+    db,
+    attempt: Submission,
+    *,
+    now: datetime,
+) -> tuple[ReasonCode | None, str | None]:
+    if attempt.authority_kind != "qualified_autopilot":
+        return None, None
+    decision = attempt.automation_policy_decision
+    if (
+        decision is None
+        or attempt.automation_policy_decision_digest is None
+        or decision.decision_digest != attempt.automation_policy_decision_digest
+    ):
+        return ReasonCode.PERMIT_BINDING_MISMATCH, "AUTOMATION_DECISION_BINDING_MISMATCH"
+    try:
+        from core.automation_policy_service import (
+            AutomationPolicyError,
+            validate_current_automation_decision,
+        )
+
+        validate_current_automation_decision(
+            db,
+            decision_record=decision,
+            now=_aware(now),
+            lock=True,
+        )
+    except AutomationPolicyError as exc:
+        if exc.reason_code in {"KILL_SWITCH_ACTIVE", "OUTSIDE_ACTIVE_HOURS"}:
+            return ReasonCode.GOVERNOR_DENIED, exc.reason_code
+        return ReasonCode.PERMIT_BINDING_MISMATCH, exc.reason_code
+    return None, None
+
+
+def _require_attempt_artifact_snapshot(
+    attempt: Submission,
+    *,
+    snapshot_id: str | None,
+    settings: Settings,
+) -> None:
+    """Bind a qualified action to the immutable artifacts used by preflight."""
+
+    if attempt.authority_kind != "qualified_autopilot":
+        return
+    decision = attempt.automation_policy_decision
+    if decision is None or snapshot_id is None:
+        raise PermitValidationError("AUTOMATION_POLICY_CHANGED")
+    try:
+        policy = verified_policy_for_decision(decision)
+        expected_id = policy_artifact_snapshot_id(policy)
+        if not hmac.compare_digest(snapshot_id, expected_id):
+            raise AutomationArtifactSnapshotError("artifact snapshot identity changed")
+        require_policy_artifact_snapshot(
+            policy,
+            settings=settings,
+            selected_cv_id=str(attempt.requested_cv_id or attempt.selected_cv_id or ""),
+            selected_cv_hash=str(attempt.requested_cv_hash or ""),
+        )
+    except (AutomationArtifactSnapshotError, AutomationPolicyError) as exc:
+        raise PermitValidationError("AUTOMATION_POLICY_CHANGED") from exc
 
 
 def _load_domain_plan(plan: FormPlan) -> FormPlanV1:
@@ -475,7 +553,12 @@ def _lock_claimed_context(
     db.refresh(command.attempt)
     db.expire(
         command.attempt,
-        ["application", "form_plan", "final_submit_permit"],
+        [
+            "application",
+            "form_plan",
+            "final_submit_permit",
+            "automation_policy_decision",
+        ],
     )
     db.expire(application, ["job"])
     return application, command.attempt, command
@@ -629,8 +712,11 @@ def _enter_commit_boundary(
     action: PreparedFinalActionV1,
     now: datetime | None = None,
     governor_gate=None,
+    automation_artifact_snapshot_id: str | None = None,
+    settings: Settings | None = None,
 ) -> tuple[Submission, SubmissionCommand] | None:
     """Fence stale workers and atomically consume authority before one action."""
+    lock_automation_authority_fence(db)
     context = _lock_claimed_context(
         db,
         command_id=command_id,
@@ -639,6 +725,7 @@ def _enter_commit_boundary(
     if context is None:
         return None
     application, attempt, command = context
+    runtime_settings = settings or get_settings()
 
     plan = attempt.form_plan
     permit = attempt.final_submit_permit
@@ -671,6 +758,25 @@ def _enter_commit_boundary(
     try:
         domain_plan = _load_domain_plan(plan)
         domain_permit = _load_domain_permit(attempt)
+        automation_reason, automation_detail = _validate_attempt_automation_authority(
+            db,
+            attempt,
+            now=validation_at,
+        )
+        if automation_reason is not None:
+            if automation_reason is ReasonCode.GOVERNOR_DENIED:
+                record_governor_denial(
+                    db,
+                    attempt,
+                    occurred_at=validation_at,
+                    reason_code=automation_detail or "AUTOMATION_POLICY_DENIED",
+                )
+            raise PermitValidationError(automation_reason.value)
+        _require_attempt_artifact_snapshot(
+            attempt,
+            snapshot_id=automation_artifact_snapshot_id,
+            settings=runtime_settings,
+        )
         validate_final_submit_permit(
             permit,
             attempt=attempt,
@@ -731,6 +837,25 @@ def _enter_commit_boundary(
         db.commit()
         raise _CommitBoundaryRejectedError(ReasonCode.BUILD_MISMATCH.value)
     try:
+        automation_reason, automation_detail = _validate_attempt_automation_authority(
+            db,
+            attempt,
+            now=commit_at,
+        )
+        if automation_reason is not None:
+            if automation_reason is ReasonCode.GOVERNOR_DENIED:
+                record_governor_denial(
+                    db,
+                    attempt,
+                    occurred_at=commit_at,
+                    reason_code=automation_detail or "AUTOMATION_POLICY_DENIED",
+                )
+            raise PermitValidationError(automation_reason.value)
+        _require_attempt_artifact_snapshot(
+            attempt,
+            snapshot_id=automation_artifact_snapshot_id,
+            settings=runtime_settings,
+        )
         validate_final_submit_permit(
             permit,
             attempt=attempt,
@@ -897,6 +1022,7 @@ def execute_claimed_submission_command(
         )
 
     preflight_context: AdapterPreflightContext | None = None
+    automation_artifact_snapshot_id: str | None = None
     if supports_preflight_context(executor):
         try:
             from profile.cv_content_cache import (  # noqa: PLC0415
@@ -907,11 +1033,25 @@ def execute_claimed_submission_command(
             selected_cv_id = str(application.selected_cv_id or "").strip()
             if not selected_cv_id or selected_cv_id != domain_plan.selected_cv_id:
                 raise ValueError("selected CV identity changed")
-            selected_cv = get_selected_cv_artifact_by_id(
-                selected_cv_id,
-                cv_routing_path=runtime_settings.cv_routing_path,
-                cv_directory=runtime_settings.cv_directory,
-            )
+            if attempt.authority_kind == "qualified_autopilot":
+                decision = attempt.automation_policy_decision
+                if decision is None:
+                    raise ValueError("automation policy decision is unavailable")
+                policy = verified_policy_for_decision(decision)
+                selected_cv, automation_artifact_snapshot_id = (
+                    resolve_selected_cv_artifact_snapshot(
+                        policy,
+                        cv_id=selected_cv_id,
+                        expected_sha256=domain_plan.selected_cv_hash,
+                        settings=runtime_settings,
+                    )
+                )
+            else:
+                selected_cv = get_selected_cv_artifact_by_id(
+                    selected_cv_id,
+                    cv_routing_path=runtime_settings.cv_routing_path,
+                    cv_directory=runtime_settings.cv_directory,
+                )
             if selected_cv is None:
                 raise ValueError("selected CV is unavailable")
             selected_cv = require_current_selected_cv_artifact(
@@ -1056,6 +1196,8 @@ def execute_claimed_submission_command(
                 job_url_hash=url_hash(normalized_url),
                 action=action,
                 governor_gate=governor_gate,
+                automation_artifact_snapshot_id=automation_artifact_snapshot_id,
+                settings=runtime_settings,
             )
         except _CommitBoundaryRejectedError:
             return AttemptOutcome.FAILED_BEFORE_COMMIT.value

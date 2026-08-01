@@ -84,6 +84,8 @@ Never restore over a running instance.
 
 The quarantine:
 
+- revokes every active signed autopilot policy before any worker is restarted;
+- terminalizes queued and running autopilot inspections so they cannot be reclaimed;
 - invalidates every restored form plan;
 - expires every unused final-submit permit;
 - revokes unconsumed local control-plane review grants;

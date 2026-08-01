@@ -145,7 +145,7 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
 
     command.upgrade(config, "head")
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
-    assert current_revision(engine) == "0004_remove_login_throttle"
+    assert current_revision(engine) == "0005_kill_switch_commands"
     table_names = set(inspect(engine).get_table_names())
     assert {
         "control_runner_devices",
@@ -155,12 +155,20 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
         "control_runner_events",
         "control_operator_sessions",
         "control_operator_audit",
+        "control_kill_switch_commands",
     }.issubset(table_names)
     assert "control_login_throttle" not in table_names
     review_grant_columns = {
         column["name"] for column in inspect(engine).get_columns("control_review_grants")
     }
     assert {"revoked_at", "revocation_envelope_digest"} <= review_grant_columns
+    kill_command_columns = {
+        column["name"] for column in inspect(engine).get_columns("control_kill_switch_commands")
+    }
+    assert "runner_boot_id" in kill_command_columns
+    migrated_kill_indexes = {
+        index["name"] for index in inspect(engine).get_indexes("control_kill_switch_commands")
+    }
     migrated_audit_indexes = {
         index["name"] for index in inspect(engine).get_indexes("control_operator_audit")
     }
@@ -169,7 +177,12 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
     metadata_audit_indexes = {
         index["name"] for index in inspect(metadata_engine).get_indexes("control_operator_audit")
     }
+    metadata_kill_indexes = {
+        index["name"]
+        for index in inspect(metadata_engine).get_indexes("control_kill_switch_commands")
+    }
     assert migrated_audit_indexes == metadata_audit_indexes
+    assert migrated_kill_indexes == metadata_kill_indexes
     assert migrated_audit_indexes == published_audit_indexes
     assert "ix_control_operator_audit_created_at" in migrated_audit_indexes
     metadata_engine.dispose()

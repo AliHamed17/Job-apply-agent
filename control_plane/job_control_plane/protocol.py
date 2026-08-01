@@ -44,6 +44,7 @@ class EnvelopePurpose(StrEnum):
     RUNNER_COMMAND_ACK = "runner.command_ack.v1"
     RUNNER_EVENT = "runner.event.v1"
     CONTROL_COMMAND = "control.command.v1"
+    CONTROL_KILL_COMMAND = "control.kill_command.v1"
 
 
 class AdapterCode(StrEnum):
@@ -175,6 +176,13 @@ class ControlCommandPayload(StrictProtocolModel):
     action: Literal["send_application"] = "send_application"
 
 
+class KillSwitchCommandPayload(StrictProtocolModel):
+    command_id: UUID
+    boot_id: UUID
+    action: Literal["activate_kill_switch"] = "activate_kill_switch"
+    reason_code: Literal["REMOTE_OPERATOR_KILL"] = "REMOTE_OPERATOR_KILL"
+
+
 class CommandAckPayload(StrictProtocolModel):
     command_id: UUID
     ack_status: CommandAckStatus
@@ -255,6 +263,10 @@ class ControlCommandEnvelope(SignedEnvelope[ControlCommandPayload]):
     purpose: Literal[EnvelopePurpose.CONTROL_COMMAND] = EnvelopePurpose.CONTROL_COMMAND
 
 
+class KillSwitchCommandEnvelope(SignedEnvelope[KillSwitchCommandPayload]):
+    purpose: Literal[EnvelopePurpose.CONTROL_KILL_COMMAND] = EnvelopePurpose.CONTROL_KILL_COMMAND
+
+
 def canonical_unsigned_bytes(envelope: SignedEnvelope[StrictProtocolModel]) -> bytes:
     """Return the single canonical signing representation."""
 
@@ -299,6 +311,8 @@ __all__ = [
     "EvidenceType",
     "HeartbeatEnvelope",
     "HeartbeatPayload",
+    "KillSwitchCommandEnvelope",
+    "KillSwitchCommandPayload",
     "ReasonCode",
     "ReviewGrantEnvelope",
     "ReviewGrantPayload",

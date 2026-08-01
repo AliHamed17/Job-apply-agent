@@ -63,6 +63,8 @@ def issue_final_submit_permit(
         selector_version=attempt.selector_version or "",
         form_plan_fingerprint=attempt.form_plan_fingerprint or "",
         cv_hash=attempt.attached_cv_hash or "",
+        authority_kind=attempt.authority_kind,
+        automation_policy_decision_digest=attempt.automation_policy_decision_digest,
         issued_at=timestamp,
         expires_at=expires_at,
     )
@@ -112,6 +114,12 @@ def validate_final_submit_permit(
         (permit.form_plan_fingerprint, form_plan.fingerprint, "FORM_CHANGED"),
         (permit.cv_hash, attempt.attached_cv_hash, "ATTACHMENT_CHANGED"),
         (permit.cv_hash, form_plan.attached_cv_hash, "ATTACHMENT_CHANGED"),
+        (permit.authority_kind, attempt.authority_kind, "SUBMISSION_AUTHORITY_CHANGED"),
+        (
+            permit.automation_policy_decision_digest,
+            attempt.automation_policy_decision_digest,
+            "AUTOMATION_POLICY_CHANGED",
+        ),
     )
     for expected, observed, reason_code in bindings:
         if not hmac.compare_digest(str(expected or ""), str(observed or "")):

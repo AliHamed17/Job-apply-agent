@@ -166,6 +166,31 @@ class VerifiedControlCommand:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class VerifiedKillSwitchCommand:
+    """Verified activation-only stop command with no private application data."""
+
+    command_id: str
+    runner_boot_id: str
+    delivery_nonce: str
+    issued_at: datetime
+    expires_at: datetime
+    envelope_digest: str
+
+    def __post_init__(self) -> None:
+        _uuid(self.command_id, "KILL_SWITCH_COMMAND_ID_INVALID")
+        _uuid(self.runner_boot_id, "RUNNER_BOOT_ID_INVALID")
+        _uuid(self.delivery_nonce, "CONTROL_NONCE_INVALID")
+        if not _SHA256_RE.fullmatch(self.envelope_digest):
+            raise ControlPlaneRunnerError("CONTROL_ENVELOPE_DIGEST_INVALID")
+        issued_at = _aware(self.issued_at)
+        expires_at = _aware(self.expires_at)
+        if expires_at <= issued_at or expires_at - issued_at > timedelta(
+            seconds=MAX_COMMAND_LIFETIME_SECONDS
+        ):
+            raise ControlPlaneRunnerError("CONTROL_COMMAND_LIFETIME_INVALID")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class AcceptedControlCommand:
     remote_command_ref: str
     remote_attempt_ref: str
@@ -198,6 +223,11 @@ def _capabilities(
         if engine is not None
         else readiness_report(settings, require_storage_write=False)
     )
+    policy_status = None
+    if db is not None:
+        from core.automation_policy_service import policy_usage_status
+
+        policy_status = policy_usage_status(db)
     return build_runtime_capabilities(
         settings,
         report,
@@ -206,6 +236,7 @@ def _capabilities(
             dependency_report=report,
             db=db,
         ),
+        automation_policy_status=policy_status,
     )
 
 
@@ -385,6 +416,7 @@ def accept_control_plane_command(
         form_plan_id=grant.form_plan.plan_id,
         client_release=_client_release(resolved_capabilities),
         authority_expires_at=authority_expires_at,
+        authority_kind="control_plane",
     )
     kwargs: dict[str, Any] = {
         "settings": resolved_settings,
@@ -423,6 +455,38 @@ def wake_control_plane_submission_command(accepted: AcceptedControlCommand) -> b
     except Exception:
         return False
     return True
+
+
+def activate_control_plane_kill_switch(
+    db,
+    command: VerifiedKillSwitchCommand,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Persist a replay-protected local stop; remote commands can never clear it."""
+
+    timestamp = _aware(now or datetime.now(UTC))
+    if command.issued_at > timestamp + _crypto_module().MAX_CLOCK_SKEW:
+        raise ControlPlaneRunnerError("CONTROL_COMMAND_NOT_YET_VALID")
+    if command.expires_at <= timestamp:
+        raise ControlPlaneRunnerError("CONTROL_COMMAND_EXPIRED")
+    from core.automation_policy import PolicyAuthoritySource
+    from core.automation_policy_service import set_automation_kill_switch
+
+    try:
+        _event, replayed = set_automation_kill_switch(
+            db,
+            active=True,
+            source=PolicyAuthoritySource.VERCEL_SIGNED_KILL,
+            reason_code="REMOTE_OPERATOR_KILL",
+            command_digest=command.envelope_digest,
+            now=timestamp,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return replayed
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -820,6 +884,48 @@ class ControlPlaneRunner:
         except Exception as exc:
             raise ControlPlaneRunnerError("CONTROL_COMMAND_INVALID") from exc
 
+    def _verify_kill_switch_command(
+        self,
+        envelope_data: Mapping[str, object],
+        *,
+        now: datetime,
+    ) -> VerifiedKillSwitchCommand:
+        try:
+            encoded = json.dumps(
+                dict(envelope_data),
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+            envelope = self._protocol.KillSwitchCommandEnvelope.model_validate_json(encoded)
+            if not hmac.compare_digest(
+                str(envelope.key_id),
+                self.config.control_signing_key_id,
+            ):
+                raise ControlPlaneRunnerError("CONTROL_SIGNING_KEY_ID_MISMATCH")
+            self._crypto.verify_envelope(
+                envelope,
+                self._control_plane_public_key,
+                expected_purpose=self._protocol.EnvelopePurpose.CONTROL_KILL_COMMAND,
+                expected_audience=self._protocol.RUNNER_AUDIENCE,
+                now=now,
+            )
+            if not hmac.compare_digest(str(envelope.payload.boot_id), self._boot_id):
+                raise ControlPlaneRunnerError("RUNNER_BOOT_MISMATCH")
+            canonical = self._protocol.canonical_envelope_bytes(envelope)
+            return VerifiedKillSwitchCommand(
+                command_id=str(envelope.payload.command_id),
+                runner_boot_id=str(envelope.payload.boot_id),
+                delivery_nonce=str(envelope.nonce),
+                issued_at=envelope.issued_at,
+                expires_at=envelope.expires_at,
+                envelope_digest=hashlib.sha256(canonical).hexdigest(),
+            )
+        except ControlPlaneRunnerError:
+            raise
+        except Exception as exc:
+            raise ControlPlaneRunnerError("KILL_SWITCH_COMMAND_INVALID") from exc
+
     async def _heartbeat(self, now: datetime) -> None:
         identity = get_runtime_identity()
         readiness = self._runtime_readiness()
@@ -992,6 +1098,28 @@ class ControlPlaneRunner:
             raise ControlPlaneRunnerError("CONTROL_POLL_RESPONSE_INVALID")
         return commands[0]
 
+    async def _poll_kill_switch(self, now: datetime) -> Mapping[str, object] | None:
+        client = getattr(self, "client", None)
+        poller = getattr(client, "poll_kill_switch_command", None)
+        if not callable(poller):
+            return None
+        envelope = self._signed_envelope(
+            purpose=self._protocol.EnvelopePurpose.RUNNER_COMMAND_POLL,
+            payload={"boot_id": self._boot_id, "max_commands": 1},
+            now=now,
+        )
+        response = await poller(envelope)
+        if response is None:
+            return None
+        commands = response.get("commands")
+        if not isinstance(commands, list) or len(commands) > 1:
+            raise ControlPlaneRunnerError("KILL_SWITCH_POLL_RESPONSE_INVALID")
+        if not commands:
+            return None
+        if not isinstance(commands[0], Mapping):
+            raise ControlPlaneRunnerError("KILL_SWITCH_POLL_RESPONSE_INVALID")
+        return commands[0]
+
     def _admit(self, command: VerifiedControlCommand) -> AcceptedControlCommand:
         db = self._open_database_session()
         try:
@@ -1001,6 +1129,17 @@ class ControlPlaneRunner:
                 settings=self._settings,
                 capabilities=self._runtime_capabilities(db),
                 clock=self._clock,
+            )
+        finally:
+            db.close()
+
+    def _activate_kill_switch(self, command: VerifiedKillSwitchCommand) -> bool:
+        db = self._open_database_session()
+        try:
+            return activate_control_plane_kill_switch(
+                db,
+                command,
+                now=self._clock(),
             )
         finally:
             db.close()
@@ -1018,6 +1157,23 @@ class ControlPlaneRunner:
             now=now,
         )
         await self.client.acknowledge_command(command_id, envelope)
+
+    async def _ack_kill_switch(
+        self,
+        command_id: str,
+        *,
+        status: str,
+        now: datetime,
+    ) -> None:
+        acknowledger = getattr(self.client, "acknowledge_kill_switch_command", None)
+        if not callable(acknowledger):
+            raise ControlPlaneRunnerError("KILL_SWITCH_ACK_UNAVAILABLE")
+        envelope = self._signed_envelope(
+            purpose=self._protocol.EnvelopePurpose.RUNNER_COMMAND_ACK,
+            payload={"command_id": command_id, "ack_status": status},
+            now=now,
+        )
+        await acknowledger(command_id, envelope)
 
     def _event_signer(
         self,
@@ -1058,6 +1214,30 @@ class ControlPlaneRunner:
             >= self.config.heartbeat_interval_seconds
         ):
             await self._heartbeat(now)
+        kill_envelope = await self._poll_kill_switch(datetime.now(UTC))
+        if kill_envelope is not None:
+            kill_command = self._verify_kill_switch_command(
+                kill_envelope,
+                now=datetime.now(UTC),
+            )
+            try:
+                replayed = await asyncio.to_thread(
+                    self._activate_kill_switch,
+                    kill_command,
+                )
+            except Exception:
+                await self._ack_kill_switch(
+                    kill_command.command_id,
+                    status="rejected",
+                    now=datetime.now(UTC),
+                )
+                raise
+            await self._ack_kill_switch(
+                kill_command.command_id,
+                status="received",
+                now=datetime.now(UTC),
+            )
+            return "kill_switch_replayed" if replayed else "kill_switch_activated"
         revocations_sent = 0
         while (
             revocations_sent < MAX_REVOCATIONS_PER_CYCLE

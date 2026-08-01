@@ -49,6 +49,7 @@ from api.routes.analytics import router as analytics_router
 from api.routes.applications import router as applications_router
 from api.routes.ats import router as ats_router
 from api.routes.audit import router as audit_router
+from api.routes.automation import router as automation_router
 from api.routes.batch_apply import router as batch_apply_router
 from api.routes.batch_rescore import router as batch_rescore_router
 from api.routes.command_center import router as command_center_router
@@ -294,6 +295,7 @@ app.include_router(webhook_router)
 app.include_router(ingest_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(applications_router, prefix="/api")
+app.include_router(automation_router, prefix="/api")
 app.include_router(ats_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(operations_router, prefix="/api")

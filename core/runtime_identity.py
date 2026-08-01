@@ -354,6 +354,7 @@ def build_runtime_capabilities(
     *,
     current_source_digest: str | None = None,
     automation_readiness: Mapping[str, Any] | None = None,
+    automation_policy_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the redacted capability response and fail-closed send decision."""
 
@@ -483,6 +484,21 @@ def build_runtime_capabilities(
                 automation_reasons = [SubmissionBlockReason.AUTOMATION_SUBMISSION_NOT_READY.value]
 
     reason_values = list(dict.fromkeys([reason.value for reason in reasons] + automation_reasons))
+    submission_allowed = (
+        live_submit_enabled
+        and readiness_status == "ready"
+        and worker_compatible
+        and SUBMIT_COMMAND_PROTOCOL_AVAILABLE
+        and settings.db_is_postgres
+        and automation_submission_ready
+    )
+    qualified_autopilot_enabled = bool(
+        submission_allowed
+        and automation_policy_status is not None
+        and automation_policy_status.get("active") is True
+    )
+    if qualified_autopilot_enabled:
+        mode_name = "qualified_autopilot"
     capabilities = {
         "release": {
             "build_sha": release.build_sha,
@@ -500,7 +516,7 @@ def build_runtime_capabilities(
             "live_submit_enabled": live_submit_enabled,
             "discovery_enabled": settings.discovery_enabled,
             "auto_prepare_enabled": settings.auto_apply,
-            "qualified_autopilot_enabled": False,
+            "qualified_autopilot_enabled": qualified_autopilot_enabled,
             "legacy_auto_apply_alias": settings.auto_apply,
         },
         "readiness": {
@@ -508,14 +524,7 @@ def build_runtime_capabilities(
             "checks": checks,
         },
         "submission": {
-            "allowed": (
-                live_submit_enabled
-                and readiness_status == "ready"
-                and worker_compatible
-                and SUBMIT_COMMAND_PROTOCOL_AVAILABLE
-                and settings.db_is_postgres
-                and automation_submission_ready
-            ),
+            "allowed": submission_allowed,
             "reasons": reason_values,
         },
         "worker": {
@@ -529,4 +538,6 @@ def build_runtime_capabilities(
     }
     if automation_readiness is not None:
         capabilities["automation"] = dict(automation_readiness)
+    if automation_policy_status is not None:
+        capabilities["automation_policy"] = dict(automation_policy_status)
     return capabilities

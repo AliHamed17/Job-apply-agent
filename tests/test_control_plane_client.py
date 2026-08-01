@@ -83,6 +83,24 @@ async def test_poll_is_bounded_json_and_uses_no_bearer_authorization():
 
 
 @pytest.mark.asyncio
+async def test_kill_switch_poll_uses_the_dedicated_redacted_path():
+    command = {"protocol_version": "jaa-control.v1", "signature": "x" * 86}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/runner/kill-switch/poll"
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json={"commands": [command]}, request=request)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = ControlPlaneClient(
+        ControlPlaneClientConfig("https://control.example"),
+        http=http,
+    )
+    assert await client.poll_kill_switch_command({"signed": "poll"}) == {"commands": [command]}
+    await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_ack_path_is_bound_to_a_canonical_command_uuid():
     seen: list[str] = []
     command_id = "09aac6df-df84-419c-a7a4-558acc709382"
@@ -176,6 +194,11 @@ async def test_each_mutation_route_requires_its_exact_receipt_identifier():
                 "command_id": command_id,
                 "duplicate": True,
             },
+            f"/api/runner/kill-switch/{command_id}/ack": {
+                "accepted": True,
+                "command_id": command_id,
+                "duplicate": True,
+            },
             "/api/runner/events": {
                 "accepted": True,
                 "event_id": event_id,
@@ -197,5 +220,9 @@ async def test_each_mutation_route_requires_its_exact_receipt_identifier():
     await client.publish_review_grant({"payload": {"grant_id": grant_id}})
     await client.revoke_review_grant({"payload": {"grant_id": grant_id}})
     await client.acknowledge_command(command_id, {"payload": {"command_id": command_id}})
+    await client.acknowledge_kill_switch_command(
+        command_id,
+        {"payload": {"command_id": command_id}},
+    )
     await client.send_event({"payload": {"event_id": event_id}})
     await http.aclose()

@@ -21,6 +21,7 @@ from .crypto import (
 )
 from .db import EXPECTED_SCHEMA_REVISION
 from .models import (
+    ControlKillSwitchCommand,
     OperatorAudit,
     ReviewGrant,
     RunnerDevice,
@@ -41,6 +42,8 @@ from .protocol import (
     ControlCommandPayload,
     EnvelopePurpose,
     HeartbeatEnvelope,
+    KillSwitchCommandEnvelope,
+    KillSwitchCommandPayload,
     ReviewGrantEnvelope,
     ReviewGrantRevocationEnvelope,
     RunnerEventEnvelope,
@@ -60,6 +63,12 @@ class ControlPlaneError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class CommandCreation:
     command: SubmissionCommand
+    duplicate: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KillCommandCreation:
+    command: ControlKillSwitchCommand
     duplicate: bool
 
 
@@ -588,6 +597,240 @@ def create_command(
     return CommandCreation(command=command, duplicate=False)
 
 
+def create_kill_switch_command(
+    db: Session,
+    settings: Settings,
+    *,
+    client_idempotency_key: UUID,
+    now: datetime | None = None,
+) -> KillCommandCreation:
+    """Mint one five-minute activation-only emergency-stop command."""
+
+    checked_at = now or utc_now()
+    idempotency_digest = sha256_bytes(str(client_idempotency_key).encode("ascii"))
+    prior = db.scalar(
+        select(ControlKillSwitchCommand).where(
+            ControlKillSwitchCommand.client_idempotency_digest == idempotency_digest
+        )
+    )
+    if prior is not None:
+        _expire_undeliverable_kill_command_replay(
+            db,
+            settings,
+            command=prior,
+            checked_at=checked_at,
+        )
+        return KillCommandCreation(command=prior, duplicate=True)
+    device = db.scalar(
+        select(RunnerDevice)
+        .where(RunnerDevice.id == str(settings.runner_device_id))
+        .with_for_update()
+    )
+    if device is None or not device.active:
+        raise ControlPlaneError("RUNNER_DISABLED")
+    if (
+        device.last_seen_at is None
+        or checked_at - as_utc(device.last_seen_at)
+        > timedelta(seconds=settings.runner_offline_seconds)
+        or device.status != "ready"
+        or not device.boot_id
+    ):
+        raise ControlPlaneError("RUNNER_OFFLINE")
+    try:
+        runner_boot_id = UUID(str(device.boot_id))
+    except (TypeError, ValueError) as exc:
+        raise ControlPlaneError("RUNNER_OFFLINE") from exc
+
+    command_id = uuid4()
+    expires_at = checked_at + timedelta(minutes=5)
+    unsigned = KillSwitchCommandEnvelope(
+        key_id=settings.control_signing_key_id,
+        purpose=EnvelopePurpose.CONTROL_KILL_COMMAND,
+        audience=RUNNER_AUDIENCE,
+        issued_at=checked_at,
+        expires_at=expires_at,
+        nonce=uuid4(),
+        payload=KillSwitchCommandPayload(
+            command_id=command_id,
+            boot_id=runner_boot_id,
+        ),
+    )
+    signed = KillSwitchCommandEnvelope.model_validate(
+        sign_envelope(
+            unsigned,
+            private_key_from_base64url(settings.control_signing_private_key),
+        ).model_dump()
+    )
+    command = ControlKillSwitchCommand(
+        id=str(command_id),
+        device_id=device.id,
+        runner_boot_id=str(runner_boot_id),
+        client_idempotency_digest=idempotency_digest,
+        status="queued",
+        signed_envelope_json=canonical_envelope_bytes(signed).decode("utf-8"),
+        created_at=checked_at,
+        expires_at=expires_at,
+    )
+    try:
+        with db.begin_nested():
+            db.add(command)
+            db.flush()
+    except IntegrityError:
+        replay = db.scalar(
+            select(ControlKillSwitchCommand).where(
+                ControlKillSwitchCommand.client_idempotency_digest == idempotency_digest
+            )
+        )
+        if replay is None:
+            raise ControlPlaneError("KILL_SWITCH_COMMAND_CONFLICT") from None
+        _expire_undeliverable_kill_command_replay(
+            db,
+            settings,
+            command=replay,
+            checked_at=checked_at,
+        )
+        return KillCommandCreation(command=replay, duplicate=True)
+    return KillCommandCreation(command=command, duplicate=False)
+
+
+def _expire_undeliverable_kill_command_replay(
+    db: Session,
+    settings: Settings,
+    *,
+    command: ControlKillSwitchCommand,
+    checked_at: datetime,
+) -> None:
+    """Persist the effective terminal state of an obsolete idempotent replay."""
+
+    if command.status not in {"queued", "claimed"}:
+        return
+    device = db.get(RunnerDevice, str(settings.runner_device_id))
+    expired = as_utc(command.expires_at) <= checked_at
+    boot_changed = (
+        device is None
+        or command.device_id != str(settings.runner_device_id)
+        or not device.boot_id
+        or command.runner_boot_id != str(device.boot_id)
+    )
+    if not expired and not boot_changed:
+        return
+    command.status = "expired"
+    command.claim_lease_expires_at = None
+    command.finished_at = command.finished_at or checked_at
+
+
+def poll_kill_switch_command(
+    db: Session,
+    settings: Settings,
+    envelope: CommandPollEnvelope,
+    *,
+    now: datetime | None = None,
+) -> list[KillSwitchCommandEnvelope]:
+    """Deliver emergency stops before ordinary application commands."""
+
+    checked_at = now or utc_now()
+    device = verify_runner_envelope(
+        db,
+        settings,
+        envelope,
+        expected_purpose=EnvelopePurpose.RUNNER_COMMAND_POLL,
+        now=checked_at,
+    )
+    if device.boot_id != str(envelope.payload.boot_id):
+        raise ControlPlaneError("RUNNER_BOOT_MISMATCH")
+    if (
+        not device.active
+        or device.last_seen_at is None
+        or checked_at - as_utc(device.last_seen_at)
+        > timedelta(seconds=settings.runner_offline_seconds)
+    ):
+        raise ControlPlaneError("RUNNER_OFFLINE")
+    command = db.scalar(
+        select(ControlKillSwitchCommand)
+        .where(
+            ControlKillSwitchCommand.device_id == device.id,
+            ControlKillSwitchCommand.runner_boot_id == str(envelope.payload.boot_id),
+            or_(
+                ControlKillSwitchCommand.status == "queued",
+                and_(
+                    ControlKillSwitchCommand.status == "claimed",
+                    ControlKillSwitchCommand.acknowledged_at.is_(None),
+                    ControlKillSwitchCommand.claim_lease_expires_at <= checked_at,
+                ),
+            ),
+            ControlKillSwitchCommand.expires_at > checked_at,
+        )
+        .order_by(ControlKillSwitchCommand.created_at.asc())
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
+    if command is None:
+        return []
+    try:
+        signed = KillSwitchCommandEnvelope.model_validate_json(command.signed_envelope_json)
+    except ValueError as exc:
+        raise ControlPlaneError("KILL_SWITCH_COMMAND_INVALID") from exc
+    if (
+        command.runner_boot_id != device.boot_id
+        or str(signed.payload.boot_id) != command.runner_boot_id
+    ):
+        raise ControlPlaneError("KILL_SWITCH_COMMAND_BINDING_MISMATCH")
+    command.status = "claimed"
+    if command.claimed_at is None:
+        command.claimed_at = checked_at
+    command.claim_lease_expires_at = checked_at + timedelta(seconds=15)
+    command.delivery_count += 1
+    return [signed]
+
+
+def acknowledge_kill_switch_command(
+    db: Session,
+    settings: Settings,
+    envelope: CommandAckEnvelope,
+    *,
+    path_command_id: UUID,
+    now: datetime | None = None,
+) -> Receipt:
+    checked_at = now or utc_now()
+    device = verify_runner_envelope(
+        db,
+        settings,
+        envelope,
+        expected_purpose=EnvelopePurpose.RUNNER_COMMAND_ACK,
+        now=checked_at,
+    )
+    if envelope.payload.command_id != path_command_id:
+        raise ControlPlaneError("KILL_SWITCH_COMMAND_BINDING_MISMATCH")
+    command = db.scalar(
+        select(ControlKillSwitchCommand)
+        .where(ControlKillSwitchCommand.id == str(path_command_id))
+        .with_for_update()
+    )
+    if command is None or command.device_id != device.id:
+        raise ControlPlaneError("KILL_SWITCH_COMMAND_NOT_FOUND", status_code=404)
+    if command.runner_boot_id != device.boot_id:
+        raise ControlPlaneError("RUNNER_BOOT_MISMATCH")
+    acknowledgement = envelope.payload.ack_status.value
+    if command.acknowledged_at is not None:
+        if command.ack_status != acknowledgement:
+            raise ControlPlaneError("KILL_SWITCH_ACK_CONFLICT")
+        return Receipt(identifier=command.id, duplicate=True)
+    if (
+        command.status != "claimed"
+        or command.claimed_at is None
+        or as_utc(command.claimed_at) >= as_utc(command.expires_at)
+    ):
+        raise ControlPlaneError("KILL_SWITCH_COMMAND_NOT_CLAIMED")
+    command.ack_status = acknowledgement
+    command.acknowledged_at = checked_at
+    command.claim_lease_expires_at = None
+    command.finished_at = checked_at
+    command.status = (
+        "acknowledged" if envelope.payload.ack_status is CommandAckStatus.RECEIVED else "rejected"
+    )
+    return Receipt(identifier=command.id, duplicate=False)
+
+
 def poll_command(
     db: Session,
     settings: Settings,
@@ -834,15 +1077,19 @@ def receive_runner_event(
 __all__ = [
     "CommandCreation",
     "ControlPlaneError",
+    "KillCommandCreation",
     "OPERATOR_AUDIT_HARD_CAP",
     "OPERATOR_AUDIT_RETENTION",
     "Receipt",
     "acknowledge_command",
+    "acknowledge_kill_switch_command",
     "as_utc",
     "audit",
     "canonical_model_digest",
     "create_command",
+    "create_kill_switch_command",
     "poll_command",
+    "poll_kill_switch_command",
     "receive_heartbeat",
     "receive_review_grant",
     "receive_review_grant_revocation",

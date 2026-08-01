@@ -283,6 +283,18 @@ class Application(Base):
         back_populates="application",
         cascade="all, delete-orphan",
     )
+    automation_policy_decisions = relationship(
+        "ApplicationPolicyDecision",
+        back_populates="application",
+        order_by="(ApplicationPolicyDecision.evaluated_at, ApplicationPolicyDecision.id)",
+        cascade="all, delete-orphan",
+    )
+    autopilot_inspection_runs = relationship(
+        "AutopilotInspectionRun",
+        back_populates="application",
+        order_by="AutopilotInspectionRun.id",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -393,6 +405,14 @@ class Submission(Base):
     legacy_reported_at = Column(DateTime, nullable=True)
     reconciliation_source = Column(String(32), nullable=True)
     reconciliation_evidence_ref = Column(String(255), nullable=True)
+    authority_kind = Column(
+        String(32),
+        nullable=False,
+        default="explicit_operator",
+        server_default="explicit_operator",
+    )
+    automation_policy_decision_id = Column(Integer, nullable=True)
+    automation_policy_decision_digest = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     application = relationship("Application", back_populates="submissions")
@@ -421,6 +441,11 @@ class Submission(Base):
         cascade="all, delete-orphan",
         foreign_keys="SubmissionEvidence.attempt_id",
     )
+    automation_policy_decision = relationship(
+        "ApplicationPolicyDecision",
+        back_populates="attempt",
+        foreign_keys=[automation_policy_decision_id],
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -434,6 +459,20 @@ class Submission(Base):
             "'unknown', 'failed_before_commit', 'draft_only', "
             "'operator_confirmed', 'legacy_unverified')",
             name="ck_submissions_attempt_outcome",
+        ),
+        CheckConstraint(
+            "authority_kind IN ('explicit_operator', 'control_plane', "
+            "'qualified_autopilot', 'legacy')",
+            name="ck_submissions_authority_kind",
+        ),
+        CheckConstraint(
+            "(authority_kind = 'qualified_autopilot' "
+            "AND automation_policy_decision_id IS NOT NULL "
+            "AND automation_policy_decision_digest IS NOT NULL) OR "
+            "(authority_kind <> 'qualified_autopilot' "
+            "AND automation_policy_decision_id IS NULL "
+            "AND automation_policy_decision_digest IS NULL)",
+            name="ck_submissions_automation_authority",
         ),
         CheckConstraint(
             "(stage = 'finished' AND outcome IS NOT NULL) OR "
@@ -541,6 +580,11 @@ class Submission(Base):
             deferrable=True,
             initially="DEFERRED",
             use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["automation_policy_decision_id", "automation_policy_decision_digest"],
+            ["application_policy_decisions.id", "application_policy_decisions.decision_digest"],
+            name="fk_submissions_automation_policy_decision",
         ),
         Index("ix_submissions_application_id", "application_id"),
         Index("ix_submissions_status", "status"),
@@ -706,6 +750,13 @@ class FinalSubmitPermit(Base):
     )
     expires_at = Column(DateTime, nullable=False)
     consumed_at = Column(DateTime, nullable=True)
+    authority_kind = Column(
+        String(32),
+        nullable=False,
+        default="explicit_operator",
+        server_default="explicit_operator",
+    )
+    automation_policy_decision_digest = Column(String(64), nullable=True)
 
     attempt = relationship("Submission", back_populates="final_submit_permit")
 
@@ -713,6 +764,23 @@ class FinalSubmitPermit(Base):
         UniqueConstraint("attempt_id", name="uq_final_submit_permits_attempt_id"),
         UniqueConstraint("nonce_hash", name="uq_final_submit_permits_nonce_hash"),
         Index("ix_final_submit_permits_expires_at", "expires_at"),
+        CheckConstraint(
+            "authority_kind IN ('explicit_operator', 'control_plane', "
+            "'qualified_autopilot', 'legacy')",
+            name="ck_final_submit_permits_authority_kind",
+        ),
+        CheckConstraint(
+            "(authority_kind = 'qualified_autopilot' "
+            "AND automation_policy_decision_digest IS NOT NULL) OR "
+            "(authority_kind <> 'qualified_autopilot' "
+            "AND automation_policy_decision_digest IS NULL)",
+            name="ck_final_submit_permits_automation_authority",
+        ),
+        CheckConstraint(
+            "automation_policy_decision_digest IS NULL OR "
+            f"{_sha256_check_sql('automation_policy_decision_digest')}",
+            name="ck_final_submit_permits_policy_digest",
+        ),
     )
 
 
@@ -1302,6 +1370,7 @@ class BrowserQualificationRun(Base):
     adapter_version = Column(String(32), nullable=True)
     qualification_tier = Column(String(32), nullable=True)
     form_fingerprint = Column(String(64), nullable=True)
+    form_contract_digest = Column(String(64), nullable=True)
     fixture_digest = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
@@ -1327,6 +1396,14 @@ class BrowserQualificationRun(Base):
             f"AND (form_fingerprint IS NULL OR "
             f"{_sha256_check_sql('form_fingerprint')})",
             name="ck_browser_qualification_digests",
+        ),
+        CheckConstraint(
+            "qualification_tier <> 'live_canary_qualified' OR form_contract_digest IS NOT NULL",
+            name="ck_browser_qualification_live_contract",
+        ),
+        CheckConstraint(
+            f"form_contract_digest IS NULL OR {_sha256_check_sql('form_contract_digest')}",
+            name="ck_browser_qualification_contract_digest",
         ),
         CheckConstraint(
             "qualification_tier IS NULL "
@@ -1668,6 +1745,263 @@ class JobFitDecisionRecord(Base):
             "quality_eligible",
             "created_at",
         ),
+    )
+
+
+class AutomationPolicyRevisionRecord(Base):
+    """Locally signed, immutable policy payload with explicit revocation state."""
+
+    __tablename__ = "automation_policy_revisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    policy_id = Column(String(36), nullable=False)
+    revision = Column(Integer, nullable=False)
+    schema_version = Column(String(32), nullable=False)
+    payload_json = Column(Text, nullable=False)
+    payload_digest = Column(String(64), nullable=False)
+    signing_key_id = Column(String(36), nullable=False)
+    signature = Column(String(86), nullable=False)
+    active_slot = Column(Integer, nullable=True)
+    activated_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(String(32), nullable=True)
+    revocation_reason = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+
+    decisions = relationship(
+        "ApplicationPolicyDecision",
+        back_populates="policy_revision",
+    )
+    inspection_runs = relationship(
+        "AutopilotInspectionRun",
+        back_populates="policy_revision",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "policy_id",
+            "revision",
+            name="uq_automation_policy_revisions_identity",
+        ),
+        UniqueConstraint("payload_digest", name="uq_automation_policy_revisions_digest"),
+        UniqueConstraint("active_slot", name="uq_automation_policy_revisions_active_slot"),
+        CheckConstraint(
+            "schema_version = 'auto-submit-policy.v1' "
+            "AND revision > 0 "
+            "AND expires_at > activated_at "
+            "AND (active_slot IS NULL OR active_slot = 1)",
+            name="ck_automation_policy_revisions_core",
+        ),
+        CheckConstraint(
+            f"{_sha256_check_sql('payload_digest')} "
+            "AND length(signature) = 86 "
+            "AND length(payload_json) BETWEEN 2 AND 32768",
+            name="ck_automation_policy_revisions_crypto",
+        ),
+        CheckConstraint(
+            "(revoked_at IS NULL AND revoked_by IS NULL "
+            "AND revocation_reason IS NULL AND active_slot = 1) OR "
+            "(revoked_at IS NOT NULL AND revoked_by IS NOT NULL "
+            "AND revocation_reason IS NOT NULL AND active_slot IS NULL)",
+            name="ck_automation_policy_revisions_revocation",
+        ),
+        Index("ix_automation_policy_revisions_expiry", "expires_at"),
+    )
+
+
+class AutopilotInspectionRun(Base):
+    """Durable, reversible inspection lease for one exact policy revision."""
+
+    __tablename__ = "autopilot_inspection_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
+    application_revision = Column(Integer, nullable=False)
+    policy_revision_id = Column(
+        Integer,
+        ForeignKey("automation_policy_revisions.id"),
+        nullable=False,
+    )
+    state = Column(String(16), nullable=False, default="queued", server_default="queued")
+    reason_code = Column(String(64), nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    claim_token = Column(String(36), nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+
+    application = relationship("Application", back_populates="autopilot_inspection_runs")
+    policy_revision = relationship(
+        "AutomationPolicyRevisionRecord",
+        back_populates="inspection_runs",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "application_id",
+            "application_revision",
+            "policy_revision_id",
+            name="uq_autopilot_inspection_runs_exact",
+        ),
+        CheckConstraint(
+            "application_revision > 0 AND state IN ('queued', 'running', 'finished')",
+            name="ck_autopilot_inspection_runs_core",
+        ),
+        CheckConstraint(
+            "(state = 'queued' AND claimed_at IS NULL AND lease_expires_at IS NULL "
+            "AND claim_token IS NULL "
+            "AND finished_at IS NULL AND reason_code IS NULL) OR "
+            "(state = 'running' AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND claim_token IS NOT NULL AND lease_expires_at > claimed_at AND finished_at IS NULL "
+            "AND reason_code IS NULL) OR "
+            "(state = 'finished' AND claimed_at IS NOT NULL AND lease_expires_at IS NULL "
+            "AND claim_token IS NULL "
+            "AND finished_at IS NOT NULL AND reason_code IS NOT NULL)",
+            name="ck_autopilot_inspection_runs_state",
+        ),
+        Index(
+            "ix_autopilot_inspection_runs_claim",
+            "state",
+            "lease_expires_at",
+            "created_at",
+        ),
+    )
+
+
+class ApplicationPolicyDecision(Base):
+    """One redacted, immutable policy result and optional cap reservation."""
+
+    __tablename__ = "application_policy_decisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    policy_revision_id = Column(
+        Integer,
+        ForeignKey("automation_policy_revisions.id"),
+        nullable=False,
+    )
+    application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
+    application_revision = Column(Integer, nullable=False)
+    fit_decision_id = Column(Integer, ForeignKey("job_fit_decisions.id"), nullable=False)
+    form_plan_id = Column(Integer, ForeignKey("form_plans.id"), nullable=False)
+    decision_digest = Column(String(64), nullable=False)
+    policy_digest = Column(String(64), nullable=False)
+    job_digest = Column(String(64), nullable=False)
+    company_digest = Column(String(64), nullable=False)
+    fit_decision_digest = Column(String(64), nullable=False)
+    form_plan_public_id = Column(String(36), nullable=False)
+    form_fingerprint = Column(String(64), nullable=False)
+    form_contract_digest = Column(String(64), nullable=False)
+    selected_cv_hash = Column(String(64), nullable=False)
+    profile_version = Column(Integer, nullable=False)
+    confirmed_answer_revision = Column(String(64), nullable=False)
+    adapter_name = Column(String(64), nullable=False)
+    adapter_version = Column(String(32), nullable=False)
+    selector_version = Column(String(64), nullable=False)
+    fit_score = Column(Float, nullable=False)
+    allowed = Column(Boolean, nullable=False, default=False, server_default=false())
+    reason_codes_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    authority_expires_at = Column(DateTime, nullable=True)
+    evaluated_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+
+    policy_revision = relationship(
+        "AutomationPolicyRevisionRecord",
+        back_populates="decisions",
+    )
+    application = relationship("Application", back_populates="automation_policy_decisions")
+    attempt = relationship(
+        "Submission",
+        back_populates="automation_policy_decision",
+        uselist=False,
+        foreign_keys="Submission.automation_policy_decision_id",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "id",
+            "decision_digest",
+            name="uq_application_policy_decisions_id_digest",
+        ),
+        UniqueConstraint(
+            "application_id",
+            "policy_revision_id",
+            "application_revision",
+            "form_plan_id",
+            "decision_digest",
+            name="uq_application_policy_decisions_exact",
+        ),
+        Index(
+            "uq_application_policy_decisions_one_allowed",
+            "application_id",
+            unique=True,
+            postgresql_where=text("allowed = true"),
+            sqlite_where=text("allowed = 1"),
+        ),
+        Index(
+            "ix_application_policy_decisions_limits",
+            "allowed",
+            "evaluated_at",
+            "company_digest",
+        ),
+        CheckConstraint(
+            "application_revision > 0 AND profile_version > 0 "
+            "AND fit_score >= 0 AND fit_score <= 100",
+            name="ck_application_policy_decisions_metrics",
+        ),
+        CheckConstraint(
+            f"{_sha256_check_sql('decision_digest')} "
+            f"AND {_sha256_check_sql('policy_digest')} "
+            f"AND {_sha256_check_sql('job_digest')} "
+            f"AND {_sha256_check_sql('company_digest')} "
+            f"AND {_sha256_check_sql('fit_decision_digest')} "
+            f"AND {_sha256_check_sql('form_fingerprint')} "
+            f"AND {_sha256_check_sql('form_contract_digest')} "
+            f"AND {_sha256_check_sql('selected_cv_hash')} "
+            f"AND {_sha256_check_sql('confirmed_answer_revision')}",
+            name="ck_application_policy_decisions_digests",
+        ),
+        CheckConstraint(
+            "(allowed = true AND reason_codes_json = '[]' "
+            "AND authority_expires_at IS NOT NULL "
+            "AND authority_expires_at > evaluated_at) OR "
+            "(allowed = false AND reason_codes_json <> '[]' "
+            "AND authority_expires_at IS NULL)",
+            name="ck_application_policy_decisions_outcome",
+        ),
+    )
+
+
+class AutomationKillSwitchEvent(Base):
+    """Append-only local or signed-remote kill-switch state transition."""
+
+    __tablename__ = "automation_kill_switch_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    revision = Column(Integer, nullable=False)
+    active = Column(Boolean, nullable=False)
+    source = Column(String(32), nullable=False)
+    reason_code = Column(String(64), nullable=False)
+    command_digest = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("revision", name="uq_automation_kill_switch_revision"),
+        UniqueConstraint("command_digest", name="uq_automation_kill_switch_command"),
+        CheckConstraint(
+            "revision > 0 AND source IN ('local_operator', 'vercel_signed_kill') "
+            "AND length(trim(reason_code)) BETWEEN 2 AND 64",
+            name="ck_automation_kill_switch_core",
+        ),
+        CheckConstraint(
+            f"command_digest IS NULL OR {_sha256_check_sql('command_digest')}",
+            name="ck_automation_kill_switch_command_digest",
+        ),
+        CheckConstraint(
+            "source <> 'vercel_signed_kill' OR (active = true AND command_digest IS NOT NULL)",
+            name="ck_automation_kill_switch_remote_only_stops",
+        ),
+        Index("ix_automation_kill_switch_created", "created_at", "id"),
     )
 
 

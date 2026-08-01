@@ -516,6 +516,7 @@ def test_runtime_capabilities_endpoint_has_bounded_shape(monkeypatch, auth_heade
         "mode",
         "readiness",
         "automation",
+        "automation_policy",
         "submission",
         "worker",
         "llm",

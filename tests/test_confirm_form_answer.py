@@ -159,6 +159,50 @@ async def test_confirm_answer_clones_plan_and_requires_reprepare(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_confirm_answer_locks_authority_before_application(
+    tmp_path,
+    monkeypatch,
+):
+    db = _db(tmp_path)
+    application, plan = _reviewed_plan(db)
+    calls: list[str] = []
+    real_application_lock = applications_route._lock_mutation_or_http
+
+    monkeypatch.setattr(
+        applications_route,
+        "lock_automation_authority_fence",
+        lambda _db: calls.append("authority"),
+    )
+
+    def tracking_application_lock(*args, **kwargs):
+        calls.append("application")
+        return real_application_lock(*args, **kwargs)
+
+    monkeypatch.setattr(
+        applications_route,
+        "_lock_mutation_or_http",
+        tracking_application_lock,
+    )
+
+    await applications_route.confirm_application_answer(
+        application.id,
+        "nationality",
+        applications_route.ConfirmAnswerRequest(
+            plan_id=plan.plan_id,
+            application_revision=1,
+            value="Canadian",
+            reusable=True,
+            evidence_source="operator_confirmation",
+            evidence_reference="review-session-lock-order",
+        ),
+        db,
+    )
+
+    assert calls[:2] == ["authority", "application"]
+    db.close()
+
+
+@pytest.mark.asyncio
 async def test_partial_plan_rejects_one_off_confirmation(tmp_path):
     db = _db(tmp_path)
     application, plan = _reviewed_plan(db)

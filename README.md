@@ -26,6 +26,10 @@ remains an explicit operator action for one exact reviewed application or
 reviewed batch. With the current qualification evidence, the final-action gate
 stays closed.
 
+The signed qualified-autopilot authority is implemented but cannot be
+activated with the checked-in fixture-only qualification evidence. Activation
+requires at least one exact live-canary-qualified semantic form contract.
+
 ## Submission truth
 
 Preparing, queueing, clicking, redirecting, receiving HTTP 2xx, finding a
@@ -209,6 +213,11 @@ prepare-only placeholder-auth bypass.
 | GET | `/api/runtime/capabilities` | Build, mode, runner, LLM, and send guards |
 | GET | `/api/ats/adapters` | Version and qualification inventory |
 | GET | `/api/jobs/{id}/automation-decision` | Calibrated fit/CV decision; never send authority |
+| GET | `/api/automation/policy` | Signed-policy state and bounded usage |
+| POST | `/api/automation/policy/activate` | Activate one local, signed, max-30-day policy revision |
+| POST | `/api/automation/policy/revoke` | Revoke the current local policy immediately |
+| POST | `/api/automation/kill-switch` | Activate or locally clear the emergency stop |
+| GET | `/api/automation/status` | Readiness plus effective qualified-autopilot state |
 | POST | `/api/applications/{id}/prepare` | Review/prepare; queues no external action |
 | POST | `/api/applications/{id}/inspect` | Build a private form plan |
 | GET | `/api/applications/{id}/form-plan` | Read latest plan and blockers |
@@ -235,11 +244,16 @@ Start with the [control-plane bootstrap](docs/control-plane-bootstrap.md).
 Preview deployments cannot dispatch. A restored control plane deactivates all
 old devices and requires new identities before reconnecting.
 
+The protected control plane can send a separately signed, five-minute,
+activation-only emergency-stop command. It cannot clear the stop or create
+autopilot authority; clearing remains a local authenticated action.
+
 ## Operations and recovery
 
 - [Production operations](docs/operations.md)
 - [Always-on discovery mesh](docs/discovery-mesh.md)
 - [Calibrated fit and 12-CV routing](docs/v5-calibrated-fit-routing.md)
+- [Signed qualified-autopilot policy](docs/v5-signed-autopilot-policy.md)
 - [Qualification evidence](docs/qualification/README.md)
 - [Employer automation boundary](docs/employer-automation.md)
 - [Local Ollama form planning](docs/ollama-form-plan-v1.md)

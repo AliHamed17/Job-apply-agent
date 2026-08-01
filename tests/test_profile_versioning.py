@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from profile import loader
+from profile import writer as writer_module
 from profile.models import UserProfile
 from profile.versioned_snapshot import (
     ProfileSnapshotError,
     latest_profile_version,
     load_versioned_profile_snapshot,
 )
-from profile.writer import save_profile
+from profile.writer import profile_write_transaction, save_profile
 
 import pytest
 import yaml
@@ -104,6 +105,38 @@ def test_concurrent_profile_writes_allocate_distinct_versions(tmp_path):
     persisted_file = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     assert persisted_file["personal"]["name"] == latest.profile.personal.name
     assert latest.version == 2
+    db.close()
+    engine.dispose()
+
+
+def test_profile_writes_take_automation_fence_before_profile_lock(
+    tmp_path,
+    monkeypatch,
+):
+    engine, factory = _factory(tmp_path)
+    db = factory()
+    yaml_path = tmp_path / "fenced-profile.yaml"
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        writer_module,
+        "lock_automation_authority_fence",
+        lambda _db: calls.append("authority"),
+    )
+    monkeypatch.setattr(
+        writer_module,
+        "_acquire_database_write_lock",
+        lambda _db: calls.append("profile"),
+    )
+
+    with profile_write_transaction(db):
+        pass
+    assert calls == ["authority", "profile"]
+
+    calls.clear()
+    save_profile(_profile("Direct writer"), yaml_path, db=db)
+    assert calls[:2] == ["authority", "profile"]
+
     db.close()
     engine.dispose()
 

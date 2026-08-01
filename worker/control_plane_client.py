@@ -277,6 +277,16 @@ class ControlPlaneClient:
     ) -> Mapping[str, object] | None:
         return await self._post("/api/runner/commands/poll", envelope, allow_empty=False)
 
+    async def poll_kill_switch_command(
+        self,
+        envelope: Mapping[str, object],
+    ) -> Mapping[str, object] | None:
+        return await self._post(
+            "/api/runner/kill-switch/poll",
+            envelope,
+            allow_empty=False,
+        )
+
     async def acknowledge_command(
         self,
         command_id: str,
@@ -290,6 +300,29 @@ class ControlPlaneClient:
             raise ControlPlaneClientError("CONTROL_COMMAND_ID_INVALID")
         receipt = await self._post(
             f"/api/runner/commands/{command_id}/ack",
+            envelope,
+            allow_empty=False,
+        )
+        _require_mutation_receipt(
+            receipt,
+            identifier_field="command_id",
+            expected_identifier=canonical_command_id,
+            includes_duplicate=True,
+        )
+
+    async def acknowledge_kill_switch_command(
+        self,
+        command_id: str,
+        envelope: Mapping[str, object],
+    ) -> None:
+        try:
+            canonical_command_id = str(UUID(command_id))
+        except (TypeError, ValueError) as exc:
+            raise ControlPlaneClientError("KILL_SWITCH_COMMAND_ID_INVALID") from exc
+        if command_id.lower() != canonical_command_id:
+            raise ControlPlaneClientError("KILL_SWITCH_COMMAND_ID_INVALID")
+        receipt = await self._post(
+            f"/api/runner/kill-switch/{command_id}/ack",
             envelope,
             allow_empty=False,
         )

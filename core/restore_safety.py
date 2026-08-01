@@ -6,9 +6,12 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 from core.application_audit import record_application_event
+from core.automation_authority_fence import lock_automation_authority_fence
 from core.submission_truth import is_employer_verified
 from db.models import (
     Application,
+    AutomationPolicyRevisionRecord,
+    AutopilotInspectionRun,
     ControlPlaneReviewGrant,
     FinalSubmitPermit,
     FormPlan,
@@ -37,6 +40,8 @@ def _naive_utc(value: datetime | None) -> datetime:
 class RestoreQuarantineSummary:
     """Bounded counts suitable for operator output without private content."""
 
+    automation_policies_revoked: int = 0
+    autopilot_inspections_quarantined: int = 0
     form_plans_invalidated: int = 0
     final_permits_expired: int = 0
     review_grants_revoked: int = 0
@@ -122,7 +127,12 @@ def quarantine_restored_runtime(
     """
 
     timestamp = _naive_utc(now)
+    # Restoration changes the authority domain itself. Serialize this mutation
+    # with policy activation/revocation and the final irreversible boundary.
+    lock_automation_authority_fence(db)
     affected_applications: dict[int, str] = {}
+    policies_revoked = 0
+    inspections_quarantined = 0
     plans_invalidated = 0
     permits_expired = 0
     grants_revoked = 0
@@ -134,6 +144,28 @@ def quarantine_restored_runtime(
     verified_application_ids = {
         attempt.application_id for attempt in attempts if _has_employer_verified_evidence(attempt)
     }
+
+    for policy in _lock_all(db, AutomationPolicyRevisionRecord):
+        if policy.active_slot != 1 or policy.revoked_at is not None:
+            continue
+        policy.active_slot = None
+        policy.revoked_at = timestamp
+        policy.revoked_by = "restore_quarantine"
+        policy.revocation_reason = RESTORE_REASON
+        policies_revoked += 1
+
+    for run in _lock_all(db, AutopilotInspectionRun):
+        if run.state == "finished":
+            continue
+        run.state = "finished"
+        run.claimed_at = run.claimed_at or timestamp
+        run.lease_expires_at = None
+        run.claim_token = None
+        run.finished_at = timestamp
+        run.reason_code = RESTORE_REASON
+        inspections_quarantined += 1
+        if run.application_id not in verified_application_ids:
+            affected_applications.setdefault(run.application_id, PRECOMMIT_REASON)
 
     for plan in _lock_all(db, FormPlan):
         if plan.invalidated_at is not None:
@@ -266,6 +298,8 @@ def quarantine_restored_runtime(
                 )
 
     return RestoreQuarantineSummary(
+        automation_policies_revoked=policies_revoked,
+        autopilot_inspections_quarantined=inspections_quarantined,
         form_plans_invalidated=plans_invalidated,
         final_permits_expired=permits_expired,
         review_grants_revoked=grants_revoked,

@@ -52,6 +52,8 @@ fit_routing_qualification.json
 runtime-data/
 uploads/
 .test-artifacts/
+.job-agent/
+automation-policy-ed25519.pem
 bridge/.wwebjs_auth/
 bridge/.wwebjs_cache/
 bridge/session/
