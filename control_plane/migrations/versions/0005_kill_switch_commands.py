@@ -27,6 +27,7 @@ def upgrade() -> None:
             sa.ForeignKey("control_runner_devices.id", ondelete="RESTRICT"),
             nullable=False,
         ),
+        sa.Column("runner_boot_id", sa.String(36), nullable=False),
         sa.Column("client_idempotency_digest", sa.String(64), nullable=False, unique=True),
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("signed_envelope_json", sa.Text(), nullable=False),
@@ -51,7 +52,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_control_kill_switch_commands_poll",
         "control_kill_switch_commands",
-        ["device_id", "status", "expires_at"],
+        ["device_id", "runner_boot_id", "status", "expires_at"],
     )
 
 

@@ -41,7 +41,7 @@ from db.session import get_session_factory
 from jobs.models import JobData
 from llm.contracts import is_qualified_material_identity
 from llm.generation import GeneratedApplication
-from worker.autopilot import dispatch_qualified_autopilot
+from worker.autopilot import AutopilotDispatchResult, dispatch_qualified_autopilot
 
 
 class AutopilotInspectionError(ValueError):
@@ -239,6 +239,32 @@ def _mark_quarantined(db, *, application_id: int, reason_code: str) -> None:
     db.commit()
 
 
+def _finalize_autopilot_dispatch_result(
+    db,
+    *,
+    application_id: int,
+    result: AutopilotDispatchResult,
+) -> dict[str, object]:
+    """Persist dispatch quarantine state before returning the worker result."""
+
+    reason_code = result.reason_code
+    if result.state == "quarantined":
+        reason_code = _bounded_reason(reason_code)
+        _mark_quarantined(
+            db,
+            application_id=application_id,
+            reason_code=reason_code,
+        )
+    return {
+        "state": result.state,
+        "reason_code": reason_code,
+        "policy_decision_id": result.policy_decision_id,
+        "attempt_id": result.attempt_id,
+        "command_id": result.command_id,
+        "replayed": result.replayed,
+    }
+
+
 def inspect_and_dispatch_qualified_autopilot(application_id: int) -> dict[str, object]:
     """Inspect outside locks, persist exact plan, then evaluate signed authority."""
 
@@ -383,14 +409,11 @@ def inspect_and_dispatch_qualified_autopilot(application_id: int) -> dict[str, o
             application_id=application_id,
             form_plan_id=plan.id,
         )
-        return {
-            "state": result.state,
-            "reason_code": result.reason_code,
-            "policy_decision_id": result.policy_decision_id,
-            "attempt_id": result.attempt_id,
-            "command_id": result.command_id,
-            "replayed": result.replayed,
-        }
+        return _finalize_autopilot_dispatch_result(
+            db,
+            application_id=application_id,
+            result=result,
+        )
     except (
         AutopilotInspectionError,
         AutomationPolicyError,

@@ -75,9 +75,10 @@ from submitters.platforms import (
     QualificationTier,
     adapter_for_url,
 )
-from worker.autopilot import dispatch_qualified_autopilot
+from worker.autopilot import AutopilotDispatchResult, dispatch_qualified_autopilot
 from worker.autopilot_inspection import (
     _claim_inspection_run,
+    _finalize_autopilot_dispatch_result,
     _finish_inspection_run,
     enqueue_qualified_autopilot_inspection,
 )
@@ -362,6 +363,27 @@ def _scenario(tmp_path, monkeypatch) -> SimpleNamespace:
     )
     db.close()
     return result
+
+
+def test_dispatch_quarantine_is_persisted_on_the_application(tmp_path, monkeypatch) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    result = _finalize_autopilot_dispatch_result(
+        db,
+        application_id=scenario.application_id,
+        result=AutopilotDispatchResult(
+            state="quarantined",
+            reason_code="RUNTIME_NOT_READY",
+        ),
+    )
+
+    assert result["state"] == "quarantined"
+    assert result["reason_code"] == "RUNTIME_NOT_READY"
+    db.expire_all()
+    application = db.get(Application, scenario.application_id)
+    assert application is not None
+    assert application.needs_review_reason == "RUNTIME_NOT_READY"
+    db.close()
 
 
 def test_policy_contract_is_signed_frozen_and_strictly_bounded(tmp_path) -> None:
@@ -913,6 +935,7 @@ def test_signed_remote_kill_is_replay_protected_and_can_never_clear(tmp_path) ->
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     command = VerifiedKillSwitchCommand(
         command_id=str(uuid4()),
+        runner_boot_id=str(uuid4()),
         delivery_nonce=str(uuid4()),
         issued_at=_NOW,
         expires_at=_NOW + timedelta(minutes=5),

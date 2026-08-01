@@ -895,6 +895,7 @@ async def test_signed_kill_command_is_applied_before_any_application_poll(tmp_pa
     }
     control_signing_key_id = str(uuid4())
     command_id = uuid4()
+    runner_boot_id = uuid4()
     now = datetime.now(UTC)
     unsigned = control_protocol.KillSwitchCommandEnvelope.model_validate(
         {
@@ -907,6 +908,7 @@ async def test_signed_kill_command_is_applied_before_any_application_poll(tmp_pa
             "nonce": uuid4(),
             "payload": {
                 "command_id": command_id,
+                "boot_id": runner_boot_id,
                 "action": "activate_kill_switch",
                 "reason_code": "REMOTE_OPERATOR_KILL",
             },
@@ -943,7 +945,23 @@ async def test_signed_kill_command_is_applied_before_any_application_poll(tmp_pa
         settings=_settings(),
         session_factory=factory,
     )
+    runner._boot_id = str(runner_boot_id)
     runner._last_heartbeat = now
+
+    wrong_boot_unsigned = unsigned.model_copy(
+        update={
+            "payload": control_protocol.KillSwitchCommandPayload(
+                command_id=command_id,
+                boot_id=uuid4(),
+            )
+        }
+    )
+    wrong_boot = control_crypto.sign_envelope(
+        wrong_boot_unsigned,
+        control_private,
+    ).model_dump(mode="json")
+    with pytest.raises(ControlPlaneRunnerError, match="RUNNER_BOOT_MISMATCH"):
+        runner._verify_kill_switch_command(wrong_boot, now=now)
 
     assert await runner.run_once() == "kill_switch_activated"
     assert order == ["kill_poll", "kill_ack"]

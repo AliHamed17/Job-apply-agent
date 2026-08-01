@@ -135,6 +135,7 @@ class ControlKillSwitchCommand(Base):
         Index(
             "ix_control_kill_switch_commands_poll",
             "device_id",
+            "runner_boot_id",
             "status",
             "expires_at",
         ),
@@ -150,6 +151,7 @@ class ControlKillSwitchCommand(Base):
         nullable=False,
         index=True,
     )
+    runner_boot_id: Mapped[str] = mapped_column(String(36), nullable=False)
     client_idempotency_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     signed_envelope_json: Mapped[str] = mapped_column(Text, nullable=False)

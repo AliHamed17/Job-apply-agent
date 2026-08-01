@@ -170,6 +170,7 @@ class VerifiedKillSwitchCommand:
     """Verified activation-only stop command with no private application data."""
 
     command_id: str
+    runner_boot_id: str
     delivery_nonce: str
     issued_at: datetime
     expires_at: datetime
@@ -177,6 +178,7 @@ class VerifiedKillSwitchCommand:
 
     def __post_init__(self) -> None:
         _uuid(self.command_id, "KILL_SWITCH_COMMAND_ID_INVALID")
+        _uuid(self.runner_boot_id, "RUNNER_BOOT_ID_INVALID")
         _uuid(self.delivery_nonce, "CONTROL_NONCE_INVALID")
         if not _SHA256_RE.fullmatch(self.envelope_digest):
             raise ControlPlaneRunnerError("CONTROL_ENVELOPE_DIGEST_INVALID")
@@ -908,9 +910,12 @@ class ControlPlaneRunner:
                 expected_audience=self._protocol.RUNNER_AUDIENCE,
                 now=now,
             )
+            if not hmac.compare_digest(str(envelope.payload.boot_id), self._boot_id):
+                raise ControlPlaneRunnerError("RUNNER_BOOT_MISMATCH")
             canonical = self._protocol.canonical_envelope_bytes(envelope)
             return VerifiedKillSwitchCommand(
                 command_id=str(envelope.payload.command_id),
+                runner_boot_id=str(envelope.payload.boot_id),
                 delivery_nonce=str(envelope.nonce),
                 issued_at=envelope.issued_at,
                 expires_at=envelope.expires_at,

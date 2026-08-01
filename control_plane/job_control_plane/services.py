@@ -622,6 +622,10 @@ def create_kill_switch_command(
     )
     if device is None or not device.active:
         raise ControlPlaneError("RUNNER_DISABLED")
+    try:
+        runner_boot_id = UUID(str(device.boot_id))
+    except (TypeError, ValueError) as exc:
+        raise ControlPlaneError("RUNNER_OFFLINE") from exc
 
     command_id = uuid4()
     expires_at = checked_at + timedelta(minutes=5)
@@ -632,7 +636,10 @@ def create_kill_switch_command(
         issued_at=checked_at,
         expires_at=expires_at,
         nonce=uuid4(),
-        payload=KillSwitchCommandPayload(command_id=command_id),
+        payload=KillSwitchCommandPayload(
+            command_id=command_id,
+            boot_id=runner_boot_id,
+        ),
     )
     signed = KillSwitchCommandEnvelope.model_validate(
         sign_envelope(
@@ -643,6 +650,7 @@ def create_kill_switch_command(
     command = ControlKillSwitchCommand(
         id=str(command_id),
         device_id=device.id,
+        runner_boot_id=str(runner_boot_id),
         client_idempotency_digest=idempotency_digest,
         status="queued",
         signed_envelope_json=canonical_envelope_bytes(signed).decode("utf-8"),
@@ -695,6 +703,7 @@ def poll_kill_switch_command(
         select(ControlKillSwitchCommand)
         .where(
             ControlKillSwitchCommand.device_id == device.id,
+            ControlKillSwitchCommand.runner_boot_id == str(envelope.payload.boot_id),
             or_(
                 ControlKillSwitchCommand.status == "queued",
                 and_(
@@ -711,12 +720,21 @@ def poll_kill_switch_command(
     )
     if command is None:
         return []
+    try:
+        signed = KillSwitchCommandEnvelope.model_validate_json(command.signed_envelope_json)
+    except ValueError as exc:
+        raise ControlPlaneError("KILL_SWITCH_COMMAND_INVALID") from exc
+    if (
+        command.runner_boot_id != device.boot_id
+        or str(signed.payload.boot_id) != command.runner_boot_id
+    ):
+        raise ControlPlaneError("KILL_SWITCH_COMMAND_BINDING_MISMATCH")
     command.status = "claimed"
     if command.claimed_at is None:
         command.claimed_at = checked_at
     command.claim_lease_expires_at = checked_at + timedelta(seconds=15)
     command.delivery_count += 1
-    return [KillSwitchCommandEnvelope.model_validate_json(command.signed_envelope_json)]
+    return [signed]
 
 
 def acknowledge_kill_switch_command(
@@ -744,6 +762,8 @@ def acknowledge_kill_switch_command(
     )
     if command is None or command.device_id != device.id:
         raise ControlPlaneError("KILL_SWITCH_COMMAND_NOT_FOUND", status_code=404)
+    if command.runner_boot_id != device.boot_id:
+        raise ControlPlaneError("RUNNER_BOOT_MISMATCH")
     acknowledgement = envelope.payload.ack_status.value
     if command.acknowledged_at is not None:
         if command.ack_status != acknowledgement:

@@ -178,6 +178,7 @@ class ControlCommandPayload(StrictProtocolModel):
 
 class KillSwitchCommandPayload(StrictProtocolModel):
     command_id: UUID
+    boot_id: UUID
     action: Literal["activate_kill_switch"] = "activate_kill_switch"
     reason_code: Literal["REMOTE_OPERATOR_KILL"] = "REMOTE_OPERATOR_KILL"
 

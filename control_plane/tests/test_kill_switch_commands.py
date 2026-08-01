@@ -18,7 +18,9 @@ from job_control_plane.protocol import (
     CommandPollPayload,
     EnvelopePurpose,
     HeartbeatEnvelope,
+    HeartbeatPayload,
     KillSwitchCommandEnvelope,
+    RunnerStatus,
 )
 
 
@@ -109,6 +111,7 @@ def test_signed_kill_switch_poll_ack_and_replay_are_bounded(
     [raw_command] = response.json()["commands"]
     envelope = KillSwitchCommandEnvelope.model_validate(raw_command)
     assert envelope.payload.command_id == command_id
+    assert envelope.payload.boot_id == heartbeat.payload.boot_id
     assert envelope.payload.action == "activate_kill_switch"
     assert envelope.payload.reason_code == "REMOTE_OPERATOR_KILL"
     verify_envelope(
@@ -172,3 +175,44 @@ def test_kill_switch_poll_rejects_wrong_boot_binding(
     assert response.status_code == 409
     assert response.json() == {"code": "RUNNER_BOOT_MISMATCH"}
     assert heartbeat.payload.boot_id != poll.payload.boot_id
+
+
+def test_pre_restart_kill_command_is_not_delivered_to_replacement_runner(
+    client: TestClient,
+    settings: Settings,
+    authenticated: str,
+    heartbeat: HeartbeatEnvelope,
+    sign_runner: Callable[..., Any],
+) -> None:
+    created = client.post(
+        "/api/kill-switch",
+        headers=_headers(settings, authenticated),
+        json=_body(uuid4()),
+    )
+    assert created.status_code == 202
+
+    replacement = sign_runner(
+        HeartbeatEnvelope,
+        HeartbeatPayload(
+            boot_id=uuid4(),
+            release_digest="b" * 40,
+            status=RunnerStatus.READY,
+        ),
+    )
+    assert replacement.payload.boot_id != heartbeat.payload.boot_id
+    accepted = client.post(
+        "/api/runner/heartbeat",
+        json=replacement.model_dump(mode="json"),
+    )
+    assert accepted.status_code == 200
+
+    poll = sign_runner(
+        CommandPollEnvelope,
+        CommandPollPayload(boot_id=replacement.payload.boot_id),
+    )
+    response = client.post(
+        "/api/runner/kill-switch/poll",
+        json=poll.model_dump(mode="json"),
+    )
+    assert response.status_code == 200
+    assert response.json() == {"commands": []}
