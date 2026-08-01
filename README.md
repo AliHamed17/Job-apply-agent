@@ -237,6 +237,7 @@ old devices and requires new identities before reconnecting.
 ## Operations and recovery
 
 - [Production operations](docs/operations.md)
+- [Always-on discovery mesh](docs/discovery-mesh.md)
 - [Qualification evidence](docs/qualification/README.md)
 - [Employer automation boundary](docs/employer-automation.md)
 - [Local Ollama form planning](docs/ollama-form-plan-v1.md)

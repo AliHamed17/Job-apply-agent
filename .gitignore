@@ -88,8 +88,13 @@ user_profile.yaml
 cvs/
 *.pdf
 cv_routing.yaml
+employer_catalog.yaml
 routing-evaluation-report.json
 linkedin-smoke-qualification.json
+
+# Local read-only Gmail alert OAuth state (never commit).
+.gmail_oauth.json
+.job-alerts/
 
 # Local assistant configuration can contain machine-specific paths or permissions.
 .claude/

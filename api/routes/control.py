@@ -32,38 +32,78 @@ async def status():
 async def overview(db: Session = Depends(get_db)):
     from datetime import UTC, datetime
 
-    from db.models import Application, DiscoveryRun, Job, JobStatus
+    from db.models import (
+        Application,
+        DiscoveryRun,
+        DiscoverySourceState,
+        Job,
+        JobStatus,
+    )
     from worker.digest import build_digest
 
     gov = get_governor().status()
     summary = build_digest(db, datetime.now(UTC).date())
-    rows = (db.query(Application, Job)
-              .join(Job, Application.job_id == Job.id)
-              .filter(Application.status == JobStatus.NEEDS_REVIEW)
-              .limit(50).all())
-    needs = [{"job_id": j.id, "title": j.title, "reason": a.needs_review_reason}
-             for a, j in rows]
+    rows = (
+        db.query(Application, Job)
+        .join(Job, Application.job_id == Job.id)
+        .filter(Application.status == JobStatus.NEEDS_REVIEW)
+        .limit(50)
+        .all()
+    )
+    needs = [{"job_id": j.id, "title": j.title, "reason": a.needs_review_reason} for a, j in rows]
     latest_discovery = []
-    for source in ("linkedin_search", "remotive"):
+    sources = (
+        db.query(
+            DiscoverySourceState.source_key,
+            DiscoverySourceState.source_type,
+            DiscoverySourceState.enabled,
+            DiscoverySourceState.health_status,
+            DiscoverySourceState.disabled_reason,
+            DiscoverySourceState.last_error_code,
+            DiscoverySourceState.last_success_at,
+            DiscoverySourceState.next_poll_at,
+        )
+        .order_by(
+            DiscoverySourceState.enabled.desc(),
+            DiscoverySourceState.source_type,
+            DiscoverySourceState.source_key,
+        )
+        .limit(50)
+        .all()
+    )
+    for source in sources:
         run = (
             db.query(DiscoveryRun)
-            .filter(DiscoveryRun.source == source)
+            .filter(DiscoveryRun.source == source.source_key)
             .order_by(DiscoveryRun.started_at.desc())
             .first()
         )
-        if run:
-            latest_discovery.append(
-                {
-                    "source": run.source,
-                    "status": run.status,
-                    "inserted": run.inserted,
-                    "reason_code": run.reason_code,
-                    "started_at": run.started_at,
-                    "finished_at": run.finished_at,
-                }
-            )
-    return {"governor": gov,
-            "counts": {"applied": summary.applied, "needs_review": summary.needs_review,
-                       "failed": summary.failed, "outbound_sent": summary.outbound_sent},
-            "needs_review": needs,
-            "discovery": latest_discovery}
+        latest_discovery.append(
+            {
+                "source": source.source_key,
+                "source_type": source.source_type,
+                "enabled": source.enabled,
+                "status": source.health_status,
+                "inserted": run.inserted if run is not None else 0,
+                "reason_code": (
+                    source.disabled_reason
+                    or source.last_error_code
+                    or (run.reason_code if run is not None else None)
+                ),
+                "started_at": run.started_at if run is not None else None,
+                "finished_at": run.finished_at if run is not None else None,
+                "last_success_at": source.last_success_at,
+                "next_poll_at": source.next_poll_at,
+            }
+        )
+    return {
+        "governor": gov,
+        "counts": {
+            "applied": summary.applied,
+            "needs_review": summary.needs_review,
+            "failed": summary.failed,
+            "outbound_sent": summary.outbound_sent,
+        },
+        "needs_review": needs,
+        "discovery": latest_discovery,
+    }

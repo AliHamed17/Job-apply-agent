@@ -1,0 +1,9 @@
+From: jobs@example.alljobs.co.il
+To: candidate@example.test
+Subject: New matching position
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<a href="https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=98765">Software Engineer</a>
+</body></html>

@@ -132,6 +132,23 @@ jobs:
           scripts/control_plane_identity.py
           scripts/quarantine_restored_control_plane.py
           scripts/quarantine_restored_runtime.py
+      - name: Typed v5 discovery mesh
+        run: >
+          mypy --follow-imports=skip --ignore-missing-imports
+          --disable-error-code var-annotated
+          --disable-error-code assignment
+          --disable-error-code arg-type
+          --disable-error-code misc
+          --disable-error-code union-attr
+          --disable-error-code return-value
+          api/routes/discovery.py
+          discovery/catalog.py discovery/contracts.py
+          discovery/generic_sources.py discovery/gmail_alerts.py
+          discovery/http_client.py discovery/locks.py discovery/mesh.py
+          discovery/persistence.py discovery/public_sources.py
+          discovery/search_intents.py discovery/settings.py
+          discovery/source_adapters.py
+          worker/discovery_tasks.py
       - name: Typed local intelligence and form planning
         run: >
           mypy --follow-imports=skip --ignore-missing-imports
@@ -189,7 +206,7 @@ jobs:
         run: >
           bandit -q -lll
           api/main.py api/routes/applications.py api/routes/cv_routing.py
-          api/routes/dashboard.py api/routes/operations.py
+          api/routes/dashboard.py api/routes/discovery.py api/routes/operations.py
           api/routes/realign.py api/routes/runtime.py
           core/application_audit.py core/config.py core/form_plan_evidence.py
           core/form_planning.py core/form_plan_persistence.py
@@ -198,6 +215,10 @@ jobs:
           core/operational_metrics.py core/restore_safety.py
           core/sensitive_policy.py core/submission_domain.py core/submission_service.py
           core/control_plane_review_permits.py core/utils.py db/models.py
+          discovery/catalog.py discovery/contracts.py discovery/generic_sources.py
+          discovery/gmail_alerts.py discovery/http_client.py discovery/locks.py
+          discovery/mesh.py discovery/persistence.py discovery/public_sources.py
+          discovery/search_intents.py discovery/settings.py discovery/source_adapters.py
           submitters/smartrecruiters.py submitters/smartrecruiters_identity.py
           submitters/smartrecruiters_api.py submitters/smartrecruiters_v1.py
           submitters/smartrecruiters_playwright.py

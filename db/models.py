@@ -23,6 +23,7 @@ from sqlalchemy import (
     false,
     func,
     text,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -179,9 +180,17 @@ class Job(Base):
     discovery_source = Column(String(30), default="manual", nullable=True)
     easy_apply = Column(Boolean, default=False, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+    # Explicit terminal provenance prevents a later source revision from
+    # reviving work that an operator or lifecycle policy already cancelled.
+    terminal_skip_at = Column(DateTime, nullable=True)
 
     extracted_url = relationship("ExtractedURL", back_populates="jobs")
     application = relationship("Application", back_populates="job", uselist=False)
+    source_occurrences = relationship(
+        "JobSourceOccurrenceRecord",
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ix_jobs_apply_url_hash", "apply_url_hash"),
@@ -1336,11 +1345,221 @@ class DiscoveryRun(Base):
     source = Column(String(64), nullable=False)
     status = Column(String(32), nullable=False)
     inserted = Column(Integer, nullable=False, default=0)
+    updated = Column(Integer, nullable=False, default=0, server_default="0")
+    duplicates = Column(Integer, nullable=False, default=0, server_default="0")
+    closed = Column(Integer, nullable=False, default=0, server_default="0")
     reason_code = Column(String(64), nullable=True)
     started_at = Column(DateTime, default=func.now(), nullable=False)
     finished_at = Column(DateTime, nullable=True)
 
     __table_args__ = (Index("ix_discovery_runs_source_finished", "source", "finished_at"),)
+
+
+class SearchIntentRevision(Base):
+    """Immutable, activated search scope derived from configured CV routes."""
+
+    __tablename__ = "search_intent_revisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    version = Column(Integer, nullable=False, unique=True)
+    schema_version = Column(String(32), nullable=False, server_default="search-intent.v1")
+    payload_digest = Column(String(64), nullable=False)
+    payload_json = Column(Text, nullable=False)
+    active = Column(Boolean, nullable=False, default=False, server_default=false())
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+    activated_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            _sha256_check_sql("payload_digest"),
+            name="ck_search_intent_revisions_digest",
+        ),
+        Index("ix_search_intent_revisions_active_version", "active", "version"),
+        Index(
+            "uq_search_intent_revisions_one_active",
+            "active",
+            unique=True,
+            postgresql_where=text("active = true"),
+            sqlite_where=text("active = 1"),
+        ),
+    )
+
+
+class DiscoverySourceState(Base):
+    """Operational state for one versioned discovery source."""
+
+    __tablename__ = "discovery_sources"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_key = Column(String(255), nullable=False, unique=True)
+    source_type = Column(String(32), nullable=False)
+    descriptor_version = Column(String(32), nullable=False)
+    configuration_digest = Column(String(64), nullable=False, server_default="0" * 64)
+    transport = Column(String(32), nullable=False)
+    authentication_mode = Column(String(32), nullable=False)
+    host = Column(String(255), nullable=False)
+    cadence_seconds = Column(Integer, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, server_default=true())
+    disabled_reason = Column(String(64), nullable=True)
+    health_status = Column(String(24), nullable=False, default="unknown", server_default="unknown")
+    next_poll_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint("cadence_seconds >= 60", name="ck_discovery_sources_cadence"),
+        CheckConstraint(
+            _sha256_check_sql("configuration_digest"),
+            name="ck_discovery_sources_configuration_digest",
+        ),
+        CheckConstraint(
+            "(enabled = true AND disabled_reason IS NULL) OR "
+            "(enabled = false AND disabled_reason IS NOT NULL)",
+            name="ck_discovery_sources_enabled_reason",
+        ),
+        CheckConstraint(
+            "health_status IN ('unknown', 'healthy', 'degraded', 'disabled')",
+            name="ck_discovery_sources_health",
+        ),
+        Index("ix_discovery_sources_due", "enabled", "next_poll_at"),
+    )
+
+
+class EmployerCatalogEntryRecord(Base):
+    """Tenant-scoped employer feed identifier; never implies universal coverage."""
+
+    __tablename__ = "employer_catalog_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    catalog_key = Column(String(64), nullable=False, unique=True)
+    company_name = Column(String(300), nullable=False)
+    ats = Column(String(32), nullable=False)
+    tenant_key = Column(String(255), nullable=False)
+    region = Column(String(32), nullable=False, default="global", server_default="global")
+    base_url = Column(Text, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True, server_default=true())
+    discovered_via = Column(String(32), nullable=False, default="config", server_default="config")
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "ats IN ('greenhouse', 'lever', 'ashby', 'smartrecruiters', "
+            "'generic_jsonld', 'generic_feed')",
+            name="ck_employer_catalog_entries_ats",
+        ),
+        CheckConstraint(
+            _sha256_check_sql("catalog_key"),
+            name="ck_employer_catalog_entries_key",
+        ),
+        UniqueConstraint("ats", "tenant_key", "region", name="uq_employer_catalog_tenant"),
+        Index("ix_employer_catalog_entries_enabled_ats", "enabled", "ats"),
+    )
+
+
+class DiscoveryCursorState(Base):
+    """Conditional-request and pagination checkpoint for one source tenant."""
+
+    __tablename__ = "discovery_cursors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cursor_key = Column(String(64), nullable=False, unique=True)
+    source_key = Column(
+        String(255),
+        ForeignKey("discovery_sources.source_key", ondelete="CASCADE"),
+        nullable=False,
+    )
+    catalog_entry_id = Column(
+        Integer,
+        ForeignKey("employer_catalog_entries.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    cursor_json = Column(Text, nullable=False, default="{}", server_default="{}")
+    etag = Column(String(255), nullable=True)
+    last_modified = Column(String(255), nullable=True)
+    last_seen_posting_at = Column(DateTime, nullable=True)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            _sha256_check_sql("cursor_key"),
+            name="ck_discovery_cursors_key",
+        ),
+        Index("ix_discovery_cursors_source_catalog", "source_key", "catalog_entry_id"),
+    )
+
+
+class JobSourceOccurrenceRecord(Base):
+    """One immutable-source identity observing a canonical local job."""
+
+    __tablename__ = "job_source_occurrences"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    occurrence_key = Column(String(64), nullable=False, unique=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    source_key = Column(String(255), nullable=False)
+    catalog_entry_id = Column(
+        Integer,
+        ForeignKey("employer_catalog_entries.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    external_posting_id = Column(String(255), nullable=True)
+    normalized_url = Column(Text, nullable=False)
+    normalized_url_hash = Column(String(64), nullable=False)
+    revision_digest = Column(String(64), nullable=False)
+    first_seen_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+    last_seen_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+    closed_at = Column(DateTime, nullable=True)
+    active = Column(Boolean, nullable=False, default=True, server_default=true())
+
+    job = relationship("Job", back_populates="source_occurrences")
+
+    __table_args__ = (
+        CheckConstraint(
+            _sha256_check_sql("occurrence_key"),
+            name="ck_job_source_occurrences_key",
+        ),
+        CheckConstraint(
+            _sha256_check_sql("normalized_url_hash"),
+            name="ck_job_source_occurrences_url_hash",
+        ),
+        CheckConstraint(
+            _sha256_check_sql("revision_digest"),
+            name="ck_job_source_occurrences_revision",
+        ),
+        Index("ix_job_source_occurrences_job_active", "job_id", "active"),
+        Index(
+            "ix_job_source_occurrences_source_external",
+            "source_key",
+            "external_posting_id",
+        ),
+        Index(
+            "ix_job_source_occurrences_catalog_external",
+            "catalog_entry_id",
+            "external_posting_id",
+        ),
+        Index("ix_job_source_occurrences_last_seen", "source_key", "last_seen_at"),
+    )
 
 
 class OperationalMetricReceipt(Base):

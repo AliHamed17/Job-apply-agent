@@ -8,6 +8,7 @@ import httpx
 import structlog
 from bs4 import BeautifulSoup
 
+from discovery.contracts import SearchIntentV1
 from jobs.models import JobData
 
 logger = structlog.get_logger(__name__)
@@ -34,14 +35,38 @@ def _matches_profile(title: str, description: str, profile) -> bool:
     return keyword_hits >= 2
 
 
-def parse_remotive_jobs(payload: dict, profile, max_jobs: int) -> list[JobData]:
+def _matches_intents(
+    title: str,
+    description: str,
+    intents: tuple[SearchIntentV1, ...],
+) -> bool:
+    haystack = f"{title} {description}".casefold()
+    return any(
+        any(role.casefold() in title.casefold() for role in intent.titles)
+        or sum(1 for skill in set(intent.skills) if skill.casefold() in haystack) >= 2
+        for intent in intents
+    )
+
+
+def parse_remotive_jobs(
+    payload: dict,
+    profile,
+    max_jobs: int,
+    *,
+    intents: tuple[SearchIntentV1, ...] | None = None,
+) -> list[JobData]:
     """Convert and locally filter the documented Remotive API response."""
     results: list[JobData] = []
     for row in payload.get("jobs", []):
         title = str(row.get("title") or "").strip()
         url = str(row.get("url") or "").strip()
         description = _plain_text(str(row.get("description") or ""))
-        if not title or not url or not _matches_profile(title, description, profile):
+        matches = (
+            _matches_intents(title, description, intents)
+            if intents is not None
+            else _matches_profile(title, description, profile)
+        )
+        if not title or not url or not matches:
             continue
         tags = [str(tag).strip() for tag in row.get("tags", []) if str(tag).strip()]
         results.append(
@@ -62,7 +87,13 @@ def parse_remotive_jobs(payload: dict, profile, max_jobs: int) -> list[JobData]:
     return results
 
 
-async def fetch_remotive_jobs(profile, settings, client: httpx.AsyncClient | None = None):
+async def fetch_remotive_jobs(
+    profile,
+    settings,
+    client: httpx.AsyncClient | None = None,
+    *,
+    intents: tuple[SearchIntentV1, ...] | None = None,
+):
     """Fetch one public feed request; callers enforce the six-hour cadence."""
     owns_client = client is None
     if client is None:
@@ -77,6 +108,7 @@ async def fetch_remotive_jobs(profile, settings, client: httpx.AsyncClient | Non
             response.json(),
             profile,
             max(1, settings.public_discovery_max_jobs),
+            intents=intents,
         )
         logger.info("public_discovery_fetched", source="remotive", matched=len(jobs))
         return jobs

@@ -1,0 +1,50 @@
+employers:
+  - company_name: Example Greenhouse employer
+    ats: greenhouse
+    tenant_key: example
+    region: global
+    base_url: https://boards.greenhouse.io/example
+    enabled: false
+    discovered_via: config
+
+  - company_name: Example Lever employer
+    ats: lever
+    tenant_key: example
+    region: global
+    base_url: https://jobs.lever.co/example
+    enabled: false
+    discovered_via: config
+
+  - company_name: Example Ashby employer
+    ats: ashby
+    tenant_key: example
+    region: global
+    base_url: https://jobs.ashbyhq.com/example
+    enabled: false
+    discovered_via: config
+
+  - company_name: Example SmartRecruiters employer
+    ats: smartrecruiters
+    tenant_key: example
+    region: global
+    base_url: https://careers.smartrecruiters.com/example
+    enabled: false
+    discovered_via: config
+
+  # Generic sources are opt-in only. Use a permitted public page/feed that
+  # exposes JobPosting JSON-LD and allows this user agent in robots.txt.
+  - company_name: Example JSON-LD employer
+    ats: generic_jsonld
+    tenant_key: example-jsonld
+    region: global
+    base_url: https://careers.example.com/jobs
+    enabled: false
+    discovered_via: config
+
+  - company_name: Example sitemap employer
+    ats: generic_feed
+    tenant_key: example-sitemap
+    region: global
+    base_url: https://careers.example.com/jobs-sitemap.xml
+    enabled: false
+    discovered_via: config

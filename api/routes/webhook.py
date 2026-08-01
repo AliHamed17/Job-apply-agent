@@ -26,6 +26,7 @@ from core.application_mutations import (
     ApplicationMutationIntent,
     lock_application_for_mutation,
     lock_job_without_application_for_mutation,
+    mark_job_terminally_skipped,
     mark_locked_application_prepared,
     transition_locked_application_to_skipped,
 )
@@ -367,7 +368,7 @@ async def _handle_skip(job_id: int, sender: str, db: Session, settings: Settings
                 settings,
             )
             return
-        job.status = JobStatus.SKIPPED
+        mark_job_terminally_skipped(job)
     db.commit()
 
     await _send_whatsapp_message(

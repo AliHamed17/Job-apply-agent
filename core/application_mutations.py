@@ -313,6 +313,20 @@ def mark_locked_application_prepared(
     return True
 
 
+def mark_job_terminally_skipped(
+    job: Job,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Persist terminal skip provenance so discovery cannot revive the job."""
+
+    timestamp = now or datetime.now(UTC).replace(tzinfo=None)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(UTC).replace(tzinfo=None)
+    job.status = JobStatus.SKIPPED
+    job.terminal_skip_at = timestamp
+
+
 def transition_locked_application_to_skipped(
     db,
     locked: LockedApplicationMutation,
@@ -384,6 +398,8 @@ def transition_locked_application_to_skipped(
         locked.job is None or locked.job.status == JobStatus.SKIPPED
     )
     if already_skipped and not cancelled_attempt:
+        if locked.job is not None and locked.job.terminal_skip_at is None:
+            mark_job_terminally_skipped(locked.job, now=timestamp)
         return False
 
     bump_application_revision(
@@ -396,7 +412,7 @@ def transition_locked_application_to_skipped(
     application.rejected_at = timestamp
     application.rejection_reason = rejection_reason
     if locked.job is not None:
-        locked.job.status = JobStatus.SKIPPED
+        mark_job_terminally_skipped(locked.job, now=timestamp)
     record_application_event(
         db,
         application.id,
