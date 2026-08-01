@@ -381,7 +381,10 @@ def verified_policy_for_decision(
     if record is None:
         raise AutomationPolicyError("AUTOMATION_DECISION_BINDING_MISMATCH")
     signed = _verified_policy(record, signing_key_path=signing_key_path)
-    if not hmac.compare_digest(signed.policy.payload_digest, decision_record.policy_digest):
+    if not hmac.compare_digest(
+        signed.policy.payload_digest,
+        str(decision_record.policy_digest),
+    ):
         raise AutomationPolicyError("AUTOMATION_DECISION_BINDING_MISMATCH")
     return signed.policy
 
