@@ -1,9 +1,10 @@
 """Versioned ATS registry shared by detection and submission routing.
 
 An adapter existing in the codebase is not evidence that it is safe for live
-use.  The qualification tier in this registry is the authoritative live-action
-gate.  URL detection and qualification intentionally share the same immutable
-descriptors so they cannot drift into two different platform inventories.
+use. This immutable registry defines code identity and the committed fixture
+baseline only. Runtime dry-run and live-canary scope comes from strict local
+database authority and is injected into a fresh request-scoped registry. URL
+detection and effective qualification still bind to this exact code identity.
 """
 
 from __future__ import annotations

@@ -412,6 +412,39 @@ def _validate_attempt_automation_authority(
     *,
     now: datetime,
 ) -> tuple[ReasonCode | None, str | None]:
+    if attempt.authority_kind == "qualification_canary":
+        from core.adapter_qualification_service import (  # noqa: PLC0415
+            AdapterQualificationError,
+            validate_qualification_canary_authorization,
+        )
+
+        plan = attempt.form_plan
+        application = attempt.application
+        job = application.job if application is not None else None
+        job_url = ((job.apply_url or job.source_url) if job is not None else "") or ""
+        if (
+            plan is None
+            or attempt.qualification_canary_authorization_id is None
+            or attempt.qualification_canary_authorization_digest is None
+            or not job_url
+        ):
+            return ReasonCode.PERMIT_BINDING_MISMATCH, "CANARY_AUTHORIZATION_REQUIRED"
+        try:
+            validate_qualification_canary_authorization(
+                db,
+                authorization_id=attempt.qualification_canary_authorization_id,
+                authorization_digest=attempt.qualification_canary_authorization_digest,
+                application=application,
+                plan=plan,
+                job_url=job_url,
+                runner_release=str(attempt.runner_release or ""),
+                consumed=True,
+                now=_aware(now),
+                lock=True,
+            )
+        except AdapterQualificationError as exc:
+            return ReasonCode.PERMIT_BINDING_MISMATCH, exc.reason_code
+        return None, None
     if attempt.authority_kind != "qualified_autopilot":
         return None, None
     decision = attempt.automation_policy_decision
@@ -558,6 +591,7 @@ def _lock_claimed_context(
             "form_plan",
             "final_submit_permit",
             "automation_policy_decision",
+            "qualification_canary_authorization",
         ],
     )
     db.expire(application, ["job"])
@@ -985,14 +1019,38 @@ def execute_claimed_submission_command(
         AdapterPreflightContext,
         supports_preflight_context,
     )
-    from submitters.platforms import adapter_for_url  # noqa: PLC0415
 
-    descriptor = adapter_for_url(job.apply_url or job.source_url or "")
     if registry is None:
-        from submitters.registry import get_two_phase_registry  # noqa: PLC0415
+        from core.adapter_qualification_service import (  # noqa: PLC0415
+            effective_canary_descriptor,
+            effective_live_descriptor_for_plan,
+        )
+        from submitters.registry import (  # noqa: PLC0415
+            build_scoped_two_phase_registry,
+        )
 
-        resolved_registry = get_two_phase_registry()
+        if attempt.authority_kind == "qualification_canary":
+            descriptor = effective_canary_descriptor(
+                db,
+                attempt=attempt,
+                plan=plan,
+                job_url=job.apply_url or job.source_url or "",
+                runner_release=str(attempt.runner_release or ""),
+                now=_aware(timestamp),
+            )
+        else:
+            descriptor = effective_live_descriptor_for_plan(
+                db,
+                job_url=job.apply_url or job.source_url or "",
+                plan=plan,
+            )
+        resolved_registry = (
+            build_scoped_two_phase_registry(descriptor) if descriptor is not None else None
+        )
     else:
+        from submitters.platforms import adapter_for_url  # noqa: PLC0415
+
+        descriptor = adapter_for_url(job.apply_url or job.source_url or "")
         resolved_registry = registry
     job_data = JobData(
         title=job.title or "",
@@ -1009,7 +1067,7 @@ def execute_claimed_submission_command(
             (descriptor.execution_contract_version or ""),
             _aware(timestamp),
         )
-        if descriptor is not None
+        if descriptor is not None and resolved_registry is not None
         else None
     )
     if executor is None:
@@ -1288,6 +1346,34 @@ def execute_claimed_submission_command(
             outcome=outcome,
             now=finished_at,
         )
+        if (
+            isinstance(outcome, ConfirmedSubmittedOutcome)
+            and attempt.authority_kind == "qualification_canary"
+        ):
+            try:
+                with db.begin_nested():
+                    from core.adapter_qualification_service import (  # noqa: PLC0415
+                        record_live_canary_confirmation,
+                    )
+
+                    record_live_canary_confirmation(
+                        db,
+                        attempt=attempt,
+                        plan=plan,
+                        evidence_digest=str(attempt.evidence_digest or ""),
+                        runner_release=str(attempt.runner_release or ""),
+                        now=_aware(finished_at),
+                    )
+            except Exception as exc:
+                # Qualification is secondary to submission truth. Never roll
+                # back a valid employer-confirmed outcome merely because the
+                # local promotion audit could not be persisted.
+                logger.error(
+                    "live_canary_qualification_record_failed",
+                    attempt_id=attempt.id,
+                    adapter_name=str(attempt.adapter_name or "")[:64],
+                    error_type=type(exc).__name__[:80],
+                )
         db.commit()
         return AttemptOutcome(outcome.kind).value
     finally:

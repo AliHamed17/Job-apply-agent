@@ -51,7 +51,6 @@ from db.models import (
     ApplicationPolicyDecision,
     AutomationKillSwitchEvent,
     AutomationPolicyRevisionRecord,
-    BrowserQualificationRun,
     FormPlan,
     JobFitDecisionRecord,
     JobStatus,
@@ -226,6 +225,10 @@ def form_contract_digest(plan: FormPlan) -> str:
     return _digest(
         {
             "schema": "semantic-form-contract.v1",
+            "attachment": {
+                "verified": plan.attachment_verified is True,
+                "verification_source": str(plan.attachment_verification_source or "unknown")[:64],
+            },
             "fields": safe_fields,
             "disclosures": safe_disclosures,
         }
@@ -390,18 +393,17 @@ def verified_policy_for_decision(
 
 
 def _scope_has_live_canary(db: Session, scope: QualifiedFormContractV1) -> bool:
-    return (
-        db.query(BrowserQualificationRun.id)
-        .filter(
-            BrowserQualificationRun.adapter_name == scope.adapter_name,
-            BrowserQualificationRun.adapter_version == scope.adapter_version,
-            BrowserQualificationRun.selector_version == scope.selector_version,
-            BrowserQualificationRun.qualification_tier == "live_canary_qualified",
-            BrowserQualificationRun.qualified.is_(True),
-            BrowserQualificationRun.form_contract_digest == scope.form_contract_digest,
-        )
-        .first()
-        is not None
+    # Import locally because the qualification service uses the canonical form
+    # contract digest from this module. Legacy BrowserQualificationRun rows are
+    # telemetry only and can never satisfy this authority check.
+    from core.adapter_qualification_service import scope_has_live_qualification
+
+    return scope_has_live_qualification(
+        db,
+        adapter_name=scope.adapter_name,
+        adapter_version=scope.adapter_version,
+        selector_version=scope.selector_version,
+        form_contract_digest_value=scope.form_contract_digest,
     )
 
 
@@ -440,8 +442,6 @@ def activate_auto_submit_policy(
     descriptors = tuple(adapter_for_platform(item) for item in requested_adapters)
     if not requested_adapters or any(descriptor is None for descriptor in descriptors):
         raise AutomationPolicyError("AUTOMATION_POLICY_ADAPTER_SCOPE_INVALID")
-    if any(not descriptor.allows_final_execution for descriptor in descriptors if descriptor):
-        raise AutomationPolicyError("AUTOMATION_POLICY_ADAPTER_NOT_QUALIFIED")
     scopes = tuple(qualified_form_contracts)
     if not scopes:
         raise AutomationPolicyError("AUTOMATION_POLICY_FORM_SCOPE_REQUIRED")
@@ -738,7 +738,6 @@ def validate_automation_inspection_candidate(
     )
     if (
         descriptor is None
-        or not descriptor.allows_final_execution
         or descriptor.platform not in policy.permitted_adapters
         or not matching_scopes
         or not any(_scope_has_live_canary(db, scope) for scope in matching_scopes)
@@ -1000,8 +999,6 @@ def evaluate_auto_submit_policy(
         or descriptor.platform != plan.adapter_name
         or descriptor.adapter_version != plan.adapter_version
         or descriptor.selector_version != plan.selector_version
-        or not descriptor.allows_final_execution
-        or not descriptor.qualifies_form_fingerprint(plan.fingerprint)
     ):
         reasons.append("ADAPTER_NOT_QUALIFIED")
     matching_scope = next(
@@ -1168,14 +1165,7 @@ def validate_current_automation_decision(
         ),
         None,
     )
-    descriptor = adapter_for_platform(plan.adapter_name)
-    if (
-        scope is None
-        or not _scope_has_live_canary(db, scope)
-        or descriptor is None
-        or not descriptor.allows_final_execution
-        or not descriptor.qualifies_form_fingerprint(plan.fingerprint)
-    ):
+    if scope is None or not _scope_has_live_canary(db, scope):
         raise AutomationPolicyError("ADAPTER_NOT_QUALIFIED")
     return decision
 

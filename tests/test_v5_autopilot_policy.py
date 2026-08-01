@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 
 import core.automation_policy_service as policy_service
 from api.routes import automation as automation_route
+from core.adapter_qualification_service import fixture_evidence_digest
 from core.automation_artifact_snapshot import policy_artifact_snapshot_id
 from core.automation_policy import (
     AutomationGeography,
@@ -54,6 +55,7 @@ from core.submission_domain import (
     SubmissionEvidence as DomainSubmissionEvidence,
 )
 from db.models import (
+    AdapterQualificationRecord,
     Application,
     ApplicationPolicyDecision,
     AutomationPolicyRevisionRecord,
@@ -339,6 +341,26 @@ def _scenario(tmp_path, monkeypatch) -> SimpleNamespace:
             form_fingerprint=_FINGERPRINT,
             form_contract_digest=contract_digest,
             fixture_digest="e" * 64,
+        )
+    )
+    db.add(
+        AdapterQualificationRecord(
+            qualification_tier="live_canary_qualified",
+            adapter_name=live_descriptor.platform,
+            adapter_version=live_descriptor.adapter_version,
+            selector_version=live_descriptor.selector_version,
+            execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,
+            form_fingerprint=_FINGERPRINT,
+            form_contract_digest=contract_digest,
+            fixture_digest=fixture_evidence_digest(live_descriptor.platform),
+            application_id=application.id,
+            application_revision=application.revision,
+            form_plan_id=plan.id,
+            attempt_id=900_001,
+            job_url_hash=url_hash(normalize_url(job.apply_url)),
+            evidence_digest="9" * 64,
+            runner_release=get_runtime_identity().release_id,
+            qualified_at=_NOW.replace(tzinfo=None),
         )
     )
     answer_revision = confirmed_answer_revision(db, profile_version=1)
@@ -880,7 +902,7 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
         "lock_automation_authority_fence",
         lambda _db: activation_calls.append("authority"),
     )
-    monkeypatch.setattr(policy_service, "_scope_has_live_canary", lambda *_args: True)
+    monkeypatch.setattr(policy_service, "_scope_has_live_canary", lambda *_args: False)
     seed_db = factory()
     seed_db.add(
         UserProfileVersion(
@@ -902,7 +924,10 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
     )
     monkeypatch.setattr(policy_service, "adapter_for_platform", lambda _name: base_descriptor)
     policy_db = factory()
-    with pytest.raises(AutomationPolicyError, match="AUTOMATION_POLICY_ADAPTER_NOT_QUALIFIED"):
+    with pytest.raises(
+        AutomationPolicyError,
+        match="AUTOMATION_POLICY_FORM_SCOPE_NOT_QUALIFIED",
+    ):
         activate_auto_submit_policy(
             policy_db,
             settings=settings,
@@ -915,6 +940,7 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
     assert activation_calls[:2] == ["authority", "bindings"]
     policy_db.rollback()
     policy_db.close()
+    monkeypatch.setattr(policy_service, "_scope_has_live_canary", lambda *_args: True)
     descriptor = replace(
         base_descriptor,
         qualification=QualificationTier.LIVE_CANARY_QUALIFIED,

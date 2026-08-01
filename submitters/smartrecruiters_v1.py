@@ -1741,9 +1741,11 @@ def register_smartrecruiters_browser_v1(
     registry: SubmitterRegistry,
     *,
     browser_factory: SmartRecruitersBrowserFactory,
+    descriptor: AdapterDescriptor | None = None,
 ) -> SmartRecruitersBrowserV1:
     adapter = SmartRecruitersBrowserV1(
         browser_factory=browser_factory,
+        descriptor=descriptor,
     )
     registry.register_two_phase(adapter)
     return adapter

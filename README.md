@@ -29,6 +29,8 @@ stays closed.
 The signed qualified-autopilot authority is implemented but cannot be
 activated with the checked-in fixture-only qualification evidence. Activation
 requires at least one exact live-canary-qualified semantic form contract.
+The guarded dry-run and one-use canary framework is implemented, but no live
+qualification was performed as part of that implementation.
 
 ## Submission truth
 
@@ -220,6 +222,8 @@ prepare-only placeholder-auth bypass.
 | GET | `/api/automation/status` | Readiness plus effective qualified-autopilot state |
 | POST | `/api/applications/{id}/prepare` | Review/prepare; queues no external action |
 | POST | `/api/applications/{id}/inspect` | Build a private form plan |
+| POST | `/api/applications/{id}/qualification/dry-run` | Guarded explicit real-URL inspection; final action disabled |
+| POST | `/api/applications/{id}/qualification/canary` | One-use exact canary request after dry-run review |
 | GET | `/api/applications/{id}/form-plan` | Read latest plan and blockers |
 | POST | `/api/applications/{id}/answers/{field_id}/confirm` | Confirm one exact answer |
 | POST | `/api/applications/{id}/submit` | Request exact explicit send; normally disabled now |

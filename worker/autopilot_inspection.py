@@ -494,9 +494,15 @@ def inspect_and_dispatch_qualified_autopilot(
             cv_sha256=selected_cv_hash,
             profile_version=profile_version,
         )
-        from submitters.registry import get_two_phase_registry
+        from core.adapter_qualification_service import effective_inspection_descriptor
+        from submitters.registry import build_scoped_two_phase_registry
 
-        inspector = get_two_phase_registry().get_inspector(job_data)
+        job_url = job.apply_url or job.source_url or ""
+        descriptor = effective_inspection_descriptor(db, job_url)
+        scoped_registry = (
+            build_scoped_two_phase_registry(descriptor) if descriptor is not None else None
+        )
+        inspector = scoped_registry.get_inspector(job_data) if scoped_registry is not None else None
         if inspector is None:
             raise AutopilotInspectionError("ADAPTER_NOT_QUALIFIED")
         profile_payload = snapshot.profile.model_dump(mode="python")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Mapping
+from importlib import import_module
 from pathlib import Path
 from profile.cv_routing import load_routing_config
 from profile.loader import load_profile_snapshot
@@ -163,6 +164,7 @@ def current_automation_readiness(
 
     owns_session = db is None
     session = db if db is not None else get_session_factory()()
+    resolved_adapters = tuple(adapters) if adapters is not None else None
     try:
         try:
             snapshot = load_versioned_profile_snapshot(session)
@@ -179,6 +181,15 @@ def current_automation_readiness(
             session.rollback()
             profile_version = None
             profile = UserProfile()
+        if resolved_adapters is None:
+            try:
+                # Load the optional database authority resolver at runtime so
+                # readiness stays importable during migration/bootstrap.
+                qualification_service = import_module("core.adapter_qualification_service")
+                resolved_adapters = qualification_service.effective_registered_descriptors(session)
+            except Exception:
+                session.rollback()
+                resolved_adapters = registered_adapters()
     finally:
         if owns_session:
             session.close()
@@ -188,5 +199,5 @@ def current_automation_readiness(
         dependency_report=dependency_report,
         profile=profile,
         profile_version=profile_version,
-        adapters=adapters,
+        adapters=resolved_adapters,
     )

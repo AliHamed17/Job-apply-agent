@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from hmac import compare_digest
@@ -209,10 +209,17 @@ class DraftOnlySubmitter(BaseSubmitter):
 class SubmitterRegistry:
     """Registry of available submitters with fallback to draft-only."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        platform_descriptor_resolver: Callable[[str], AdapterDescriptor | None] | None = None,
+        url_descriptor_resolver: Callable[[str], AdapterDescriptor | None] | None = None,
+    ) -> None:
         self._submitters: list[BaseSubmitter] = []
         self._draft_fallback = DraftOnlySubmitter()
         self._two_phase: dict[str, TwoPhaseSubmitter] = {}
+        self._platform_descriptor_resolver = platform_descriptor_resolver or adapter_for_platform
+        self._url_descriptor_resolver = url_descriptor_resolver or adapter_for_url
 
     def register(self, submitter: BaseSubmitter) -> None:
         """Register a compatibility-only one-step adapter."""
@@ -228,7 +235,7 @@ class SubmitterRegistry:
             raise TypeError("adapter does not implement the two-phase submitter protocol")
 
         descriptor = submitter.descriptor
-        registered = adapter_for_platform(descriptor.platform)
+        registered = self._platform_descriptor_resolver(descriptor.platform)
         if registered is None or not _same_execution_identity(descriptor, registered):
             raise ValueError("adapter descriptor does not match the central registry")
         if descriptor.platform in self._two_phase:
@@ -241,7 +248,7 @@ class SubmitterRegistry:
         Fixture qualification belongs to an explicit offline harness and never
         authorizes the dashboard/API to open an arbitrary employer URL.
         """
-        descriptor = adapter_for_url(job.apply_url or job.source_url)
+        descriptor = self._url_descriptor_resolver(job.apply_url or job.source_url)
         if (
             descriptor is None
             or descriptor.qualification
@@ -251,6 +258,25 @@ class SubmitterRegistry:
             }
             or not descriptor.qualified_form_scope
         ):
+            return None
+        submitter = self._two_phase.get(descriptor.platform)
+        if submitter is None or not _same_execution_identity(submitter.descriptor, descriptor):
+            return None
+        return submitter if submitter.can_inspect(job) else None
+
+    def get_qualification_inspector(self, job: JobData) -> TwoPhaseSubmitter | None:
+        """Return a fixture adapter only to an explicit guarded qualification flow.
+
+        This method never authorizes preflight or commit. Ordinary API and
+        worker inspection must continue through :meth:`get_inspector`.
+        """
+
+        descriptor = self._url_descriptor_resolver(job.apply_url or job.source_url)
+        if descriptor is None or descriptor.qualification not in {
+            QualificationTier.FIXTURE_QUALIFIED,
+            QualificationTier.DRY_RUN_QUALIFIED,
+            QualificationTier.LIVE_CANARY_QUALIFIED,
+        }:
             return None
         submitter = self._two_phase.get(descriptor.platform)
         if submitter is None or not _same_execution_identity(submitter.descriptor, descriptor):
@@ -267,7 +293,7 @@ class SubmitterRegistry:
         form_fingerprint: str,
     ) -> TwoPhaseSubmitter | None:
         """Resolve a final executor only for an exact live-qualified identity."""
-        descriptor = adapter_for_url(job.apply_url or job.source_url)
+        descriptor = self._url_descriptor_resolver(job.apply_url or job.source_url)
         if descriptor is None:
             return None
         if (
@@ -310,7 +336,7 @@ class SubmitterRegistry:
         if not compare_digest(permit.job_url_hash, url_hash(normalized_url)):
             return None
 
-        descriptor = adapter_for_url(normalized_url)
+        descriptor = self._url_descriptor_resolver(normalized_url)
         if descriptor is None or descriptor.platform != plan.adapter_name:
             return None
         return self.get_final_executor(
@@ -354,6 +380,7 @@ def _same_execution_identity(
     )
 
 
-# Production and worker code resolve through one authoritative registry.  It is
-# intentionally empty: PR2 ships no live two-phase adapter.
+# The process-global registry contains fixture-code implementations only.
+# Runtime dry-run/canary authority always builds a fresh scoped registry from
+# strict local database evidence; this singleton never acquires live scope.
 two_phase_registry = SubmitterRegistry()

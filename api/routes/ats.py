@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
+from core.adapter_qualification_service import effective_registered_descriptors
+from db.session import get_db
 from submitters.platforms import registered_adapters
 
 router = APIRouter(tags=["ats-adapters"])
@@ -24,8 +28,20 @@ class AdapterCapabilityResponse(BaseModel):
 
 
 @router.get("/ats/adapters", response_model=list[AdapterCapabilityResponse])
-async def list_ats_adapters() -> list[AdapterCapabilityResponse]:
+async def list_ats_adapters(
+    db: Session = Depends(get_db),
+) -> list[AdapterCapabilityResponse]:
     """Expose the bounded registry used by inspection and final execution."""
+    if isinstance(db, Session):
+        try:
+            descriptors = effective_registered_descriptors(db)
+        except SQLAlchemyError:
+            # A missing/unavailable authority store may reduce capability but
+            # can never elevate the immutable fixture-only inventory.
+            db.rollback()
+            descriptors = registered_adapters()
+    else:
+        descriptors = registered_adapters()
     return [
         AdapterCapabilityResponse(
             ats=descriptor.platform,
@@ -39,5 +55,5 @@ async def list_ats_adapters() -> list[AdapterCapabilityResponse]:
             qualified_form_scope=list(descriptor.qualified_form_scope),
             final_execution_enabled=descriptor.allows_final_execution,
         )
-        for descriptor in registered_adapters()
+        for descriptor in descriptors
     ]

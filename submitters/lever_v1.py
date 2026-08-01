@@ -1192,10 +1192,12 @@ def register_lever_browser_v1(
     *,
     browser_factory: LeverBrowserFactory,
     answer_policy: AnswerPolicyV1 | None = None,
+    descriptor: AdapterDescriptor | None = None,
 ) -> LeverBrowserV1:
     adapter = LeverBrowserV1(
         browser_factory=browser_factory,
         answer_policy=answer_policy,
+        descriptor=descriptor,
     )
     registry.register_two_phase(adapter)
     return adapter
