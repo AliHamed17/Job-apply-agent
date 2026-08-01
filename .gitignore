@@ -92,6 +92,7 @@ employer_catalog.yaml
 routing-evaluation-report.json
 linkedin-smoke-qualification.json
 fit_routing_qualification.json
+.automation_artifacts/
 
 # Local read-only Gmail alert OAuth state (never commit).
 .gmail_oauth.json

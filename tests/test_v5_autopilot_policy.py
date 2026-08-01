@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 
 import core.automation_policy_service as policy_service
 from api.routes import automation as automation_route
+from core.automation_artifact_snapshot import policy_artifact_snapshot_id
 from core.automation_policy import (
     AutomationGeography,
     AutoSubmitPolicyV1,
@@ -44,7 +45,14 @@ from core.automation_policy_service import (
 )
 from core.config import Settings
 from core.runtime_identity import get_runtime_identity
-from core.submission_domain import PreparedFinalActionV1
+from core.submission_domain import (
+    ConfirmedSubmittedOutcome,
+    EvidenceType,
+    PreparedFinalActionV1,
+)
+from core.submission_domain import (
+    SubmissionEvidence as DomainSubmissionEvidence,
+)
 from db.models import (
     Application,
     ApplicationPolicyDecision,
@@ -97,6 +105,7 @@ from worker.submission_commands import (
     _enter_commit_boundary,
     _validate_attempt_automation_authority,
     claim_submission_command,
+    execute_claimed_submission_command,
 )
 
 _NOW = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
@@ -190,6 +199,11 @@ def _scenario(tmp_path, monkeypatch) -> SimpleNamespace:
         policy_service,
         "_current_artifact_bindings",
         lambda *_args, **_kwargs: _artifact_bindings(),
+    )
+    monkeypatch.setattr(
+        policy_service,
+        "require_policy_artifact_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(snapshot_id="8" * 64),
     )
     monkeypatch.setattr(
         "llm.qualification_registry.qualified_model_report_is_current",
@@ -850,6 +864,16 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
         policy_service,
         "_current_artifact_bindings",
         lambda *_args, **_kwargs: _artifact_bindings(),
+    )
+    monkeypatch.setattr(
+        policy_service,
+        "require_policy_artifact_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(snapshot_id="8" * 64),
+    )
+    monkeypatch.setattr(
+        policy_service,
+        "materialize_policy_artifact_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(snapshot_id="8" * 64),
     )
     monkeypatch.setattr(
         policy_service,
@@ -1764,6 +1788,137 @@ def test_commit_boundary_acquires_authority_fence_before_claim_context(monkeypat
 
     assert result is None
     assert events == ["authority_fence", "claim_context"]
+
+
+def test_autopilot_final_admission_uses_immutable_snapshot_after_live_swap(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "worker.submission_commands.execute_submission_command_task.delay",
+        lambda *_args, **_kwargs: None,
+    )
+    db = scenario.factory()
+    queued = dispatch_qualified_autopilot(
+        db,
+        application_id=scenario.application_id,
+        form_plan_id=scenario.plan_id,
+        settings=_settings(),
+        capabilities=_capabilities(),
+        descriptor_resolver=lambda _url: scenario.live_descriptor,
+        session_checker=lambda *_args: True,
+        now=_NOW,
+    )
+    assert queued.command_id is not None
+    assert claim_submission_command(db, command_id=queued.command_id, now=_NOW) == queued.command_id
+
+    immutable_cv = (tmp_path / "immutable-policy-snapshot" / "cvs" / "000.pdf").resolve()
+    immutable_cv.parent.mkdir(parents=True)
+    immutable_cv.write_bytes(b"immutable reviewed CV bytes")
+    mutable_live_cv = (tmp_path / "cvs" / "ai.pdf").resolve()
+    mutable_live_cv.parent.mkdir()
+    mutable_live_cv.write_bytes(b"original live CV bytes")
+    expected_snapshot_id = policy_artifact_snapshot_id(scenario.policy)
+    selected = SimpleNamespace(
+        cv_id="cv-ai",
+        pdf_sha256=_CV_HASH,
+        resolved_path=str(immutable_cv),
+    )
+    resolver_calls: list[str] = []
+
+    def resolve_snapshot(policy, *, cv_id, expected_sha256, settings):
+        assert policy.payload_digest == scenario.policy.payload_digest
+        assert cv_id == "cv-ai"
+        assert expected_sha256 == _CV_HASH
+        resolver_calls.append(str(settings.data_dir))
+        return selected, expected_snapshot_id
+
+    snapshot_checks: list[str] = []
+
+    def require_snapshot(policy, *, selected_cv_id, selected_cv_hash, **_kwargs):
+        assert policy.payload_digest == scenario.policy.payload_digest
+        assert selected_cv_id == "cv-ai"
+        assert selected_cv_hash == _CV_HASH
+        snapshot_checks.append(immutable_cv.read_text(encoding="utf-8"))
+        if len(snapshot_checks) == 1:
+            # This is the reviewed race: mutable operator files can change
+            # after the first admission read, but preflight and commit remain
+            # bound to the content-addressed versioned CV path.
+            mutable_live_cv.write_bytes(b"replacement after authority read")
+        return SimpleNamespace(snapshot_id=expected_snapshot_id)
+
+    monkeypatch.setattr(
+        "worker.submission_commands.resolve_selected_cv_artifact_snapshot",
+        resolve_snapshot,
+    )
+    monkeypatch.setattr(
+        "worker.submission_commands.require_policy_artifact_snapshot",
+        require_snapshot,
+    )
+    monkeypatch.setattr(
+        "profile.cv_content_cache.require_current_selected_cv_artifact",
+        lambda candidate, **_kwargs: candidate,
+    )
+    monkeypatch.setattr(
+        "worker.submission_commands._now",
+        lambda: _NOW.replace(tzinfo=None),
+    )
+
+    class SnapshotExecutor:
+        context = None
+
+        async def preflight(self, *, plan, permit, context):
+            self.context = context
+            prepared_at = _NOW
+            return PreparedFinalActionV1(
+                attempt_id=permit.attempt_id,
+                adapter_name=plan.adapter_name,
+                adapter_version=plan.adapter_version,
+                selector_version=plan.selector_version,
+                form_fingerprint=plan.form_fingerprint,
+                attached_cv_hash=plan.attached_cv_hash,
+                prepared_at=prepared_at,
+                expires_at=min(permit.expires_at, prepared_at + timedelta(minutes=1)),
+                action_nonce="9" * 64,
+            )
+
+        async def commit(self, *, action, permit):
+            return ConfirmedSubmittedOutcome(
+                evidence=DomainSubmissionEvidence(
+                    attempt_id=permit.attempt_id,
+                    evidence_type=EvidenceType.EMPLOYER_APPLICATION_ID,
+                    employer_application_id="opaque-snapshot-proof",
+                    form_fingerprint=action.form_fingerprint,
+                    attached_cv_hash=action.attached_cv_hash,
+                    observed_at=_NOW + timedelta(seconds=1),
+                    digest="7" * 64,
+                )
+            )
+
+    executor = SnapshotExecutor()
+    registry = SimpleNamespace(resolve_final_executor=lambda *_args: executor)
+    result = execute_claimed_submission_command(
+        db,
+        queued.command_id,
+        registry=registry,
+        settings=_settings(),
+        governor=SimpleNamespace(
+            reserve_final_action=lambda **_kwargs: (True, "reserved"),
+        ),
+    )
+
+    assert result == "confirmed_submitted"
+    assert resolver_calls == ["."]
+    assert len(snapshot_checks) == 2
+    assert snapshot_checks == ["immutable reviewed CV bytes"] * 2
+    assert mutable_live_cv.read_bytes() == b"replacement after authority read"
+    assert executor.context.resume_path == str(immutable_cv)
+    db.expire_all()
+    attempt = db.get(Submission, queued.attempt_id)
+    assert attempt.final_action_at is not None
+    assert attempt.outcome == "confirmed_submitted"
+    db.close()
 
 
 def test_signed_remote_kill_is_replay_protected_and_can_never_clear(tmp_path) -> None:

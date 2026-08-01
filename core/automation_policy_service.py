@@ -21,6 +21,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from core.application_revision import mark_application_prepared
+from core.automation_artifact_snapshot import (
+    AutomationArtifactSnapshotError,
+    materialize_policy_artifact_snapshot,
+    require_policy_artifact_snapshot,
+)
 from core.automation_authority_fence import (
     AUTOMATION_AUTHORITY_FENCE_ID,
     lock_automation_authority_fence,
@@ -359,6 +364,26 @@ def _require_current_artifact_bindings(policy: AutoSubmitPolicyV1) -> None:
     )
     if any(not hmac.compare_digest(observed, expected) for observed, expected in bindings):
         raise AutomationPolicyError("FIT_QUALIFICATION_CHANGED")
+    try:
+        require_policy_artifact_snapshot(policy)
+    except AutomationArtifactSnapshotError as exc:
+        raise AutomationPolicyError("FIT_QUALIFICATION_CHANGED") from exc
+
+
+def verified_policy_for_decision(
+    decision_record: ApplicationPolicyDecision,
+    *,
+    signing_key_path: str | Path | None = None,
+) -> AutoSubmitPolicyV1:
+    """Verify and return the exact signed policy bound to one decision."""
+
+    record = decision_record.policy_revision
+    if record is None:
+        raise AutomationPolicyError("AUTOMATION_DECISION_BINDING_MISMATCH")
+    signed = _verified_policy(record, signing_key_path=signing_key_path)
+    if not hmac.compare_digest(signed.policy.payload_digest, decision_record.policy_digest):
+        raise AutomationPolicyError("AUTOMATION_DECISION_BINDING_MISMATCH")
+    return signed.policy
 
 
 def _scope_has_live_canary(db: Session, scope: QualifiedFormContractV1) -> bool:
@@ -458,6 +483,10 @@ def activate_auto_submit_policy(
         )
     except ValueError as exc:
         raise AutomationPolicyError("AUTOMATION_POLICY_INVALID") from exc
+    try:
+        materialize_policy_artifact_snapshot(policy, settings=settings)
+    except AutomationArtifactSnapshotError as exc:
+        raise AutomationPolicyError("FIT_QUALIFICATION_CHANGED") from exc
     signed = sign_auto_submit_policy(
         policy,
         key_id=identity.key_id,
@@ -1252,4 +1281,5 @@ __all__ = [
     "set_automation_kill_switch",
     "validate_automation_inspection_candidate",
     "validate_current_automation_decision",
+    "verified_policy_for_decision",
 ]
