@@ -8,6 +8,7 @@ persisting the result. Fixed to update the existing row in place.
 
 from __future__ import annotations
 
+from profile.models import UserProfile
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,9 +16,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.config import Settings
-from db.models import Application, Base, Job, JobStatus
+from db.models import Application, Base, Job, JobFitDecisionRecord, JobStatus
 from llm.generation import GeneratedApplication
-from profile.models import UserProfile
 
 
 def _db(tmp_path):
@@ -31,10 +31,17 @@ async def test_regenerating_updates_existing_application_not_insert(tmp_path):
     factory = _db(tmp_path)
     db = factory()
     job = Job(
-        title="AI Engineer", company="Gitlab", source_url="https://x",
-        status=JobStatus.SCORED, score=57.5,
-        location="", employment_type="", seniority="", description="",
-        requirements="", apply_url="",
+        title="AI Engineer",
+        company="Gitlab",
+        source_url="https://x",
+        status=JobStatus.SCORED,
+        score=57.5,
+        location="",
+        employment_type="",
+        seniority="",
+        description="",
+        requirements="",
+        apply_url="",
     )
     db.add(job)
     db.flush()
@@ -59,11 +66,17 @@ async def test_regenerating_updates_existing_application_not_insert(tmp_path):
         placeholder_fields=[],
     )
 
-    with patch("worker.tasks.get_session_factory", return_value=factory), \
-         patch("worker.tasks.get_settings", return_value=settings), \
-         patch("profile.loader.get_profile", return_value=UserProfile()), \
-         patch("llm.generation.generate_full_application", new=AsyncMock(return_value=fresh_result)):
+    with (
+        patch("worker.tasks.get_session_factory", return_value=factory),
+        patch("worker.tasks.get_settings", return_value=settings),
+        patch("profile.loader.get_profile", return_value=UserProfile()),
+        patch(
+            "llm.generation.generate_full_application",
+            new=AsyncMock(return_value=fresh_result),
+        ),
+    ):
         from worker.tasks import generate_application_task
+
         generate_application_task.apply(args=[job_id])
 
     db = factory()
@@ -71,4 +84,11 @@ async def test_regenerating_updates_existing_application_not_insert(tmp_path):
     assert len(apps) == 1, "must update the existing row, not insert a second one"
     assert apps[0].id == existing_id
     assert apps[0].cover_letter == "NEW real cover letter from the LLM"
+    assert apps[0].job_fit_decision_id is None
+    fit_decision = (
+        db.query(JobFitDecisionRecord).filter(JobFitDecisionRecord.job_id == job_id).one()
+    )
+    assert fit_decision is not None
+    assert fit_decision.quality_eligible is False
+    assert fit_decision.disposition == "needs_review"
     db.close()

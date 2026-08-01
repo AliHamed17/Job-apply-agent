@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from profile.cv_routing import parse_required_skills
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
@@ -11,6 +13,9 @@ from api.submission_display import job_submission_display
 from db.models import ExtractedURL, Job, JobStatus, Message, URLStatus
 from db.session import get_db
 from ingestion.url_utils import normalize_url, url_hash
+from jobs.models import JobData
+from match.job_fit import JobFitDecisionV1, job_content_digest
+from match.job_fit_store import latest_job_fit_decision
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["jobs"])
@@ -86,6 +91,17 @@ class IngestRequest(BaseModel):
     source: str = "manual"
 
 
+class AutomationDecisionResponse(BaseModel):
+    job_id: int
+    decision_id: int
+    decision_digest: str
+    created_at: str
+    decision: JobFitDecisionV1
+    quality_eligible: bool
+    submission_authorized: bool = False
+    authority_reason: str = "QUALITY_DECISION_IS_NOT_SUBMISSION_AUTHORITY"
+
+
 @router.post("/ingest")
 async def ingest_url(body: IngestRequest, db: Session = Depends(get_db)):
     """Accept a job URL from the WhatsApp bridge or the dashboard.
@@ -146,3 +162,47 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return _serialize_job(job)
+
+
+@router.get(
+    "/jobs/{job_id}/automation-decision",
+    response_model=AutomationDecisionResponse,
+)
+async def get_job_automation_decision(
+    job_id: int,
+    db: Session = Depends(get_db),
+) -> AutomationDecisionResponse:
+    """Return the latest calibrated quality decision without granting send authority."""
+
+    job = db.query(Job).filter(Job.id == job_id).one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    latest = latest_job_fit_decision(db, job_id=job_id)
+    if latest is None:
+        raise HTTPException(status_code=404, detail="Job fit decision not available")
+    record, decision = latest
+    current_digest = job_content_digest(
+        JobData(
+            title=job.title or "",
+            company=job.company or "",
+            location=job.location or "",
+            employment_type=job.employment_type or "",
+            seniority=job.seniority or "",
+            description=job.description or "",
+            requirements=job.requirements or "",
+            apply_url=job.apply_url or "",
+            source_url=job.source_url,
+            date_posted=job.date_posted or "",
+            keywords=parse_required_skills(job.keywords),
+        )
+    )
+    if current_digest != decision.job_digest:
+        raise HTTPException(status_code=409, detail="JOB_FIT_DECISION_STALE")
+    return AutomationDecisionResponse(
+        job_id=job_id,
+        decision_id=record.id,
+        decision_digest=record.decision_digest,
+        created_at=record.created_at.isoformat() if record.created_at else "",
+        decision=decision,
+        quality_eligible=decision.quality_eligible,
+    )

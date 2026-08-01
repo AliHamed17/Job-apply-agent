@@ -39,6 +39,32 @@ def _get_db():
     return factory()
 
 
+def _job_data_from_record(job: Job):
+    from profile.cv_routing import parse_required_skills
+
+    from jobs.models import JobData
+
+    return JobData(
+        title=job.title or "",
+        company=job.company or "",
+        location=job.location or "",
+        employment_type=job.employment_type or "",
+        seniority=job.seniority or "",
+        description=job.description or "",
+        requirements=job.requirements or "",
+        apply_url=job.apply_url or "",
+        source_url=job.source_url,
+        date_posted=job.date_posted or "",
+        keywords=parse_required_skills(job.keywords),
+    )
+
+
+def _job_fit_input_is_current(job: Job, decision) -> bool:
+    from match.job_fit import job_content_digest
+
+    return decision.job_digest == job_content_digest(_job_data_from_record(job))
+
+
 def _validated_submit_command_available(_db, _application_id: int) -> bool:
     """Fail closed until PR2 adds a durable, permit-backed command lookup."""
     return False
@@ -377,8 +403,6 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
         load_versioned_profile_snapshot,
     )
 
-    from jobs.models import JobData
-
     db = _get_db()
     try:
         settings = get_settings()
@@ -409,20 +433,7 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
             else profile_snapshot.profile
         )
 
-        # Convert DB model to JobData for scoring
-        job_data = JobData(
-            title=db_job.title or "",
-            company=db_job.company or "",
-            location=db_job.location or "",
-            employment_type=db_job.employment_type or "",
-            seniority=db_job.seniority or "",
-            description=db_job.description or "",
-            requirements=db_job.requirements or "",
-            apply_url=db_job.apply_url or "",
-            source_url=db_job.source_url,
-            date_posted=db_job.date_posted or "",
-            keywords=json.loads(db_job.keywords) if db_job.keywords else [],
-        )
+        job_data = _job_data_from_record(db_job)
 
         # Scoring can be CPU-heavy and can invoke profile loaders.  Keep no
         # database transaction open while it runs, then re-lock the current
@@ -430,6 +441,19 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
         db.rollback()
 
         breakdown = score_job(job_data, profile)
+        from match.job_fit_runtime import (
+            configured_fit_qualification_path,
+            evaluate_configured_job_fit,
+        )
+
+        fit_decision = evaluate_configured_job_fit(
+            job_data,
+            profile,
+            profile_version=scoring_profile_version,
+            cv_routing_path=settings.cv_routing_path,
+            cv_directory=settings.cv_directory,
+            qualification_path=configured_fit_qualification_path(),
+        )
         action = decide_action(
             score=breakdown.total,
             auto_apply_enabled=settings.auto_apply,
@@ -482,9 +506,20 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
                 )
                 return
             assert locked is not None and locked.job is not None
+            if not _job_fit_input_is_current(locked.job, fit_decision):
+                db.rollback()
+                logger.warning(
+                    "job_scoring_write_blocked",
+                    job_id=job_id,
+                    reason_code="JOB_CONTENT_CHANGED",
+                )
+                return
             # Once an application exists its lifecycle is authoritative.  A
             # rescore may refresh the numeric score under the app-first lock,
             # but it must not rewrite status or enqueue regeneration.
+            from match.job_fit_store import persist_job_fit_decision
+
+            persist_job_fit_decision(db, job_id=job_id, decision=fit_decision)
             locked.job.score = breakdown.total
             db.commit()
             logger.info(
@@ -521,6 +556,14 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
                     reason_code="JOB_STATUS_CHANGED",
                 )
                 return
+            if not _job_fit_input_is_current(db_job, fit_decision):
+                db.rollback()
+                logger.warning(
+                    "job_scoring_write_blocked",
+                    job_id=job_id,
+                    reason_code="JOB_CONTENT_CHANGED",
+                )
+                return
             if latest_profile_version(db) != scoring_profile_version:
                 preparation_ready = False
                 preparation_reasons = list(
@@ -528,6 +571,9 @@ def score_job_task(self, job_id: int, preparation_ready: bool = True):
                 )
 
             db_job.score = breakdown.total
+            from match.job_fit_store import persist_job_fit_decision
+
+            persist_job_fit_decision(db, job_id=job_id, decision=fit_decision)
 
             if not preparation_ready:
                 db_job.status = JobStatus.SCORED
@@ -597,7 +643,6 @@ def generate_application_task(
         load_versioned_profile_snapshot,
     )
 
-    from jobs.models import JobData
     from llm.generation import generate_full_application
 
     db = _get_db()
@@ -661,17 +706,7 @@ def generate_application_task(
                 _dispatch_exact_rescore(job_id, settings)
             return
 
-        job_data = JobData(
-            title=db_job.title,
-            company=db_job.company,
-            location=db_job.location,
-            employment_type=db_job.employment_type,
-            seniority=db_job.seniority,
-            description=db_job.description,
-            requirements=db_job.requirements,
-            apply_url=db_job.apply_url,
-            source_url=db_job.source_url,
-        )
+        job_data = _job_data_from_record(db_job)
 
         from pathlib import Path
         from profile.cv_routing import (
@@ -691,9 +726,23 @@ def generate_application_task(
         job_score = db_job.score or 0.0
 
         # Do not keep a transaction (and especially not a row lock) open while
-        # local routing and LLM generation run.  The application revision and
-        # submission lifecycle are locked and rechecked at the final write.
+        # local routing and LLM generation run. The application revision,
+        # profile version, job digest, and lifecycle are rechecked at commit.
         db.rollback()
+
+        from match.job_fit_runtime import (
+            configured_fit_qualification_path,
+            evaluate_configured_job_fit,
+        )
+
+        fit_decision = evaluate_configured_job_fit(
+            job_data,
+            profile,
+            profile_version=expected_profile_version,
+            cv_routing_path=settings.cv_routing_path,
+            cv_directory=settings.cv_directory,
+            qualification_path=configured_fit_qualification_path(),
+        )
 
         routing_path = Path(settings.cv_routing_path)
         configured_cv_artifacts = {}
@@ -805,12 +854,19 @@ def generate_application_task(
             threshold=settings.auto_apply_threshold,
             min_apply_score=settings.min_apply_score,
         )
+        fit_binding_matches = bool(
+            routing.selected_cv_id is not None
+            and selected_cv is not None
+            and fit_decision.selected_cv_id == routing.selected_cv_id
+            and fit_decision.selected_cv_hash == selected_cv.pdf_sha256
+        )
         # Unfilled [PLACEHOLDER: ...] markers and uncertain CV routes must
         # never reach an employer without review.
         auto_eligible = (
             action == Action.AUTO_APPLY
-            and routing.selected_cv_id is not None
+            and fit_decision.quality_eligible
             and routing.fallback_reason is None
+            and fit_binding_matches
             and generated.eligible
         )
 
@@ -875,6 +931,15 @@ def generate_application_task(
                     reason_code="APPLICATION_REGENERATED",
                 )
 
+            if not _job_fit_input_is_current(db_job, fit_decision):
+                db.rollback()
+                logger.warning(
+                    "application_generation_write_blocked",
+                    job_id=job_id,
+                    reason_code="JOB_CONTENT_CHANGED",
+                )
+                return
+
             current_profile_version = latest_profile_version(db)
             if current_profile_version != expected_profile_version:
                 db.rollback()
@@ -890,6 +955,7 @@ def generate_application_task(
                 app.approval_source = None
                 app.selected_cv_id = routing.selected_cv_id
                 app.cv_routing_confidence = routing.confidence
+                app.cv_routing_margin = fit_decision.routing_margin if fit_binding_matches else None
                 app.cv_routing_evidence = json.dumps(routing.matched_evidence)
                 app.cv_routing_fallback_reason = routing.fallback_reason
                 app.profile_version = expected_profile_version
@@ -899,12 +965,27 @@ def generate_application_task(
                 )
 
                 material_blockers = persist_material_audit(app, generated, selected_cv)
-                app.needs_review_reason = material_review_reason(
+                material_reason = material_review_reason(
                     selected_cv_id=routing.selected_cv_id,
                     routing_fallback_reason=routing.fallback_reason,
                     blockers=material_blockers,
                     placeholder_fields=generated.placeholder_fields,
                 )
+                fit_reason = next(
+                    iter([*fit_decision.hard_exclusions, *fit_decision.uncertainty]),
+                    None,
+                )
+                if not fit_binding_matches:
+                    fit_reason = "FIT_ROUTING_BINDING_MISMATCH"
+                app.needs_review_reason = material_reason or fit_reason
+                from match.job_fit_store import persist_job_fit_decision
+
+                fit_record = persist_job_fit_decision(
+                    db,
+                    job_id=job_id,
+                    decision=fit_decision,
+                )
+                app.job_fit_decision_id = fit_record.id if fit_binding_matches else None
                 db.flush()
 
                 db_job.status = JobStatus.DRAFT
@@ -922,6 +1003,10 @@ def generate_application_task(
                         "profile_version": app.profile_version,
                         "material_eligible": app.material_eligible,
                         "material_blockers": material_blockers,
+                        "fit_decision_digest": fit_record.decision_digest,
+                        "fit_disposition": fit_record.disposition,
+                        "fit_quality_eligible": fit_record.quality_eligible,
+                        "fit_decision_bound": fit_binding_matches,
                         "state": "draft",
                     },
                 )

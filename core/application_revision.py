@@ -47,6 +47,7 @@ def bump_application_revision(
     application.prepared_revision = None
     application.approved_at = None
     application.approval_source = None
+    application.job_fit_decision_id = None
     invalidate_form_plans(
         db,
         application,

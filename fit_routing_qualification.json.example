@@ -1,0 +1,18 @@
+{
+  "schema_version": "fit-qualification.v1",
+  "algorithm_version": "job-fit.v1",
+  "routing_config_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "cv_manifest_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "dataset_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "thresholds": {
+    "minimum_fit_score": 85.0,
+    "minimum_routing_confidence": 0.55,
+    "minimum_routing_margin": 0.08
+  },
+  "labeled_cases": 240,
+  "holdout_cases": 48,
+  "holdout_precision": 0.0,
+  "holdout_coverage": 0.0,
+  "qualified": false,
+  "created_at": "2026-08-01T00:00:00Z"
+}

@@ -208,6 +208,7 @@ prepare-only placeholder-auth bypass.
 | GET | `/metrics` | Bounded Prometheus exposition |
 | GET | `/api/runtime/capabilities` | Build, mode, runner, LLM, and send guards |
 | GET | `/api/ats/adapters` | Version and qualification inventory |
+| GET | `/api/jobs/{id}/automation-decision` | Calibrated fit/CV decision; never send authority |
 | POST | `/api/applications/{id}/prepare` | Review/prepare; queues no external action |
 | POST | `/api/applications/{id}/inspect` | Build a private form plan |
 | GET | `/api/applications/{id}/form-plan` | Read latest plan and blockers |
@@ -238,6 +239,7 @@ old devices and requires new identities before reconnecting.
 
 - [Production operations](docs/operations.md)
 - [Always-on discovery mesh](docs/discovery-mesh.md)
+- [Calibrated fit and 12-CV routing](docs/v5-calibrated-fit-routing.md)
 - [Qualification evidence](docs/qualification/README.md)
 - [Employer automation boundary](docs/employer-automation.md)
 - [Local Ollama form planning](docs/ollama-form-plan-v1.md)

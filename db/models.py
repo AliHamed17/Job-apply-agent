@@ -191,6 +191,12 @@ class Job(Base):
         back_populates="job",
         cascade="all, delete-orphan",
     )
+    fit_decisions = relationship(
+        "JobFitDecisionRecord",
+        back_populates="job",
+        order_by="(JobFitDecisionRecord.created_at, JobFitDecisionRecord.id)",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ix_jobs_apply_url_hash", "apply_url_hash"),
@@ -225,8 +231,13 @@ class Application(Base):
     selected_cv_hash = Column(String(64), nullable=True)
     profile_version = Column(Integer, nullable=True)
     cv_routing_confidence = Column(Float, nullable=True)
+    cv_routing_margin = Column(Float, nullable=True)
     cv_routing_evidence = Column(Text, nullable=True)
     cv_routing_fallback_reason = Column(String(64), nullable=True)
+    job_fit_decision_id = Column(
+        Integer,
+        nullable=True,
+    )
     cv_override_id = Column(String(255), nullable=True)
     outcome = Column(String(32), nullable=True)
     outcome_note = Column(Text, nullable=True)
@@ -242,6 +253,7 @@ class Application(Base):
     material_prompt_version = Column(String(32), nullable=True)
 
     job = relationship("Job", back_populates="application")
+    job_fit_decision = relationship("JobFitDecisionRecord", viewonly=True)
     form_plans = relationship(
         "FormPlan",
         back_populates="application",
@@ -276,6 +288,15 @@ class Application(Base):
         CheckConstraint(
             f"selected_cv_hash IS NULL OR {_sha256_check_sql('selected_cv_hash')}",
             name="ck_applications_selected_cv_hash",
+        ),
+        CheckConstraint(
+            "cv_routing_margin IS NULL OR (cv_routing_margin >= 0 AND cv_routing_margin <= 1)",
+            name="ck_applications_cv_routing_margin",
+        ),
+        ForeignKeyConstraint(
+            ["job_fit_decision_id", "job_id"],
+            ["job_fit_decisions.id", "job_fit_decisions.job_id"],
+            name="fk_applications_job_fit_decision",
         ),
         CheckConstraint(
             "(material_prompt_version IS NULL AND material_model_provider IS NULL "
@@ -1559,6 +1580,94 @@ class JobSourceOccurrenceRecord(Base):
             "external_posting_id",
         ),
         Index("ix_job_source_occurrences_last_seen", "source_key", "last_seen_at"),
+    )
+
+
+class JobFitDecisionRecord(Base):
+    """Immutable, privacy-bounded fit decision for one job/profile/CV snapshot."""
+
+    __tablename__ = "job_fit_decisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    decision_digest = Column(String(64), nullable=False)
+    job_digest = Column(String(64), nullable=False)
+    profile_version = Column(Integer, nullable=True)
+    routing_config_digest = Column(String(64), nullable=False)
+    cv_manifest_digest = Column(String(64), nullable=False)
+    selected_cv_id = Column(String(255), nullable=True)
+    selected_cv_hash = Column(String(64), nullable=True)
+    routing_confidence = Column(Float, nullable=False)
+    routing_margin = Column(Float, nullable=False)
+    routing_fallback_reason = Column(String(64), nullable=True)
+    fit_score = Column(Float, nullable=False)
+    disposition = Column(String(24), nullable=False)
+    quality_eligible = Column(Boolean, nullable=False, default=False, server_default=false())
+    hard_exclusions_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    uncertainty_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    unsupported_skills_json = Column(Text, nullable=False, default="[]", server_default="[]")
+    evidence_json = Column(Text, nullable=False)
+    thresholds_json = Column(Text, nullable=False)
+    policy_version = Column(String(32), nullable=False)
+    model_identity = Column(String(64), nullable=False)
+    qualification_digest = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now(), server_default=func.now())
+
+    job = relationship("Job", back_populates="fit_decisions")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id",
+            "decision_digest",
+            name="uq_job_fit_decisions_job_digest",
+        ),
+        UniqueConstraint(
+            "id",
+            "job_id",
+            name="uq_job_fit_decisions_id_job",
+        ),
+        CheckConstraint(
+            f"{_sha256_check_sql('decision_digest')} "
+            f"AND {_sha256_check_sql('job_digest')} "
+            f"AND {_sha256_check_sql('routing_config_digest')} "
+            f"AND {_sha256_check_sql('cv_manifest_digest')}",
+            name="ck_job_fit_decisions_required_digests",
+        ),
+        CheckConstraint(
+            f"selected_cv_hash IS NULL OR {_sha256_check_sql('selected_cv_hash')}",
+            name="ck_job_fit_decisions_selected_cv_hash",
+        ),
+        CheckConstraint(
+            f"qualification_digest IS NULL OR {_sha256_check_sql('qualification_digest')}",
+            name="ck_job_fit_decisions_qualification_digest",
+        ),
+        CheckConstraint(
+            "routing_confidence >= 0 AND routing_confidence <= 1 "
+            "AND routing_margin >= 0 AND routing_margin <= 1 "
+            "AND fit_score >= 0 AND fit_score <= 100",
+            name="ck_job_fit_decisions_metrics",
+        ),
+        CheckConstraint(
+            "disposition IN ('excluded', 'needs_review', 'eligible')",
+            name="ck_job_fit_decisions_disposition",
+        ),
+        CheckConstraint(
+            "quality_eligible = false OR "
+            "(disposition = 'eligible' AND selected_cv_id IS NOT NULL "
+            "AND selected_cv_hash IS NOT NULL AND qualification_digest IS NOT NULL)",
+            name="ck_job_fit_decisions_eligibility",
+        ),
+        CheckConstraint(
+            "profile_version IS NULL OR profile_version > 0",
+            name="ck_job_fit_decisions_profile_version",
+        ),
+        Index("ix_job_fit_decisions_job_created", "job_id", "created_at", "id"),
+        Index(
+            "ix_job_fit_decisions_disposition_created",
+            "disposition",
+            "quality_eligible",
+            "created_at",
+        ),
     )
 
 

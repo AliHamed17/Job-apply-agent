@@ -1,0 +1,63 @@
+minimum_confidence: 0.35
+fallback_cv_id: null
+cvs:
+  - id: ai-ml
+    file: ai-ml.pdf
+    title_terms: [machine, learning, למידת, מכונה]
+    skills: [python, pytorch, פייתון, למידה-עמוקה]
+    seniority: [junior, mid, senior]
+  - id: data-science
+    file: data-science.pdf
+    title_terms: [data, scientist, מדען, נתונים]
+    skills: [python, pandas, פייתון, סטטיסטיקה]
+    seniority: [junior, mid, senior]
+  - id: data-engineering
+    file: data-engineering.pdf
+    title_terms: [data, engineer, מהנדס, נתונים]
+    skills: [python, spark, פייתון, airflow]
+    seniority: [junior, mid, senior]
+  - id: backend-software
+    file: backend-software.pdf
+    title_terms: [backend, engineer, מפתח, צד-שרת]
+    skills: [java, spring, גאווה, microservices]
+    seniority: [junior, mid, senior]
+  - id: fullstack
+    file: fullstack.pdf
+    title_terms: [fullstack, developer, מפתח, פולסטאק]
+    skills: [typescript, react, טייפסקריפט, ריאקט]
+    seniority: [junior, mid, senior]
+  - id: qa-automation
+    file: qa-automation.pdf
+    title_terms: [qa, automation, בודק, אוטומציה]
+    skills: [python, selenium, פייתון, playwright]
+    seniority: [junior, mid, senior]
+  - id: devops
+    file: devops.pdf
+    title_terms: [devops, platform, דבאופס, פלטפורמה]
+    skills: [kubernetes, terraform, קוברנטיס, טרפורם]
+    seniority: [junior, mid, senior]
+  - id: cloud-infrastructure
+    file: cloud-infrastructure.pdf
+    title_terms: [cloud, infrastructure, תשתיות, ענן]
+    skills: [aws, kubernetes, איי-דבליו-אס, networking]
+    seniority: [junior, mid, senior]
+  - id: embedded-firmware
+    file: embedded-firmware.pdf
+    title_terms: [embedded, firmware, קושחה, משובצת]
+    skills: [c++, rtos, סי-פלוס-פלוס, זמן-אמת]
+    seniority: [junior, mid, senior]
+  - id: telecom-networking
+    file: telecom-networking.pdf
+    title_terms: [telecom, networking, רשתות, תקשורת]
+    skills: [5g, sctp, דור-חמישי, פרוטוקולים]
+    seniority: [junior, mid, senior]
+  - id: junior-software
+    file: junior-software.pdf
+    title_terms: [junior, software, מפתח, מתחיל]
+    skills: [python, git, פייתון, גיט]
+    seniority: [junior]
+  - id: internship
+    file: internship.pdf
+    title_terms: [software, intern, מתמחה, תוכנה]
+    skills: [python, university, פייתון, אוניברסיטה]
+    seniority: [internship]
