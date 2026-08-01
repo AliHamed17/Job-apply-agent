@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
@@ -9,6 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from core.restore_safety import quarantine_restored_runtime
 from db.models import (
     Application,
+    AutomationPolicyRevisionRecord,
+    AutopilotInspectionRun,
     Base,
     ControlPlaneApplicationRef,
     ControlPlaneReviewGrant,
@@ -337,6 +340,8 @@ def test_restore_quarantine_is_idempotent_and_preserves_confirmed_evidence(tmp_p
         db.commit()
 
         assert summary.to_dict() == {
+            "automation_policies_revoked": 0,
+            "autopilot_inspections_quarantined": 0,
             "form_plans_invalidated": 4,
             "final_permits_expired": 2,
             "review_grants_revoked": 2,
@@ -387,6 +392,97 @@ def test_restore_quarantine_is_idempotent_and_preserves_confirmed_evidence(tmp_p
         repeated = quarantine_restored_runtime(db, now=restored_at + timedelta(minutes=1))
         db.commit()
         assert repeated.to_dict() == {
+            "automation_policies_revoked": 0,
+            "autopilot_inspections_quarantined": 0,
+            "form_plans_invalidated": 0,
+            "final_permits_expired": 0,
+            "review_grants_revoked": 0,
+            "review_grant_revocations_rearmed": 0,
+            "commands_cancelled": 0,
+            "precommit_attempts_cancelled": 0,
+            "postcommit_attempts_marked_unknown": 0,
+            "applications_moved_to_review": 0,
+        }
+
+
+def test_restore_quarantine_revokes_policy_and_finishes_inspection_work(tmp_path) -> None:
+    factory = _factory(tmp_path)
+    created_at = datetime(2026, 7, 28, 8, 0)
+    restored_at = datetime(2026, 7, 28, 8, 2, tzinfo=UTC)
+    with factory() as db:
+        policy = AutomationPolicyRevisionRecord(
+            policy_id=str(uuid4()),
+            revision=1,
+            schema_version="auto-submit-policy.v1",
+            payload_json="{}",
+            payload_digest="a" * 64,
+            signing_key_id=str(uuid4()),
+            signature="A" * 86,
+            active_slot=1,
+            activated_at=created_at,
+            expires_at=created_at + timedelta(days=30),
+        )
+        queued_application = _application(db, sequence=5)
+        running_application = _application(db, sequence=6)
+        db.add(policy)
+        db.flush()
+        queued = AutopilotInspectionRun(
+            application_id=queued_application.id,
+            application_revision=1,
+            policy_revision_id=policy.id,
+            state="queued",
+        )
+        running = AutopilotInspectionRun(
+            application_id=running_application.id,
+            application_revision=1,
+            policy_revision_id=policy.id,
+            state="running",
+            claimed_at=created_at,
+            lease_expires_at=created_at + timedelta(minutes=15),
+            claim_token=str(uuid4()),
+        )
+        db.add_all([queued, running])
+        db.commit()
+
+        summary = quarantine_restored_runtime(db, now=restored_at)
+        db.commit()
+
+        assert summary.to_dict() == {
+            "automation_policies_revoked": 1,
+            "autopilot_inspections_quarantined": 2,
+            "form_plans_invalidated": 0,
+            "final_permits_expired": 0,
+            "review_grants_revoked": 0,
+            "review_grant_revocations_rearmed": 0,
+            "commands_cancelled": 0,
+            "precommit_attempts_cancelled": 0,
+            "postcommit_attempts_marked_unknown": 0,
+            "applications_moved_to_review": 2,
+        }
+        assert policy.active_slot is None
+        assert policy.revoked_at == restored_at.replace(tzinfo=None)
+        assert policy.revoked_by == "restore_quarantine"
+        assert policy.revocation_reason == "RESTORE_QUARANTINE"
+        for run in (queued, running):
+            assert run.state == "finished"
+            assert run.claimed_at is not None
+            assert run.lease_expires_at is None
+            assert run.claim_token is None
+            assert run.finished_at == restored_at.replace(tzinfo=None)
+            assert run.reason_code == "RESTORE_QUARANTINE"
+        for application in (queued_application, running_application):
+            assert application.status == JobStatus.NEEDS_REVIEW
+            assert application.needs_review_reason == "RUNTIME_NOT_READY"
+            assert application.job.status == JobStatus.NEEDS_REVIEW
+
+        repeated = quarantine_restored_runtime(
+            db,
+            now=restored_at + timedelta(minutes=1),
+        )
+        db.commit()
+        assert repeated.to_dict() == {
+            "automation_policies_revoked": 0,
+            "autopilot_inspections_quarantined": 0,
             "form_plans_invalidated": 0,
             "final_permits_expired": 0,
             "review_grants_revoked": 0,

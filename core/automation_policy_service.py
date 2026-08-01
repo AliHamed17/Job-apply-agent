@@ -40,6 +40,7 @@ from core.automation_policy_keys import (
     AutomationPolicyKeyError,
     load_automation_policy_signing_identity,
 )
+from core.config import get_settings
 from db.models import (
     Application,
     ApplicationPolicyDecision,
@@ -96,6 +97,13 @@ class PrivatePolicyBindings(TypedDict):
     cv_manifest_digest: str
     fit_qualification_digest: str
     confirmed_answer_revision: str
+
+
+class ArtifactPolicyBindings(TypedDict):
+    role_families: tuple[str, ...]
+    routing_config_digest: str
+    cv_manifest_digest: str
+    fit_qualification_digest: str
 
 
 def _aware(value: datetime) -> datetime:
@@ -291,16 +299,14 @@ def current_signed_policy(
     return record, signed
 
 
-def _private_bindings(db: Session, settings) -> PrivatePolicyBindings:
-    profile_version = latest_profile_version(db)
-    if profile_version is None:
-        raise AutomationPolicyError("PROFILE_VERSION_MISSING")
-    routing_path = Path(settings.cv_routing_path)
+def _current_artifact_bindings(settings=None) -> ArtifactPolicyBindings:
+    resolved_settings = settings or get_settings()
+    routing_path = Path(resolved_settings.cv_routing_path)
     if not routing_path.is_file():
         raise AutomationPolicyError("CV_ROUTING_CONFIG_MISSING")
     try:
         config = load_routing_config(routing_path)
-        artifacts = load_configured_cv_artifacts(config, settings.cv_directory)
+        artifacts = load_configured_cv_artifacts(config, resolved_settings.cv_directory)
         config_digest = routing_config_digest(config)
         manifest_digest = cv_manifest_digest(artifacts)
     except Exception as exc:
@@ -319,16 +325,40 @@ def _private_bindings(db: Session, settings) -> PrivatePolicyBindings:
     if not qualification.qualified or qualification.holdout_precision < 0.95:
         raise AutomationPolicyError("FIT_QUALIFICATION_NOT_PASSED")
     return {
-        "profile_version": profile_version,
         "role_families": tuple(item.id for item in config.cvs),
         "routing_config_digest": config_digest,
         "cv_manifest_digest": manifest_digest,
         "fit_qualification_digest": qualification.qualification_digest,
+    }
+
+
+def _private_bindings(db: Session, settings) -> PrivatePolicyBindings:
+    profile_version = latest_profile_version(db)
+    if profile_version is None:
+        raise AutomationPolicyError("PROFILE_VERSION_MISSING")
+    artifact_bindings = _current_artifact_bindings(settings)
+    return {
+        "profile_version": profile_version,
+        **artifact_bindings,
         "confirmed_answer_revision": confirmed_answer_revision(
             db,
             profile_version=profile_version,
         ),
     }
+
+
+def _require_current_artifact_bindings(policy: AutoSubmitPolicyV1) -> None:
+    try:
+        current = _current_artifact_bindings()
+    except Exception as exc:
+        raise AutomationPolicyError("FIT_QUALIFICATION_CHANGED") from exc
+    bindings = (
+        (current["routing_config_digest"], policy.routing_config_digest),
+        (current["cv_manifest_digest"], policy.cv_manifest_digest),
+        (current["fit_qualification_digest"], policy.fit_qualification_digest),
+    )
+    if any(not hmac.compare_digest(observed, expected) for observed, expected in bindings):
+        raise AutomationPolicyError("FIT_QUALIFICATION_CHANGED")
 
 
 def _scope_has_live_canary(db: Session, scope: QualifiedFormContractV1) -> bool:
@@ -611,6 +641,7 @@ def validate_automation_inspection_candidate(
     policy = signed.policy
     if latest_profile_version(db) != policy.profile_version:
         raise AutomationPolicyError("PROFILE_VERSION_CHANGED")
+    _require_current_artifact_bindings(policy)
     if kill_switch_active(db):
         raise AutomationPolicyError("KILL_SWITCH_ACTIVE")
     active_hours, _deadline = _active_hours_deadline(timestamp)
@@ -840,6 +871,12 @@ def evaluate_auto_submit_policy(
     policy_record, signed = active
     policy = signed.policy
     current_profile_version = latest_profile_version(db)
+    try:
+        _require_current_artifact_bindings(policy)
+    except AutomationPolicyError:
+        current_artifacts_changed = True
+    else:
+        current_artifacts_changed = False
     existing_allowed = (
         db.query(ApplicationPolicyDecision)
         .filter(
@@ -854,6 +891,10 @@ def evaluate_auto_submit_policy(
             and existing_allowed.application_revision == application.revision
             and existing_allowed.form_plan_id == plan.id
         ):
+            if current_profile_version != policy.profile_version:
+                raise AutomationPolicyError("PROFILE_VERSION_CHANGED")
+            if current_artifacts_changed:
+                raise AutomationPolicyError("FIT_QUALIFICATION_CHANGED")
             return existing_allowed
         raise AutomationPolicyError("AUTOMATION_AUTHORITY_ALREADY_RESERVED")
     fit = decision_from_record(fit_record)
@@ -893,6 +934,7 @@ def evaluate_auto_submit_policy(
         fit.routing_config_digest != policy.routing_config_digest
         or fit.cv_manifest_digest != policy.cv_manifest_digest
         or fit.qualification_digest != policy.fit_qualification_digest
+        or current_artifacts_changed
     ):
         reasons.append("FIT_QUALIFICATION_CHANGED")
     if not hmac.compare_digest(answer_revision, policy.confirmed_answer_revision):
@@ -1044,6 +1086,7 @@ def validate_current_automation_decision(
     policy = signed.policy
     if latest_profile_version(db) != policy.profile_version:
         raise AutomationPolicyError("PROFILE_VERSION_CHANGED")
+    _require_current_artifact_bindings(policy)
     if (
         policy_record.id != decision_record.policy_revision_id
         or policy.payload_digest != decision.policy_digest
@@ -1131,6 +1174,12 @@ def policy_usage_status(
         }
     policy = signed.policy
     profile_changed = latest_profile_version(db) != policy.profile_version
+    try:
+        _require_current_artifact_bindings(policy)
+    except AutomationPolicyError:
+        artifact_bindings_changed = True
+    else:
+        artifact_bindings_changed = False
     daily, hourly, _company = _usage_counts(
         db,
         company_digest=_ZERO_DIGEST,
@@ -1138,7 +1187,12 @@ def policy_usage_status(
     )
     expired = policy.expires_at <= timestamp
     return {
-        "active": not expired and not profile_changed and not bool(kill and kill.active),
+        "active": (
+            not expired
+            and not profile_changed
+            and not artifact_bindings_changed
+            and not bool(kill and kill.active)
+        ),
         "reason_code": (
             "KILL_SWITCH_ACTIVE"
             if kill and kill.active
@@ -1146,6 +1200,8 @@ def policy_usage_status(
             if expired
             else "PROFILE_VERSION_CHANGED"
             if profile_changed
+            else "FIT_QUALIFICATION_CHANGED"
+            if artifact_bindings_changed
             else None
         ),
         "policy_id": str(policy.policy_id),

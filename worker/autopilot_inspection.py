@@ -27,6 +27,7 @@ from core.application_mutations import (
     ApplicationMutationIntent,
     lock_application_for_mutation,
 )
+from core.automation_authority_fence import lock_automation_authority_fence
 from core.automation_policy_service import (
     RETRYABLE_AUTOMATION_DENIALS,
     AutomationPolicyError,
@@ -97,6 +98,7 @@ def enqueue_qualified_autopilot_inspection(
 
     timestamp = now or datetime.now(UTC)
     try:
+        lock_automation_authority_fence(db)
         validate_automation_inspection_candidate(
             db,
             application_id=application_id,
@@ -613,6 +615,7 @@ def _claim_inspection_run(
     run_id: int,
     now: datetime,
 ) -> tuple[int, str] | None:
+    lock_automation_authority_fence(db)
     query = db.query(AutopilotInspectionRun).filter(AutopilotInspectionRun.id == run_id)
     if db.bind.dialect.name == "postgresql":
         query = query.with_for_update()

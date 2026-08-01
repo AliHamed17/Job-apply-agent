@@ -107,6 +107,17 @@ _FINGERPRINT = "f" * 64
 _MODEL_DIGEST = load_qualified_local_model().digest
 
 
+def _artifact_bindings(**overrides: object) -> dict[str, object]:
+    bindings: dict[str, object] = {
+        "role_families": ("cv-ai",),
+        "routing_config_digest": _ROUTING_DIGEST,
+        "cv_manifest_digest": _MANIFEST_DIGEST,
+        "fit_qualification_digest": _QUALIFICATION_DIGEST,
+    }
+    bindings.update(overrides)
+    return bindings
+
+
 def _settings() -> Settings:
     return Settings(
         _env_file=None,
@@ -174,6 +185,11 @@ def _scenario(tmp_path, monkeypatch) -> SimpleNamespace:
     key_path = tmp_path / "automation-policy.pem"
     generate_automation_policy_signing_key(key_path)
     monkeypatch.setenv("AUTOMATION_POLICY_SIGNING_KEY_PATH", str(key_path))
+    monkeypatch.setattr(
+        policy_service,
+        "_current_artifact_bindings",
+        lambda *_args, **_kwargs: _artifact_bindings(),
+    )
     monkeypatch.setattr(
         "llm.qualification_registry.qualified_model_report_is_current",
         lambda: True,
@@ -750,6 +766,11 @@ def test_local_policy_api_requires_auth_and_exact_acknowledgements(tmp_path, mon
     )
     monkeypatch.setattr(
         policy_service,
+        "_current_artifact_bindings",
+        lambda *_args, **_kwargs: _artifact_bindings(),
+    )
+    monkeypatch.setattr(
+        policy_service,
         "lock_automation_authority_fence",
         lambda _db: activation_calls.append("authority"),
     )
@@ -947,6 +968,121 @@ def test_stale_profile_policy_cannot_reserve_new_authority(tmp_path, monkeypatch
         )
         assert decision.allowed is False
         assert "PROFILE_VERSION_CHANGED" in json.loads(decision.reason_codes_json)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    "binding_name",
+    [
+        "routing_config_digest",
+        "cv_manifest_digest",
+        "fit_qualification_digest",
+    ],
+)
+def test_changed_artifact_binding_invalidates_inspection_commit_and_status(
+    tmp_path,
+    monkeypatch,
+    binding_name: str,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    try:
+        reserved = evaluate_auto_submit_policy(
+            db,
+            application_id=scenario.application_id,
+            form_plan_id=scenario.plan_id,
+            now=_NOW,
+        )
+        assert reserved.allowed is True
+        db.commit()
+
+        monkeypatch.setattr(
+            policy_service,
+            "_current_artifact_bindings",
+            lambda *_args, **_kwargs: _artifact_bindings(**{binding_name: "9" * 64}),
+        )
+
+        with pytest.raises(AutomationPolicyError, match="FIT_QUALIFICATION_CHANGED"):
+            validate_automation_inspection_candidate(
+                db,
+                application_id=scenario.application_id,
+                now=_NOW + timedelta(minutes=1),
+            )
+        with pytest.raises(AutomationPolicyError, match="FIT_QUALIFICATION_CHANGED"):
+            validate_current_automation_decision(
+                db,
+                decision_record=reserved,
+                now=_NOW + timedelta(minutes=1),
+                lock=True,
+            )
+        status = policy_usage_status(db, now=_NOW + timedelta(minutes=1))
+        assert status["active"] is False
+        assert status["reason_code"] == "FIT_QUALIFICATION_CHANGED"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    "binding_name",
+    [
+        "routing_config_digest",
+        "cv_manifest_digest",
+        "fit_qualification_digest",
+    ],
+)
+def test_changed_artifact_binding_cannot_reserve_new_authority(
+    tmp_path,
+    monkeypatch,
+    binding_name: str,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        policy_service,
+        "_current_artifact_bindings",
+        lambda *_args, **_kwargs: _artifact_bindings(**{binding_name: "9" * 64}),
+    )
+    db = scenario.factory()
+    try:
+        decision = evaluate_auto_submit_policy(
+            db,
+            application_id=scenario.application_id,
+            form_plan_id=scenario.plan_id,
+            now=_NOW,
+        )
+        assert decision.allowed is False
+        assert "FIT_QUALIFICATION_CHANGED" in json.loads(decision.reason_codes_json)
+        assert db.query(Submission).count() == 0
+        assert db.query(SubmissionCommand).count() == 0
+    finally:
+        db.close()
+
+
+def test_unexpected_artifact_read_failure_is_a_bounded_authority_denial(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+
+    def fail_artifact_read(*_args, **_kwargs):
+        raise OSError("private artifact storage unavailable")
+
+    monkeypatch.setattr(
+        policy_service,
+        "_current_artifact_bindings",
+        fail_artifact_read,
+    )
+    db = scenario.factory()
+    try:
+        with pytest.raises(AutomationPolicyError, match="FIT_QUALIFICATION_CHANGED"):
+            validate_automation_inspection_candidate(
+                db,
+                application_id=scenario.application_id,
+                now=_NOW,
+            )
+        status = policy_usage_status(db, now=_NOW)
+        assert status["active"] is False
+        assert status["reason_code"] == "FIT_QUALIFICATION_CHANGED"
     finally:
         db.close()
 
