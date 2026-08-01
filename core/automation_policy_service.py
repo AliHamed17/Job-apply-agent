@@ -16,7 +16,7 @@ from typing import Any, TypedDict
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -62,6 +62,7 @@ from submitters.platforms import adapter_for_platform, adapter_for_url
 _ZERO_DIGEST = "0" * 64
 _REASON_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _JERUSALEM = ZoneInfo("Asia/Jerusalem")
+_AUTOMATION_AUTHORITY_FENCE_ID = 5_354_025_376_604_503_901
 
 
 class AutomationPolicyError(ValueError):
@@ -82,6 +83,16 @@ class PrivatePolicyBindings(TypedDict):
     cv_manifest_digest: str
     fit_qualification_digest: str
     confirmed_answer_revision: str
+
+
+def lock_automation_authority_fence(db: Session) -> None:
+    """Serialize policy/kill mutations with irreversible-boundary admission."""
+
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": _AUTOMATION_AUTHORITY_FENCE_ID},
+        )
 
 
 def _aware(value: datetime) -> datetime:
@@ -377,6 +388,7 @@ def activate_auto_submit_policy(
     if any(not _scope_has_live_canary(db, scope) for scope in scopes):
         raise AutomationPolicyError("AUTOMATION_POLICY_FORM_SCOPE_NOT_QUALIFIED")
 
+    lock_automation_authority_fence(db)
     current = _active_policy_record(db, lock=True)
     next_revision = (
         int(
@@ -446,6 +458,7 @@ def revoke_auto_submit_policy(
 ) -> AutomationPolicyRevisionRecord:
     if _REASON_RE.fullmatch(reason_code) is None:
         raise AutomationPolicyError("AUTOMATION_POLICY_REVOCATION_INVALID")
+    lock_automation_authority_fence(db)
     record = _active_policy_record(db, lock=True)
     if record is None:
         raise AutomationPolicyError("AUTOMATION_POLICY_NOT_ACTIVE")
@@ -486,6 +499,7 @@ def set_automation_kill_switch(
         raise AutomationPolicyError("REMOTE_KILL_CAN_ONLY_ACTIVATE")
     if command_digest is not None and re.fullmatch(r"^[0-9a-f]{64}$", command_digest) is None:
         raise AutomationPolicyError("KILL_SWITCH_COMMAND_INVALID")
+    lock_automation_authority_fence(db)
     if command_digest is not None:
         replay = (
             db.query(AutomationKillSwitchEvent)
@@ -667,7 +681,6 @@ def validate_automation_inspection_candidate(
 def _usage_counts(
     db: Session,
     *,
-    policy_revision_id: int,
     company_digest: str,
     now: datetime,
 ) -> tuple[int, int, int]:
@@ -677,7 +690,6 @@ def _usage_counts(
     hour_start = _aware(now) - timedelta(hours=1)
     company_start = _aware(now) - timedelta(days=14)
     base = db.query(ApplicationPolicyDecision.id).filter(
-        ApplicationPolicyDecision.policy_revision_id == policy_revision_id,
         ApplicationPolicyDecision.allowed.is_(True),
     )
     daily = base.filter(ApplicationPolicyDecision.evaluated_at >= _naive(day_start)).count()
@@ -797,6 +809,7 @@ def evaluate_auto_submit_policy(
     """Evaluate and reserve authority while holding exact application/policy rows."""
 
     timestamp = _aware(now or datetime.now(UTC))
+    lock_automation_authority_fence(db)
     application_query = db.query(Application).filter(Application.id == application_id)
     if db.bind.dialect.name == "postgresql":
         application_query = application_query.with_for_update()
@@ -922,7 +935,6 @@ def evaluate_auto_submit_policy(
         reasons.append("FORM_CONTRACT_NOT_QUALIFIED")
     daily, hourly, company = _usage_counts(
         db,
-        policy_revision_id=policy_record.id,
         company_digest=company_digest,
         now=timestamp,
     )
@@ -995,6 +1007,7 @@ def validate_current_automation_decision(
     if decision_record is None:
         raise AutomationPolicyError("AUTOMATION_DECISION_REQUIRED")
     if lock:
+        lock_automation_authority_fence(db)
         query = db.query(ApplicationPolicyDecision).filter(
             ApplicationPolicyDecision.id == decision_record.id
         )
@@ -1106,7 +1119,6 @@ def policy_usage_status(
     policy = signed.policy
     daily, hourly, _company = _usage_counts(
         db,
-        policy_revision_id=record.id,
         company_digest=_ZERO_DIGEST,
         now=timestamp,
     )
@@ -1153,6 +1165,7 @@ __all__ = [
     "evaluate_auto_submit_policy",
     "form_contract_digest",
     "kill_switch_active",
+    "lock_automation_authority_fence",
     "latest_kill_switch_event",
     "policy_usage_status",
     "revoke_auto_submit_policy",

@@ -10,9 +10,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+from core.automation_policy_service import (
+    _AUTOMATION_AUTHORITY_FENCE_ID,
+    lock_automation_authority_fence,
+)
 from db.models import (
     Application,
     AutomationPolicyRevisionRecord,
@@ -175,3 +179,30 @@ def test_two_workers_create_and_claim_one_exact_inspection(monkeypatch) -> None:
         finally:
             cleanup.close()
             engine.dispose()
+
+
+def test_automation_authority_fence_is_transaction_scoped() -> None:
+    engine, factory = _factory()
+    owner = factory()
+    contender = factory()
+    try:
+        lock_automation_authority_fence(owner)
+        acquired_while_held = contender.scalar(
+            text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+            {"lock_id": _AUTOMATION_AUTHORITY_FENCE_ID},
+        )
+        assert acquired_while_held is False
+        contender.rollback()
+
+        owner.rollback()
+        acquired_after_release = contender.scalar(
+            text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+            {"lock_id": _AUTOMATION_AUTHORITY_FENCE_ID},
+        )
+        assert acquired_after_release is True
+    finally:
+        owner.rollback()
+        contender.rollback()
+        owner.close()
+        contender.close()
+        engine.dispose()

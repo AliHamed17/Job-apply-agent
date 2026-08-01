@@ -18,6 +18,7 @@ from core.async_lifecycle import (
     SameEventLoopLifecycle,
     cleanup_prepared_action_if_supported,
 )
+from core.automation_policy_service import lock_automation_authority_fence
 from core.config import Settings, get_settings
 from core.metrics import GOVERNOR_DENIALS
 from core.operational_metrics import (
@@ -419,7 +420,7 @@ def _validate_attempt_automation_authority(
             db,
             decision_record=decision,
             now=_aware(now),
-            lock=False,
+            lock=True,
         )
     except AutomationPolicyError as exc:
         if exc.reason_code in {"KILL_SWITCH_ACTIVE", "OUTSIDE_ACTIVE_HOURS"}:
@@ -674,6 +675,7 @@ def _enter_commit_boundary(
     governor_gate=None,
 ) -> tuple[Submission, SubmissionCommand] | None:
     """Fence stale workers and atomically consume authority before one action."""
+    lock_automation_authority_fence(db)
     context = _lock_claimed_context(
         db,
         command_id=command_id,

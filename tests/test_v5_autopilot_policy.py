@@ -83,6 +83,7 @@ from worker.autopilot_inspection import (
     _finalize_autopilot_dispatch_result,
     _finish_inspection_run,
     enqueue_qualified_autopilot_inspection,
+    execute_qualified_autopilot_inspection,
 )
 from worker.control_plane_runner import (
     ControlPlaneRunnerError,
@@ -92,6 +93,7 @@ from worker.control_plane_runner import (
 from worker.submission_commands import (
     _CommitBoundaryRejectedError,
     _enter_commit_boundary,
+    _validate_attempt_automation_authority,
     claim_submission_command,
 )
 
@@ -398,6 +400,46 @@ def test_dispatch_quarantine_is_persisted_on_the_application(tmp_path, monkeypat
     assert application is not None
     assert application.needs_review_reason == "RUNTIME_NOT_READY"
     db.close()
+
+
+def test_unexpected_inspection_failure_persists_quarantine(tmp_path, monkeypatch) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    assert queued.run_id is not None
+    db.close()
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.get_session_factory",
+        lambda: scenario.factory,
+    )
+
+    def fail_inspection(*_args, **_kwargs):
+        raise RuntimeError("unexpected private browser failure")
+
+    monkeypatch.setattr(
+        "worker.autopilot_inspection.inspect_and_dispatch_qualified_autopilot",
+        fail_inspection,
+    )
+    result = execute_qualified_autopilot_inspection(
+        queued.run_id,
+        now=_NOW + timedelta(seconds=1),
+    )
+
+    assert result["state"] == "quarantined"
+    assert result["reason_code"] == "FORM_INSPECTION_FAILED"
+    assert result["lease_finished"] is True
+    verify = scenario.factory()
+    application = verify.get(Application, scenario.application_id)
+    run = verify.get(AutopilotInspectionRun, queued.run_id)
+    assert application.needs_review_reason == "FORM_INSPECTION_FAILED"
+    assert run.state == "finished"
+    assert run.reason_code == "FORM_INSPECTION_FAILED"
+    verify.close()
 
 
 def test_policy_contract_is_signed_frozen_and_strictly_bounded(tmp_path) -> None:
@@ -737,6 +779,63 @@ def test_policy_limits_reserve_before_command_creation(
     db.close()
 
 
+def test_usage_limits_span_superseded_policy_revisions(tmp_path, monkeypatch) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    reserved = evaluate_auto_submit_policy(
+        db,
+        application_id=scenario.application_id,
+        form_plan_id=scenario.plan_id,
+        now=_NOW,
+    )
+    assert reserved.allowed is True
+
+    superseded_at = _NOW + timedelta(minutes=1)
+    old_record = db.get(AutomationPolicyRevisionRecord, scenario.policy_record_id)
+    old_record.active_slot = None
+    old_record.revoked_at = superseded_at.replace(tzinfo=None)
+    old_record.revoked_by = "local_operator"
+    old_record.revocation_reason = "AUTOMATION_POLICY_SUPERSEDED"
+    next_policy = scenario.policy.model_copy(
+        update={
+            "policy_id": uuid4(),
+            "revision": 2,
+            "daily_limit": 1,
+            "hourly_limit": 1,
+            "activated_at": superseded_at,
+            "expires_at": superseded_at + timedelta(days=30),
+        }
+    )
+    signed = sign_auto_submit_policy(
+        next_policy,
+        key_id=scenario.identity.key_id,
+        private_key=scenario.identity.private_key,
+    )
+    db.add(
+        AutomationPolicyRevisionRecord(
+            policy_id=str(next_policy.policy_id),
+            revision=next_policy.revision,
+            schema_version=next_policy.schema_version,
+            payload_json=canonical_model_bytes(next_policy).decode("utf-8"),
+            payload_digest=next_policy.payload_digest,
+            signing_key_id=str(scenario.identity.key_id),
+            signature=signed.signature,
+            active_slot=1,
+            activated_at=next_policy.activated_at.replace(tzinfo=None),
+            expires_at=next_policy.expires_at.replace(tzinfo=None),
+        )
+    )
+    db.commit()
+
+    status = policy_usage_status(db, now=superseded_at + timedelta(minutes=1))
+    assert status["revision"] == 2
+    assert status["daily_used"] == 1
+    assert status["hourly_used"] == 1
+    assert status["daily_remaining"] == 0
+    assert status["hourly_remaining"] == 0
+    db.close()
+
+
 def test_policy_decision_attempt_permit_and_command_share_one_exact_binding(
     tmp_path,
     monkeypatch,
@@ -953,6 +1052,91 @@ def test_stale_inspection_lease_is_reclaimed_without_accepting_old_completion(
     assert row.state == "finished"
     assert row.reason_code == "COMMAND_QUEUED"
     db.close()
+
+
+def test_transient_claim_denial_remains_retryable(tmp_path, monkeypatch) -> None:
+    scenario = _scenario(tmp_path, monkeypatch)
+    db = scenario.factory()
+    queued = enqueue_qualified_autopilot_inspection(
+        db,
+        application_id=scenario.application_id,
+        now=_NOW,
+    )
+    assert queued.run_id is not None
+    set_automation_kill_switch(
+        db,
+        active=True,
+        source=PolicyAuthoritySource.LOCAL_OPERATOR,
+        reason_code="OPERATOR_STOP",
+        now=_NOW,
+    )
+    db.commit()
+
+    assert _claim_inspection_run(db, run_id=queued.run_id, now=_NOW) is None
+    row = db.get(AutopilotInspectionRun, queued.run_id)
+    assert row.state == "queued"
+    assert row.reason_code is None
+    assert row.finished_at is None
+
+    set_automation_kill_switch(
+        db,
+        active=False,
+        source=PolicyAuthoritySource.LOCAL_OPERATOR,
+        reason_code="OPERATOR_RESUME",
+        now=_NOW + timedelta(seconds=1),
+    )
+    db.commit()
+    claimed = _claim_inspection_run(
+        db,
+        run_id=queued.run_id,
+        now=_NOW + timedelta(seconds=2),
+    )
+    assert claimed is not None
+    assert claimed[0] == scenario.application_id
+    db.close()
+
+
+def test_commit_authority_validation_uses_locked_governor_fence(monkeypatch) -> None:
+    observed: list[bool] = []
+    decision = SimpleNamespace(decision_digest="a" * 64)
+    attempt = SimpleNamespace(
+        authority_kind="qualified_autopilot",
+        automation_policy_decision=decision,
+        automation_policy_decision_digest=decision.decision_digest,
+    )
+
+    def validate(*_args, lock: bool, **_kwargs):
+        observed.append(lock)
+
+    monkeypatch.setattr(policy_service, "validate_current_automation_decision", validate)
+    assert _validate_attempt_automation_authority(object(), attempt, now=_NOW) == (None, None)
+    assert observed == [True]
+
+
+def test_commit_boundary_acquires_authority_fence_before_claim_context(monkeypatch) -> None:
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        "worker.submission_commands.lock_automation_authority_fence",
+        lambda _db: events.append("authority_fence"),
+    )
+
+    def no_context(*_args, **_kwargs):
+        events.append("claim_context")
+        return None
+
+    monkeypatch.setattr("worker.submission_commands._lock_claimed_context", no_context)
+    result = _enter_commit_boundary(
+        object(),
+        command_id=1,
+        expected_claim_token="claim-token",
+        job_url_hash="a" * 64,
+        action=SimpleNamespace(),
+        now=_NOW,
+    )
+
+    assert result is None
+    assert events == ["authority_fence", "claim_context"]
 
 
 def test_signed_remote_kill_is_replay_protected_and_can_never_clear(tmp_path) -> None:

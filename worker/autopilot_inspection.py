@@ -61,6 +61,7 @@ class AutopilotInspectionLeaseLostError(RuntimeError):
 _REASON_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 _INSPECTION_LEASE = timedelta(minutes=15)
 _SCAN_BATCH_SIZE = 25
+_TRANSIENT_CLAIM_DENIALS = frozenset({"KILL_SWITCH_ACTIVE", "OUTSIDE_ACTIVE_HOURS"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -552,6 +553,15 @@ def _claim_inspection_run(
         if application is None or application.revision != row.application_revision:
             raise AutomationPolicyError("APPLICATION_REVISION_CHANGED")
     except AutomationPolicyError as exc:
+        if exc.reason_code in _TRANSIENT_CLAIM_DENIALS:
+            row.state = "queued"
+            row.claimed_at = None
+            row.lease_expires_at = None
+            row.claim_token = None
+            row.finished_at = None
+            row.reason_code = None
+            db.commit()
+            return None
         row.state = "finished"
         row.claimed_at = row.claimed_at or timestamp
         row.lease_expires_at = None
@@ -603,13 +613,17 @@ def _finish_inspection_run(
     return True
 
 
-def execute_qualified_autopilot_inspection(run_id: int) -> dict[str, object]:
+def execute_qualified_autopilot_inspection(
+    run_id: int,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
     """Claim one reversible inspection lease, execute it, and close the lease."""
 
     db = get_session_factory()()
-    now = datetime.now(UTC)
+    execution_at = now or datetime.now(UTC)
     try:
-        claimed = _claim_inspection_run(db, run_id=run_id, now=now)
+        claimed = _claim_inspection_run(db, run_id=run_id, now=execution_at)
     finally:
         db.close()
     if claimed is None:
@@ -622,7 +636,34 @@ def execute_qualified_autopilot_inspection(run_id: int) -> dict[str, object]:
             claim_token=claim_token,
         )
     except Exception:
-        result = {"state": "quarantined", "reason_code": "FORM_INSPECTION_FAILED"}
+        quarantine_db = get_session_factory()()
+        try:
+            try:
+                _mark_quarantined(
+                    quarantine_db,
+                    application_id=application_id,
+                    reason_code="FORM_INSPECTION_FAILED",
+                    inspection_run_id=run_id,
+                    claim_token=claim_token,
+                    now=execution_at,
+                )
+            except AutopilotInspectionLeaseLostError as exc:
+                result = {"state": "not_claimed", "reason_code": exc.reason_code}
+            except Exception:
+                quarantine_db.rollback()
+                return {
+                    "state": "retryable",
+                    "reason_code": "FORM_INSPECTION_FAILED",
+                    "run_id": run_id,
+                    "lease_finished": False,
+                }
+            else:
+                result = {
+                    "state": "quarantined",
+                    "reason_code": "FORM_INSPECTION_FAILED",
+                }
+        finally:
+            quarantine_db.close()
     terminal_reason = (
         "COMMAND_QUEUED"
         if result.get("state") == "queued"
@@ -635,7 +676,7 @@ def execute_qualified_autopilot_inspection(run_id: int) -> dict[str, object]:
             run_id=run_id,
             claim_token=claim_token,
             reason_code=terminal_reason,
-            now=datetime.now(UTC),
+            now=execution_at if now is not None else datetime.now(UTC),
         )
     finally:
         finish_db.close()
