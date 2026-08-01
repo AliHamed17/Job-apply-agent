@@ -164,6 +164,8 @@ class ApplicationResponse(BaseModel):
     selected_cv_hash: str | None = None
     profile_version: int | None = None
     cv_routing_confidence: float | None = None
+    cv_routing_margin: float | None = None
+    job_fit_decision_id: int | None = None
     cv_routing_evidence: list[str] = Field(default_factory=list)
     cv_routing_fallback_reason: str | None = None
     cv_override_id: str | None = None
@@ -862,6 +864,8 @@ async def list_applications(
                 selected_cv_hash=app.selected_cv_hash,
                 profile_version=app.profile_version,
                 cv_routing_confidence=app.cv_routing_confidence,
+                cv_routing_margin=app.cv_routing_margin,
+                job_fit_decision_id=app.job_fit_decision_id,
                 cv_routing_evidence=_json_list(app.cv_routing_evidence),
                 cv_routing_fallback_reason=app.cv_routing_fallback_reason,
                 cv_override_id=app.cv_override_id,
@@ -943,6 +947,8 @@ async def get_application(app_id: int, db: Session = Depends(get_db)):
         selected_cv_hash=app.selected_cv_hash,
         profile_version=app.profile_version,
         cv_routing_confidence=app.cv_routing_confidence,
+        cv_routing_margin=app.cv_routing_margin,
+        job_fit_decision_id=app.job_fit_decision_id,
         cv_routing_evidence=_json_list(app.cv_routing_evidence),
         cv_routing_fallback_reason=app.cv_routing_fallback_reason,
         cv_override_id=app.cv_override_id,

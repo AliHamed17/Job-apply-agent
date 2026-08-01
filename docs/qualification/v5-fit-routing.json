@@ -1,0 +1,178 @@
+{
+  "schema_version": "fit-routing-report.v1",
+  "scope": "sanitized synthetic fixture only",
+  "runtime_authority": false,
+  "runtime_note": "Personal autopilot remains disabled until a private qualification is bound to the exact local CV hashes and routing configuration.",
+  "dataset": {
+    "digest": "24edfb70b1f00aed477161debfdb1996878b9b55a75e5b6b18ab08a89f1fdd19",
+    "cases": 240,
+    "train_cases": 192,
+    "holdout_cases": 48,
+    "families": [
+      "ai-ml",
+      "data-science",
+      "data-engineering",
+      "backend-software",
+      "fullstack",
+      "qa-automation",
+      "devops",
+      "cloud-infrastructure",
+      "embedded-firmware",
+      "telecom-networking",
+      "junior-software",
+      "internship"
+    ],
+    "languages": [
+      "en",
+      "he"
+    ]
+  },
+  "selected_thresholds": {
+    "minimum_fit_score": 85.0,
+    "minimum_routing_confidence": 0.55,
+    "minimum_routing_margin": 0.08
+  },
+  "train": {
+    "cases": 192,
+    "auto_eligible_predictions": 85,
+    "auto_eligible_precision": 0.988235,
+    "auto_eligible_coverage": 0.442708,
+    "routing_predictions": 186,
+    "routing_precision": 1.0,
+    "fit_eligible_predictions": 85,
+    "fit_precision": 0.988235,
+    "abstention_rate": 0.244792,
+    "unsupported_required_field_rate": 0.182292,
+    "cv_selection_confusion_matrix": {
+      "ai-ml": {
+        "ai-ml": 16
+      },
+      "backend-software": {
+        "backend-software": 16
+      },
+      "cloud-infrastructure": {
+        "cloud-infrastructure": 16
+      },
+      "data-engineering": {
+        "data-engineering": 16
+      },
+      "data-science": {
+        "data-science": 16
+      },
+      "devops": {
+        "devops": 16
+      },
+      "embedded-firmware": {
+        "embedded-firmware": 16
+      },
+      "fullstack": {
+        "fullstack": 16
+      },
+      "internship": {
+        "internship": 16
+      },
+      "junior-software": {
+        "junior-software": 16
+      },
+      "qa-automation": {
+        "qa-automation": 16
+      },
+      "telecom-networking": {
+        "telecom-networking": 16
+      }
+    },
+    "fit_disposition_confusion_matrix": {
+      "eligible": {
+        "eligible": 84
+      },
+      "excluded": {
+        "excluded": 60
+      },
+      "needs_review": {
+        "eligible": 1,
+        "needs_review": 47
+      }
+    }
+  },
+  "holdout": {
+    "cases": 48,
+    "auto_eligible_predictions": 12,
+    "auto_eligible_precision": 1.0,
+    "auto_eligible_coverage": 0.25,
+    "routing_predictions": 48,
+    "routing_precision": 1.0,
+    "fit_eligible_predictions": 12,
+    "fit_precision": 1.0,
+    "abstention_rate": 0.5,
+    "unsupported_required_field_rate": 0.25,
+    "cv_selection_confusion_matrix": {
+      "ai-ml": {
+        "ai-ml": 4
+      },
+      "backend-software": {
+        "backend-software": 4
+      },
+      "cloud-infrastructure": {
+        "cloud-infrastructure": 4
+      },
+      "data-engineering": {
+        "data-engineering": 4
+      },
+      "data-science": {
+        "data-science": 4
+      },
+      "devops": {
+        "devops": 4
+      },
+      "embedded-firmware": {
+        "embedded-firmware": 4
+      },
+      "fullstack": {
+        "fullstack": 4
+      },
+      "internship": {
+        "internship": 4
+      },
+      "junior-software": {
+        "junior-software": 4
+      },
+      "qa-automation": {
+        "qa-automation": 4
+      },
+      "telecom-networking": {
+        "telecom-networking": 4
+      }
+    },
+    "fit_disposition_confusion_matrix": {
+      "eligible": {
+        "eligible": 12
+      },
+      "excluded": {
+        "excluded": 12
+      },
+      "needs_review": {
+        "needs_review": 24
+      }
+    }
+  },
+  "qualified": true,
+  "qualification": {
+    "schema_version": "fit-qualification.v1",
+    "algorithm_version": "job-fit.v1",
+    "routing_config_digest": "26eca59da3ba1b1ce83356cc474b2f14f1f206521fbbcabf2b332bc0cae990b6",
+    "cv_manifest_digest": "921b5a16c71bc851d22b2f049a1bc04891c3963a3d2e4d5355772963a7f30ca6",
+    "dataset_digest": "24edfb70b1f00aed477161debfdb1996878b9b55a75e5b6b18ab08a89f1fdd19",
+    "thresholds": {
+      "minimum_fit_score": 85.0,
+      "minimum_routing_confidence": 0.55,
+      "minimum_routing_margin": 0.08
+    },
+    "labeled_cases": 240,
+    "holdout_cases": 48,
+    "holdout_precision": 1.0,
+    "holdout_coverage": 0.25,
+    "qualified": true,
+    "created_at": "2026-08-01T00:00:00Z"
+  },
+  "candidate_count": 45
+}

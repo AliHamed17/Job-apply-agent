@@ -149,6 +149,19 @@ jobs:
           discovery/search_intents.py discovery/settings.py
           discovery/source_adapters.py
           worker/discovery_tasks.py
+      - name: Typed v5 calibrated fit and routing
+        run: >
+          mypy --follow-imports=skip --ignore-missing-imports
+          --disable-error-code var-annotated
+          --disable-error-code assignment
+          --disable-error-code arg-type
+          --disable-error-code misc
+          --disable-error-code union-attr
+          --disable-error-code return-value
+          match/job_fit.py match/job_fit_runtime.py match/job_fit_store.py
+          api/routes/jobs.py worker/tasks.py
+          scripts/evaluate_v5_fit_routing.py
+          scripts/qualify_local_fit_routing.py
       - name: Typed local intelligence and form planning
         run: >
           mypy --follow-imports=skip --ignore-missing-imports
@@ -185,11 +198,16 @@ jobs:
         run: |
           python scripts/evaluate_v4_quality.py --check
           python scripts/build_adapter_qualification_matrix.py --check
+          python scripts/build_v5_fit_routing_dataset.py
+          python scripts/evaluate_v5_fit_routing.py
           git diff --exit-code -- \
             docs/qualification/v4-quality-baseline.json \
             docs/qualification/v4-quality-baseline.md \
             docs/qualification/adapter-matrix.json \
-            docs/qualification/adapter-matrix.md
+            docs/qualification/adapter-matrix.md \
+            tests/fixtures/v5/fit_routing_240.json \
+            docs/qualification/v5-fit-routing.json \
+            docs/qualification/v5-fit-routing.md
       - name: Exact local-model qualification artifact
         run: |
           python scripts/build_v4_local_model_material_fixtures.py
@@ -232,6 +250,9 @@ jobs:
           profile/builder.py profile/cv_content_cache.py profile/cv_facts.py
           profile/cv_intake.py
           profile/cv_routing_llm.py profile/models.py
+          match/job_fit.py match/job_fit_runtime.py match/job_fit_store.py
+          scripts/build_v5_fit_routing_dataset.py
+          scripts/evaluate_v5_fit_routing.py scripts/qualify_local_fit_routing.py
           scripts/evaluate_v4_local_model_qualification.py
           scripts/build_v4_local_model_material_fixtures.py
           scripts/build_adapter_qualification_matrix.py

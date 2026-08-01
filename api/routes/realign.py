@@ -110,6 +110,7 @@ async def realign_application(
     routing_path = Path(settings.cv_routing_path)
     selected_cv_id = payload.forced_cv_id
     confidence = 1.0 if payload.forced_cv_id else 0.0
+    routing_margin = 1.0 if payload.forced_cv_id else 0.0
     evidence = ["user_forced_alignment"] if payload.forced_cv_id else []
     fallback_reason = None
     configured_cv_artifacts = {}
@@ -143,6 +144,7 @@ async def realign_application(
 
         selected_cv_id = decision.selected_cv_id
         confidence = decision.confidence
+        routing_margin = 0.0
         evidence = decision.matched_evidence
         fallback_reason = decision.fallback_reason
 
@@ -227,8 +229,10 @@ async def realign_application(
     app.recruiter_message = generated.recruiter_message
     app.qa_answers = json.dumps(generated.qa_answers)
     app.cv_routing_confidence = confidence
+    app.cv_routing_margin = routing_margin
     app.cv_routing_evidence = json.dumps(evidence)
     app.cv_routing_fallback_reason = fallback_reason
+    app.job_fit_decision_id = None
     from core.material_audit import material_review_reason, persist_material_audit
 
     material_blockers = persist_material_audit(app, generated, selected_cv)

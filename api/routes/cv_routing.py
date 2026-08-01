@@ -72,6 +72,7 @@ def _persist_decision(db: Session, application: Application, decision: RoutingDe
     application.selected_cv_id = decision.selected_cv_id
     application.profile_version = latest_profile.version if latest_profile else None
     application.cv_routing_confidence = decision.confidence
+    application.cv_routing_margin = None
     application.cv_routing_evidence = json.dumps(decision.matched_evidence)
     application.cv_routing_fallback_reason = decision.fallback_reason
 
@@ -155,6 +156,7 @@ async def override_application_cv(
     application.cv_override_id = cv.id
     application.selected_cv_id = cv.id
     application.cv_routing_confidence = 1.0
+    application.cv_routing_margin = 1.0
     application.cv_routing_evidence = json.dumps(["user_override"])
     application.cv_routing_fallback_reason = None
     latest = db.query(UserProfileVersion).order_by(UserProfileVersion.version.desc()).first()
