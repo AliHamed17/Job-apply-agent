@@ -58,9 +58,13 @@ def test_final_images_remove_build_only_python_packaging_tools() -> None:
 def test_enterprise_ca_is_an_optional_buildkit_secret_without_tls_bypass() -> None:
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
     compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
-    helper = Path("scripts/docker_build_with_optional_ca.sh").read_text(encoding="utf-8")
+    helper_path = Path("scripts/docker_build_with_optional_ca.sh")
+    helper = helper_path.read_text(encoding="utf-8")
     marker = Path("config/empty-enterprise-ca.txt").read_text(encoding="utf-8")
+    attributes = Path(".gitattributes").read_text(encoding="utf-8")
 
+    assert "*.sh text eol=lf" in attributes
+    assert b"\r\n" not in helper_path.read_bytes()
     assert dockerfile.count("--mount=type=secret,id=enterprise_ca,required=false") == 3
     assert dockerfile.count("docker_build_with_optional_ca.sh") == 3
     assert compose["secrets"]["job-agent-enterprise-ca"]["file"] == (
