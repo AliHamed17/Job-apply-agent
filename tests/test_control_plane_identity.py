@@ -7,12 +7,17 @@ import io
 import json
 import os
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import UUID
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from control_plane.job_control_plane.config import build_identity_bundle_digest
 from scripts import control_plane_identity as identity_module
@@ -57,6 +62,26 @@ def _unprotector(value: bytes) -> bytes:
     prefix = b"test-protected:"
     assert value.startswith(prefix)
     return value.removeprefix(prefix)[::-1]
+
+
+def _test_ca_certificate(tmp_path: Path) -> tuple[Path, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test enterprise CA")])
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(private_key, hashes.SHA256())
+    )
+    path = (tmp_path / "enterprise-ca.pem").resolve()
+    path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _empty_vercel_metadata(
@@ -1581,6 +1606,105 @@ def test_vercel_metadata_reader_stops_before_buffering_unbounded_stdout(
             tmp_path.resolve(),
             os.environ,
         )
+
+
+def test_sanitized_vercel_environment_uses_only_explicit_pinned_ca(tmp_path: Path) -> None:
+    certificate, digest = _test_ca_certificate(tmp_path)
+    trust = identity_module._select_vercel_ca_trust(certificate, digest)
+    source = {
+        "APPDATA": str(tmp_path / "appdata"),
+        "NODE_EXTRA_CA_CERTS": str(tmp_path / "ambient-untrusted.pem"),
+        "PATH": "must-not-leak",
+    }
+
+    without_trust = identity_module._sanitized_vercel_environment(source)
+    with_trust = identity_module._sanitized_vercel_environment(source, ca_trust=trust)
+
+    assert "NODE_EXTRA_CA_CERTS" not in without_trust
+    assert "PATH" not in with_trust
+    assert with_trust["NODE_EXTRA_CA_CERTS"] == str(certificate)
+    assert with_trust["APPDATA"] == source["APPDATA"]
+
+
+def test_configure_vercel_rejects_partial_ca_trust_configuration(tmp_path: Path) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(tmp_path)
+    certificate, digest = _test_ca_certificate(tmp_path)
+    common = {
+        "root": root,
+        "repository_root": repository,
+        "vercel_cli": cli,
+        "vercel_cli_sha256": cli_digest,
+        "vercel_cli_version": CLI_VERSION,
+        "vercel_cwd": vercel_cwd,
+        "environment": "production",
+        "project": PROJECT_ID,
+        "scope": SCOPE_ID,
+        "dry_run": True,
+        "platform_name": "nt",
+    }
+
+    with pytest.raises(IdentityProvisioningError, match="VERCEL_CA_TRUST_MODE_INVALID"):
+        configure_vercel_identity(**common, vercel_ca_certificate=certificate)
+    with pytest.raises(IdentityProvisioningError, match="VERCEL_CA_TRUST_MODE_INVALID"):
+        configure_vercel_identity(**common, vercel_ca_certificate_sha256=digest)
+    with pytest.raises(
+        IdentityProvisioningError,
+        match="VERCEL_CA_CERTIFICATE_DIGEST_MISMATCH",
+    ):
+        configure_vercel_identity(
+            **common,
+            vercel_ca_certificate=certificate,
+            vercel_ca_certificate_sha256="0" * 64,
+        )
+
+
+def test_configure_vercel_rehashes_enterprise_ca_before_each_write(tmp_path: Path) -> None:
+    repository, root, _runtime_env, cli, vercel_cwd, cli_digest = _test_identity(tmp_path)
+    certificate, digest = _test_ca_certificate(tmp_path)
+    calls = 0
+    seen_environments: list[dict[str, str]] = []
+
+    def runner(
+        _executable: Path,
+        _arguments: object,
+        _stdin_value: str,
+        _cwd: Path,
+        environment: object,
+    ) -> int:
+        nonlocal calls
+        calls += 1
+        seen_environments.append(dict(environment))  # type: ignore[arg-type]
+        certificate.write_bytes(certificate.read_bytes() + b"\n")
+        return 0
+
+    with pytest.raises(
+        IdentityProvisioningError,
+        match="VERCEL_CA_CERTIFICATE_DIGEST_MISMATCH",
+    ):
+        configure_vercel_identity(
+            root=root,
+            repository_root=repository,
+            vercel_cli=cli,
+            vercel_cli_sha256=cli_digest,
+            vercel_ca_certificate=certificate,
+            vercel_ca_certificate_sha256=digest,
+            vercel_cli_version=CLI_VERSION,
+            vercel_cwd=vercel_cwd,
+            environment="production",
+            project=PROJECT_ID,
+            scope=SCOPE_ID,
+            runner=runner,
+            metadata_reader=_empty_vercel_metadata,
+            version_reader=lambda _executable, _cwd, environment: (
+                CLI_VERSION
+                if environment.get("NODE_EXTRA_CA_CERTS") == str(certificate)
+                else "missing-ca"
+            ),
+            unprotector=_unprotector,
+            platform_name="nt",
+        )
+    assert calls == 1
+    assert seen_environments[0]["NODE_EXTRA_CA_CERTS"] == str(certificate)
 
 
 def test_configure_vercel_node_js_rehashes_entrypoint_before_each_write(

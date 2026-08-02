@@ -31,6 +31,7 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -58,6 +59,7 @@ _TRANSIENT_IDENTITY_PUBLISH_ERRNOS = frozenset({errno.EACCES, errno.EPERM})
 _TRANSIENT_IDENTITY_PUBLISH_WINERRORS = frozenset({5, 32, 33})
 _IDENTITY_ATTESTATION_CONTEXT = b"JobApplyAgent/control-identity-bundle/v2\0"
 _MAX_VERCEL_METADATA_BYTES = 2 * 1024 * 1024
+_MAX_VERCEL_CA_BYTES = 1024 * 1024
 _VERCEL_ENV_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _IDENTITY_DERIVED_VERCEL_VARIABLES = (
     "CONTROL_OPERATOR_TOKEN",
@@ -191,6 +193,14 @@ class VercelCliInvocation:
     node_sha256: str | None = None
     js_entrypoint: Path | None = None
     js_entrypoint_sha256: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VercelCaTrust:
+    """Explicitly pinned public CA bundle for one Vercel CLI flow."""
+
+    certificate: Path
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1374,6 +1384,71 @@ def _validate_vercel_js_entrypoint(path: Path, *, expected_digest: str) -> Path:
     return resolved
 
 
+def _validate_vercel_ca_certificate(path: Path, *, expected_digest: str) -> Path:
+    if (
+        not path.is_absolute()
+        or _is_unc(path)
+        or not _is_local_fixed_ntfs_path(path)
+        or _is_onedrive_path(path)
+        or _has_reparse_ancestor(path)
+    ):
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_INVALID")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_INVALID") from exc
+    if not resolved.is_file() or resolved.suffix.casefold() != ".pem":
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_INVALID")
+    try:
+        size = resolved.stat().st_size
+        payload = resolved.read_bytes()
+    except OSError as exc:
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_INVALID") from exc
+    if size <= 0 or size > _MAX_VERCEL_CA_BYTES or len(payload) != size:
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_INVALID")
+    try:
+        certificates = x509.load_pem_x509_certificates(payload)
+    except ValueError as exc:
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_INVALID") from exc
+    if not certificates:
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_INVALID")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_DIGEST_INVALID")
+    if not secrets.compare_digest(
+        _sha256_file(resolved, error_code="VERCEL_CA_CERTIFICATE_INVALID"),
+        expected_digest,
+    ):
+        raise IdentityProvisioningError("VERCEL_CA_CERTIFICATE_DIGEST_MISMATCH")
+    return resolved
+
+
+def _select_vercel_ca_trust(
+    certificate: Path | None,
+    expected_digest: str | None,
+) -> VercelCaTrust | None:
+    requested = (certificate is not None, expected_digest is not None)
+    if requested == (False, False):
+        return None
+    if requested != (True, True):
+        raise IdentityProvisioningError("VERCEL_CA_TRUST_MODE_INVALID")
+    assert certificate is not None
+    assert expected_digest is not None
+    resolved = _validate_vercel_ca_certificate(
+        certificate,
+        expected_digest=expected_digest,
+    )
+    return VercelCaTrust(certificate=resolved, sha256=expected_digest)
+
+
+def _revalidate_vercel_ca_trust(trust: VercelCaTrust | None) -> None:
+    if trust is None:
+        return
+    _validate_vercel_ca_certificate(
+        trust.certificate,
+        expected_digest=trust.sha256,
+    )
+
+
 def _select_vercel_cli_invocation(
     *,
     vercel_cli: Path | None,
@@ -1465,6 +1540,8 @@ def _revalidate_vercel_cli_invocation(
 
 def _sanitized_vercel_environment(
     source: Mapping[str, str] | None = None,
+    *,
+    ca_trust: VercelCaTrust | None = None,
 ) -> dict[str, str]:
     values = os.environ if source is None else source
     allowed = {
@@ -1483,6 +1560,8 @@ def _sanitized_vercel_environment(
             sanitized[canonical] = value
     sanitized["CI"] = "1"
     sanitized["NO_COLOR"] = "1"
+    if ca_trust is not None:
+        sanitized["NODE_EXTRA_CA_CERTS"] = str(ca_trust.certificate)
     return sanitized
 
 
@@ -1780,6 +1859,8 @@ def configure_vercel_identity(
     vercel_node_sha256: str | None = None,
     vercel_js_entrypoint: Path | None = None,
     vercel_js_entrypoint_sha256: str | None = None,
+    vercel_ca_certificate: Path | None = None,
+    vercel_ca_certificate_sha256: str | None = None,
     vercel_cli_version: str,
     vercel_cwd: Path,
     environment: str,
@@ -1819,6 +1900,10 @@ def configure_vercel_identity(
         vercel_js_entrypoint=vercel_js_entrypoint,
         vercel_js_entrypoint_sha256=vercel_js_entrypoint_sha256,
     )
+    ca_trust = _select_vercel_ca_trust(
+        vercel_ca_certificate,
+        vercel_ca_certificate_sha256,
+    )
     working_directory = _validate_vercel_cwd(
         vercel_cwd,
         repository_root=repository_root,
@@ -1848,7 +1933,8 @@ def configure_vercel_identity(
             expected_cli_version=expected_cli_version,
         )
 
-    sanitized_environment = _sanitized_vercel_environment()
+    _revalidate_vercel_ca_trust(ca_trust)
+    sanitized_environment = _sanitized_vercel_environment(ca_trust=ca_trust)
     try:
         if version_reader is None:
             observed_cli_version = _read_vercel_cli_version(
@@ -1884,6 +1970,7 @@ def configure_vercel_identity(
 
     def read_inventory() -> VercelEnvironmentInventory:
         _revalidate_vercel_cli_invocation(invocation)
+        _revalidate_vercel_ca_trust(ca_trust)
         try:
             raw_metadata = metadata_reader(
                 invocation.executable,
@@ -1910,6 +1997,7 @@ def configure_vercel_identity(
     configured = 0
     for name in variable_names:
         _revalidate_vercel_cli_invocation(invocation)
+        _revalidate_vercel_ca_trust(ca_trust)
         record_id = existing_records.get(name)
         if record_id is None:
             endpoint = f"/v10/projects/{selected_project}/env"
@@ -2300,6 +2388,8 @@ def _parser() -> argparse.ArgumentParser:
     configure.add_argument("--vercel-node-sha256")
     configure.add_argument("--vercel-js-entrypoint", type=Path)
     configure.add_argument("--vercel-js-entrypoint-sha256")
+    configure.add_argument("--vercel-ca-certificate", type=Path)
+    configure.add_argument("--vercel-ca-certificate-sha256")
     configure.add_argument("--vercel-cli-version", required=True)
     configure.add_argument("--vercel-cwd", type=Path, required=True)
     configure.add_argument(
@@ -2355,6 +2445,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             vercel_node_sha256=args.vercel_node_sha256,
             vercel_js_entrypoint=args.vercel_js_entrypoint,
             vercel_js_entrypoint_sha256=args.vercel_js_entrypoint_sha256,
+            vercel_ca_certificate=args.vercel_ca_certificate,
+            vercel_ca_certificate_sha256=args.vercel_ca_certificate_sha256,
             vercel_cli_version=args.vercel_cli_version,
             vercel_cwd=args.vercel_cwd,
             environment=args.environment,
