@@ -1,4 +1,5 @@
 #!/bin/sh
+# Git must keep this helper LF-only because it runs inside Linux build stages.
 set -eu
 
 secret_path=/run/secrets/enterprise_ca
