@@ -7,6 +7,7 @@ import os
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -50,6 +51,7 @@ from submitters.platforms import (
     QualificationTier,
     adapter_for_url,
 )
+from worker import control_plane_runner as runner_module
 from worker.control_plane_client import ControlPlaneClientError
 from worker.control_plane_event_outbox import (
     enqueue_control_plane_attempt_transition,
@@ -62,7 +64,9 @@ from worker.control_plane_runner import (
     RunnerConfig,
     VerifiedControlCommand,
     accept_control_plane_command,
+    configure_runner_logging,
     load_runner_config,
+    runner_log_path,
     wake_control_plane_submission_command,
 )
 
@@ -121,6 +125,93 @@ def _settings() -> Settings:
         live_automation_acknowledged=True,
         secret_key="operator-auth-test-secret-" + "x" * 32,
     )
+
+
+def test_runner_structured_log_is_external_rotating_and_never_logs_error_text(tmp_path):
+    runtime_env = (tmp_path / "runtime" / "runtime.env").resolve()
+    runtime_env.parent.mkdir(parents=True)
+    runtime_env.write_text("APP_ENV=test\n", encoding="utf-8")
+    config = RunnerConfig(
+        control_plane_url="https://control.example",
+        device_id=str(uuid4()),
+        control_signing_key_id=str(uuid4()),
+        control_plane_audience=control_protocol.CONTROL_AUDIENCE,
+        private_key_path=(tmp_path / "runner.key").resolve(),
+        control_plane_public_key_path=(tmp_path / "control.pub").resolve(),
+        runtime_env_path=runtime_env,
+    )
+
+    path = runner_log_path(config)
+    logger = configure_runner_logging(config)
+    try:
+        assert path == (tmp_path / "logs" / "control-plane-runner.jsonl").resolve()
+        assert len(logger.handlers) == 1
+        handler = logger.handlers[0]
+        assert isinstance(handler, RotatingFileHandler)
+        assert handler.maxBytes == 5 * 1024 * 1024
+        assert handler.backupCount == 5
+
+        private_error = RuntimeError(
+            "candidate@example.com https://private.example token=private-value"
+        )
+        runner_module._log_runner_event(
+            logger,
+            "runner_cycle_failed",
+            status="degraded",
+            reason_code="candidate@example.com",
+            error=private_error,
+        )
+        runner_module._log_runner_event(
+            logger,
+            "runner_cycle_failed",
+            status="degraded",
+            reason_code="RUNNER_CYCLE_FAILED",
+            error=private_error,
+        )
+
+        class CandidateAliHamedError(RuntimeError):
+            pass
+
+        runner_module._log_runner_event(
+            logger,
+            "ali_hamed",
+            status="ali_hamed",
+            reason_code="ALI_HAMED",
+            error=CandidateAliHamedError("private-value"),
+        )
+        handler.flush()
+
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        assert rows[0] == {
+            "error_type": "RuntimeError",
+            "event": "runner_cycle_failed",
+            "reason_code": "RUNNER_CYCLE_FAILED",
+            "status": "degraded",
+            "timestamp": rows[0]["timestamp"],
+        }
+        assert rows[1]["reason_code"] == "RUNNER_CYCLE_FAILED"
+        assert rows[2] == {
+            "error_type": "OtherError",
+            "event": "runner_event_invalid",
+            "reason_code": "RUNNER_CYCLE_FAILED",
+            "status": "unknown",
+            "timestamp": rows[2]["timestamp"],
+        }
+        serialized = json.dumps(rows)
+        for forbidden in (
+            "ALI_HAMED",
+            "CandidateAliHamedError",
+            "ali_hamed",
+            "candidate@example.com",
+            "private.example",
+            "private-value",
+            "token=",
+        ):
+            assert forbidden not in serialized
+    finally:
+        for handler in tuple(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
 
 
 def _reviewed_application(factory):
@@ -1045,6 +1136,150 @@ async def test_heartbeat_uses_readiness_report_status(
         }
     ]
     assert runner._last_heartbeat == now
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_signs_only_the_bounded_operations_summary(monkeypatch):
+    runner = object.__new__(ControlPlaneRunner)
+    runner._settings = _settings()
+    runner._boot_id = str(uuid4())
+    runner._last_heartbeat = None
+    runner._protocol = control_protocol
+    captured: list[control_protocol.HeartbeatPayload] = []
+
+    class Client:
+        async def send_heartbeat(self, envelope):
+            captured.append(envelope["payload"])
+
+    class Database:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    database = Database()
+    runner.client = Client()
+    runner._open_database_session = lambda: database
+
+    def signed_envelope(*, purpose, payload, now):
+        assert purpose is control_protocol.EnvelopePurpose.RUNNER_HEARTBEAT
+        return {
+            "payload": control_protocol.HeartbeatPayload.model_validate(payload),
+            "issued_at": now,
+        }
+
+    runner._signed_envelope = signed_envelope
+    monkeypatch.setattr(
+        "worker.control_plane_runner.readiness_report",
+        lambda _settings, **_kwargs: {"status": "ready", "checks": {}},
+    )
+    monkeypatch.setattr(
+        "worker.control_plane_runner.get_runtime_identity",
+        lambda: SimpleNamespace(release_id="a" * 64),
+    )
+    monkeypatch.setattr(
+        "worker.control_plane_runner.build_control_plane_status",
+        lambda _db, **_kwargs: {
+            "pipeline": {
+                "discovered": 10,
+                "source_occurrences": 12,
+                "deduplicated": 2,
+                "eligible": 4,
+                "prepared": 3,
+                "quarantined": 1,
+                "employer_confirmed": 0,
+            },
+            "policy": {
+                "state": "inactive",
+                "revision": 0,
+                "expires_at": None,
+                "daily_remaining": 0,
+                "hourly_remaining": 0,
+                "kill_switch_active": False,
+            },
+            "sources": [
+                {
+                    "source": "greenhouse",
+                    "status": "healthy",
+                    "enabled_count": 1,
+                    "source_count": 1,
+                }
+            ],
+            "adapters": [
+                {
+                    "adapter": "greenhouse",
+                    "qualification_tier": "fixture_qualified",
+                    "final_execution_enabled": False,
+                    "qualified_form_scope_count": 0,
+                }
+            ],
+        },
+    )
+
+    await runner._heartbeat(datetime.now(UTC))
+
+    assert len(captured) == 1
+    payload = captured[0]
+    assert payload.status is control_protocol.RunnerStatus.READY
+    assert payload.pipeline is not None
+    assert payload.pipeline.discovered == 10
+    assert payload.operations_digest == control_protocol.operations_summary_digest(
+        pipeline=payload.pipeline,
+        policy=payload.policy,
+        sources=payload.sources,
+        adapters=payload.adapters,
+    )
+    assert database.closed is True
+    serialized = payload.model_dump_json()
+    for forbidden in ("candidate", "email", "job_url", "cv_hash", "answer"):
+        assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_reports_degraded_when_operations_database_cannot_open(monkeypatch):
+    runner = object.__new__(ControlPlaneRunner)
+    runner._settings = _settings()
+    runner._boot_id = str(uuid4())
+    runner._last_heartbeat = None
+    runner._protocol = control_protocol
+    captured: list[control_protocol.HeartbeatPayload] = []
+
+    class Client:
+        async def send_heartbeat(self, envelope):
+            captured.append(envelope["payload"])
+
+    def unavailable_database():
+        raise ConnectionError("candidate@example.test https://private.example")
+
+    def signed_envelope(*, purpose, payload, now):
+        assert purpose is control_protocol.EnvelopePurpose.RUNNER_HEARTBEAT
+        return {
+            "payload": control_protocol.HeartbeatPayload.model_validate(payload),
+            "issued_at": now,
+        }
+
+    runner.client = Client()
+    runner._open_database_session = unavailable_database
+    runner._signed_envelope = signed_envelope
+    monkeypatch.setattr(
+        "worker.control_plane_runner.readiness_report",
+        lambda _settings, **_kwargs: {"status": "ready", "checks": {}},
+    )
+    monkeypatch.setattr(
+        "worker.control_plane_runner.get_runtime_identity",
+        lambda: SimpleNamespace(release_id="a" * 64),
+    )
+
+    now = datetime.now(UTC)
+    await runner._heartbeat(now)
+
+    assert len(captured) == 1
+    assert captured[0].status is control_protocol.RunnerStatus.DEGRADED
+    assert captured[0].operations_digest is None
+    assert captured[0].pipeline is None
+    assert runner._last_heartbeat == now
+    assert "candidate@example.test" not in captured[0].model_dump_json()
+    assert "private.example" not in captured[0].model_dump_json()
 
 
 @pytest.mark.asyncio

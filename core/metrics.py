@@ -110,5 +110,7 @@ def refresh_authoritative_metrics() -> None:
 
 
 from core.operational_metrics import register_durable_operational_collector  # noqa: E402
+from core.v5_operational_metrics import register_v5_operational_collector  # noqa: E402
 
 register_durable_operational_collector()
+register_v5_operational_collector()

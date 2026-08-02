@@ -908,7 +908,7 @@ def test_event_sequence_allows_only_precommit_reset_and_requires_employer_eviden
     status_json = status_response.json()
     assert status_json["status"] == "finished"
     assert status_json["events"][-1]["outcome"] == "confirmed_submitted"
-    assert "evidence_digest" not in status_json["events"]  # digest stays audit-only
+    assert status_json["events"][-1]["evidence_digest"] == "e" * 64
 
 
 def test_bad_runner_signature_and_ack_path_binding_fail_closed(

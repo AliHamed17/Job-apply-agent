@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import html
+import json
 import logging
 import os
 from collections.abc import Generator
@@ -50,14 +51,19 @@ from .models import (
 )
 from .protocol import (
     PROTOCOL_VERSION,
+    AdapterStatusSummary,
+    AutomationPolicySummary,
     CommandAckEnvelope,
     CommandPollEnvelope,
     ControlCommandEnvelope,
+    DiscoverySourceSummary,
     HeartbeatEnvelope,
     KillSwitchCommandEnvelope,
+    PipelineCounters,
     ReviewGrantEnvelope,
     ReviewGrantRevocationEnvelope,
     RunnerEventEnvelope,
+    operations_summary_digest,
 )
 from .services import (
     ControlPlaneError,
@@ -462,6 +468,7 @@ def create_app(
                 "outcome": event.outcome,
                 "reason_code": event.reason_code,
                 "evidence_type": event.evidence_type,
+                "evidence_digest": event.evidence_digest,
                 "occurred_at": event.occurred_at,
                 "signature_verified": True,
             }
@@ -732,6 +739,11 @@ def create_app(
                 commands=commands,
                 kill_commands=kill_commands,
                 grant_states=grant_states,
+                runner=_runner_operations_view(
+                    configured_device,
+                    settings=runtime,
+                    now=now,
+                ),
             )
         )
 
@@ -840,12 +852,108 @@ def _review_grant_state(
     return "eligible"
 
 
+def _runner_operations_view(
+    device: RunnerDevice | None,
+    *,
+    settings: Settings,
+    now: datetime,
+) -> dict[str, object]:
+    online = bool(
+        device
+        and device.active
+        and device.last_seen_at is not None
+        and now - as_utc(device.last_seen_at) <= timedelta(seconds=settings.runner_offline_seconds)
+    )
+    view: dict[str, object] = {
+        "connection": (
+            "offline"
+            if not online
+            else "ready"
+            if device and device.status == "ready"
+            else "degraded"
+        ),
+        "last_seen_at": device.last_seen_at if device else None,
+        "release_digest": device.release_digest if device else None,
+        "boot_id": device.boot_id if device else None,
+        "operations_valid": False,
+        "operations_digest": None,
+        "pipeline": PipelineCounters().model_dump(mode="json"),
+        "policy": {
+            "state": "unavailable",
+            "revision": 0,
+            "expires_at": None,
+            "daily_remaining": 0,
+            "hourly_remaining": 0,
+            "kill_switch_active": False,
+        },
+        "sources": [],
+        "adapters": [],
+    }
+    if device is None or device.operations_digest is None:
+        return view
+    try:
+        if (
+            len(device.pipeline_counters_json) > 1024
+            or len(device.source_status_json) > 4096
+            or len(device.adapter_status_json) > 4096
+        ):
+            raise ValueError
+        pipeline = PipelineCounters.model_validate_json(device.pipeline_counters_json)
+        raw_sources = json.loads(device.source_status_json)
+        raw_adapters = json.loads(device.adapter_status_json)
+        if (
+            not isinstance(raw_sources, list)
+            or len(raw_sources) > 9
+            or not isinstance(raw_adapters, list)
+            or len(raw_adapters) > 5
+        ):
+            raise ValueError
+        sources = tuple(DiscoverySourceSummary.model_validate(item) for item in raw_sources)
+        adapters = tuple(AdapterStatusSummary.model_validate(item) for item in raw_adapters)
+        policy = AutomationPolicySummary.model_validate(
+            {
+                "state": device.policy_status,
+                "revision": device.policy_revision,
+                "expires_at": (
+                    as_utc(device.policy_expires_at)
+                    if device.policy_expires_at is not None
+                    else None
+                ),
+                "daily_remaining": device.policy_daily_remaining,
+                "hourly_remaining": device.policy_hourly_remaining,
+                "kill_switch_active": device.kill_switch_active,
+            }
+        )
+        expected = operations_summary_digest(
+            pipeline=pipeline,
+            policy=policy,
+            sources=sources,
+            adapters=adapters,
+        )
+        if not hmac.compare_digest(expected, device.operations_digest):
+            raise ValueError
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return view
+    view.update(
+        {
+            "operations_valid": True,
+            "operations_digest": device.operations_digest,
+            "pipeline": pipeline.model_dump(mode="json"),
+            "policy": policy.model_dump(mode="json"),
+            "sources": [item.model_dump(mode="json") for item in sources],
+            "adapters": [item.model_dump(mode="json") for item in adapters],
+        }
+    )
+    return view
+
+
 def _dashboard_html(
     *,
     grants: list[ReviewGrant],
     commands: list[SubmissionCommand],
     kill_commands: list[ControlKillSwitchCommand],
     grant_states: dict[str, str],
+    runner: dict[str, object],
 ) -> str:
     grant_rows_parts: list[str] = []
     for row in grants:
@@ -872,17 +980,28 @@ def _dashboard_html(
             + "</td></tr>"
         )
     grant_rows = "".join(grant_rows_parts)
-    command_rows = "".join(
-        (
+    command_rows_parts: list[str] = []
+    for row in commands:
+        events = sorted(row.events, key=lambda item: item.received_at)
+        latest_event = events[-1] if events else None
+        evidence = (
+            f"{html.escape(str(latest_event.evidence_type))} "
+            f"<code>{html.escape(str(latest_event.evidence_digest))}</code>"
+            if latest_event is not None
+            and latest_event.evidence_type
+            and latest_event.evidence_digest
+            else "none"
+        )
+        command_rows_parts.append(
             "<tr>"
             f"<td><code>{html.escape(row.id)}</code></td>"
             f"<td>{html.escape(row.adapter)}</td>"
             f"<td>{html.escape(row.status)}</td>"
+            f"<td>{evidence}</td>"
             f"<td>{html.escape(row.created_at.isoformat())}</td>"
             "</tr>"
         )
-        for row in commands
-    )
+    command_rows = "".join(command_rows_parts)
     kill_rows = "".join(
         (
             "<tr>"
@@ -893,6 +1012,48 @@ def _dashboard_html(
         )
         for row in kill_commands
     )
+    pipeline = runner.get("pipeline") if isinstance(runner.get("pipeline"), dict) else {}
+    policy = runner.get("policy") if isinstance(runner.get("policy"), dict) else {}
+    raw_sources = runner.get("sources")
+    raw_adapters = runner.get("adapters")
+    sources = raw_sources if isinstance(raw_sources, list) else []
+    adapters = raw_adapters if isinstance(raw_adapters, list) else []
+    pipeline_rows = "".join(
+        f"<tr><td>{html.escape(label)}</td><td>{html.escape(str(pipeline.get(key, 0)))}</td></tr>"
+        for key, label in (
+            ("discovered", "Discovered"),
+            ("source_occurrences", "Source occurrences"),
+            ("deduplicated", "Deduplicated"),
+            ("eligible", "Auto-eligible"),
+            ("prepared", "Prepared"),
+            ("quarantined", "Quarantined"),
+            ("employer_confirmed", "Employer confirmed"),
+        )
+    )
+    source_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(item.get('source', 'unknown')))}</td>"
+        f"<td>{html.escape(str(item.get('status', 'unknown')))}</td>"
+        f"<td>{html.escape(str(item.get('enabled_count', 0)))} / "
+        f"{html.escape(str(item.get('source_count', 0)))}</td>"
+        "</tr>"
+        for item in sources
+        if isinstance(item, dict)
+    )
+    adapter_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(item.get('adapter', 'unknown')))}</td>"
+        f"<td>{html.escape(str(item.get('qualification_tier', 'disabled')))}</td>"
+        f"<td>{html.escape(str(item.get('qualified_form_scope_count', 0)))}</td>"
+        "<td>"
+        f"{'qualified scope only' if item.get('final_execution_enabled') is True else 'disabled'}"
+        "</td>"
+        "</tr>"
+        for item in adapters
+        if isinstance(item, dict)
+    )
+    operations_state = "verified" if runner.get("operations_valid") is True else "unavailable"
+    policy_expiry = policy.get("expires_at") or "none"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -905,10 +1066,41 @@ code{{font-size:.8rem}} button{{padding:.45rem .7rem}} #result{{min-height:1.5re
 #result.neutral{{color:#2459a9}} #result.warning{{color:#9a4f00}}
 #result.confirmed{{color:#08783e;font-weight:650}}
 .danger{{background:#a11;color:white;border:0;border-radius:4px}}
+.summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1rem}}
+.card{{border:1px solid #d8deea;border-radius:8px;padding:.8rem;overflow:auto}}
+.meta{{color:#526078;font-size:.85rem;overflow-wrap:anywhere}}
 </style></head><body>
 <h1>Job Apply Control Plane</h1>
 <p>Redacted command metadata only. Private application content stays on the runner.</p>
 <p id="result" role="status"></p>
+<h2>Private runner</h2>
+<div class="card">
+<strong>{html.escape(str(runner.get("connection", "offline")))}</strong>
+<p class="meta">Last seen: {html.escape(str(runner.get("last_seen_at") or "never"))}<br>
+Release: <code>{html.escape(str(runner.get("release_digest") or "unavailable"))}</code><br>
+Boot: <code>{html.escape(str(runner.get("boot_id") or "unavailable"))}</code><br>
+Operations summary: {operations_state}
+<code>{html.escape(str(runner.get("operations_digest") or ""))}</code></p>
+</div>
+<div class="summary">
+<section class="card"><h2>Pipeline counters</h2>
+<table><tbody>{pipeline_rows}</tbody></table></section>
+<section class="card"><h2>Autopilot policy</h2>
+<p><strong>{html.escape(str(policy.get("state", "unavailable")))}</strong><br>
+Revision {html.escape(str(policy.get("revision", 0)))}<br>
+Expires {html.escape(str(policy_expiry))}<br>
+Daily remaining {html.escape(str(policy.get("daily_remaining", 0)))}<br>
+Hourly remaining {html.escape(str(policy.get("hourly_remaining", 0)))}<br>
+Kill switch {html.escape(str(bool(policy.get("kill_switch_active"))).lower())}</p></section>
+</div>
+<div class="summary">
+<section class="card"><h2>Discovery source codes</h2>
+<table><thead><tr><th>Source</th><th>Status</th><th>Enabled</th></tr></thead>
+<tbody>{source_rows}</tbody></table></section>
+<section class="card"><h2>Adapter qualification codes</h2>
+<table><thead><tr><th>ATS</th><th>Tier</th><th>Scopes</th><th>Final action</th></tr></thead>
+<tbody>{adapter_rows}</tbody></table></section>
+</div>
 <h2>Emergency stop</h2>
 <p><button id="kill-switch" class="danger">Stop qualified autopilot</button>
 This signed command can only activate the local stop; it cannot clear it.</p>
@@ -918,7 +1110,8 @@ This signed command can only activate the local stop; it cannot clear it.</p>
 <table><thead><tr><th>Grant</th><th>Adapter</th><th>Opaque application</th>
 <th>State</th><th>Explicit action</th></tr></thead><tbody>{grant_rows}</tbody></table>
 <h2>Commands</h2>
-<table><thead><tr><th>Command</th><th>Adapter</th><th>State</th><th>Created</th>
+<table><thead><tr><th>Command</th><th>Adapter</th><th>State</th>
+<th>Evidence digest</th><th>Created</th>
 </tr></thead><tbody>{command_rows}</tbody></table>
 <script>
 const cookie = (name) => document.cookie.split('; ').find(v => v.startsWith(name + '='))

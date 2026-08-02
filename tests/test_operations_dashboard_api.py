@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -13,13 +14,17 @@ from sqlalchemy.pool import StaticPool
 from api.main import app
 from api.routes import operations as operations_route
 from api.routes.applications import _attempt_response
+from core import dashboard_operations
 from core.dashboard_operations import build_operations_snapshot
 from db.models import (
     Application,
     Base,
     BrowserQualificationRun,
     DiscoveryRun,
+    DiscoverySourceState,
     Job,
+    JobFitDecisionRecord,
+    JobSourceOccurrenceRecord,
     JobStatus,
     OperationalMetricEvent,
     OperationalMetricReceipt,
@@ -214,8 +219,12 @@ def test_snapshot_uses_successful_discovery_and_normalizes_every_dimension():
         assert len(snapshot["form_resolution"]) == 1
         assert len(snapshot["failure_clusters"]) == 2
         assert snapshot["evidence_types"] == []
+        assert snapshot["automation_policy"]["active"] is False
+        assert snapshot["automation_policy"]["reason_code"] == "AUTOMATION_POLICY_NOT_ACTIVE"
+        assert snapshot["pipeline_counts"]["quarantined"] == 1
         assert snapshot["attempt_outcomes"][0]["outcome"] == "operator_confirmed"
         attempt = db.query(Submission).one()
+        assert snapshot["recent_attempts"][0]["application_id"] == attempt.application_id
         attempt_response = _attempt_response(attempt)
         assert attempt_response.created_at.endswith("Z")
         assert attempt_response.started_at.endswith("Z")
@@ -327,6 +336,10 @@ def test_operations_endpoint_is_protected_bounded_and_contains_no_private_text(
         body = response.json()
         assert len(body["dependencies"]) == 8
         assert len(body["adapter_matrix"]) <= 100
+        assert len(body["discovery_sources"]) <= 100
+        assert len(body["role_cv_matrix"]) <= 100
+        assert len(body["recent_fit_decisions"]) <= 25
+        assert len(body["recent_attempts"]) <= 25
         assert len(body["failure_clusters"]) <= 100
         assert body["dependencies"][1]["reason_code"] == "MIGRATION_MISMATCH"
         assert body["dependencies"][3]["reason_code"] == "HEARTBEAT_MISSING"
@@ -349,6 +362,201 @@ def test_operations_endpoint_is_protected_bounded_and_contains_no_private_text(
             assert forbidden not in serialized
     finally:
         app.dependency_overrides.pop(get_db, None)
+        engine.dispose()
+
+
+def test_snapshot_exposes_redacted_discovery_fit_cv_and_policy_operations(monkeypatch):
+    engine, factory = _factory()
+    now = datetime(2026, 7, 30, 12, 0, 0)
+    db = factory()
+    try:
+        db.add(
+            DiscoverySourceState(
+                source_key="greenhouse:private-employer@example.test",
+                source_type="greenhouse",
+                descriptor_version="1.0.0",
+                configuration_digest="1" * 64,
+                transport="public_api",
+                authentication_mode="none",
+                host="private-employer.example.test",
+                cadence_seconds=100_000,
+                enabled=True,
+                health_status="degraded",
+                next_poll_at=now + timedelta(minutes=10),
+                last_success_at=now - timedelta(minutes=5),
+                last_error_code="private-employer@example.test",
+            )
+        )
+        db.add(
+            DiscoveryRun(
+                source="greenhouse:private-employer@example.test",
+                status="success",
+                inserted=1,
+                duplicates=3,
+                started_at=now - timedelta(minutes=2),
+                finished_at=now - timedelta(minutes=1),
+            )
+        )
+        job = Job(
+            title="Secret employer role",
+            company="Secret employer",
+            source_url="https://private-employer.example.test/jobs/123",
+            status=JobStatus.DRAFT,
+            created_at=now - timedelta(minutes=2),
+        )
+        db.add(job)
+        db.flush()
+        db.add(
+            JobSourceOccurrenceRecord(
+                occurrence_key="2" * 64,
+                job_id=job.id,
+                source_key="greenhouse:private-employer@example.test",
+                external_posting_id="private-job-123",
+                normalized_url="https://private-employer.example.test/jobs/123",
+                normalized_url_hash="3" * 64,
+                revision_digest="4" * 64,
+                first_seen_at=now - timedelta(minutes=2),
+                last_seen_at=now - timedelta(minutes=1),
+                active=True,
+            )
+        )
+        evidence = [
+            {
+                "factor": factor,
+                "result": "matched",
+                "points": points,
+                "maximum_points": points,
+                "reason_codes": ["MATCHED"],
+            }
+            for factor, points in (
+                ("role", 25.0),
+                ("skills", 25.0),
+                ("location", 15.0),
+                ("seniority", 10.0),
+                ("employment", 5.0),
+                ("experience", 10.0),
+                ("language_authorization", 10.0),
+            )
+        ]
+        fit = JobFitDecisionRecord(
+            job_id=job.id,
+            decision_digest="5" * 64,
+            job_digest="6" * 64,
+            profile_version=1,
+            routing_config_digest="7" * 64,
+            cv_manifest_digest="8" * 64,
+            selected_cv_id="ai_engineer",
+            selected_cv_hash="9" * 64,
+            routing_confidence=0.97,
+            routing_margin=0.22,
+            routing_fallback_reason=None,
+            fit_score=96.0,
+            disposition="eligible",
+            quality_eligible=True,
+            hard_exclusions_json="[]",
+            uncertainty_json="[]",
+            unsupported_skills_json="[]",
+            evidence_json=json.dumps(evidence),
+            thresholds_json=json.dumps(
+                {
+                    "minimum_fit_score": 85.0,
+                    "minimum_routing_confidence": 0.55,
+                    "minimum_routing_margin": 0.08,
+                }
+            ),
+            policy_version="job-fit-policy.v1",
+            model_identity="deterministic:job-fit-v1",
+            qualification_digest="a" * 64,
+            created_at=now,
+        )
+        db.add(fit)
+        application = Application(
+            job=job,
+            status=JobStatus.DRAFT,
+            approved_at=now,
+            revision=1,
+            prepared_revision=1,
+            selected_cv_id="ai_engineer",
+            selected_cv_hash="9" * 64,
+            material_eligible=False,
+        )
+        db.add(application)
+        db.commit()
+
+        monkeypatch.setattr(
+            dashboard_operations,
+            "policy_usage_status",
+            lambda _db, **_kwargs: {
+                "active": True,
+                "revision": 4,
+                "activated_at": now.isoformat(),
+                "expires_at": (now + timedelta(days=30)).isoformat(),
+                "minimum_fit_score": 85.0,
+                "daily_limit": 25,
+                "daily_remaining": 21,
+                "hourly_limit": 5,
+                "hourly_remaining": 4,
+                "company_limit": 2,
+                "company_window_days": 14,
+                "permitted_adapters": ["greenhouse"],
+                "geographies": ["israel", "worldwide_remote"],
+                "role_families": ["private role name must not appear"],
+                "qualified_form_contract_count": 2,
+                "kill_switch_active": False,
+                "kill_switch_revision": 3,
+            },
+        )
+
+        snapshot = build_operations_snapshot(db, _readiness(), now=now, window_days=30)
+
+        assert snapshot["discovery_sources"] == [
+            {
+                "source_type": "greenhouse",
+                "status": "degraded",
+                "source_count": 1,
+                "enabled_count": 1,
+                "cadence_seconds": 86_400,
+                "next_poll_at": (now + timedelta(minutes=10)).replace(tzinfo=UTC),
+                "last_success_at": (now - timedelta(minutes=5)).replace(tzinfo=UTC),
+                "last_error_code": "OTHER",
+            }
+        ]
+        assert snapshot["pipeline_counts"] == {
+            "discovered": 1,
+            "source_occurrences": 1,
+            "deduplicated": 3,
+            "eligible": 1,
+            "prepared": 1,
+            "quarantined": 0,
+            "employer_confirmed": 0,
+        }
+        assert snapshot["role_cv_matrix"] == [
+            {
+                "cv_route": "ai_engineer",
+                "total": 1,
+                "eligible": 1,
+                "needs_review": 0,
+                "excluded": 0,
+                "average_fit_score": 96.0,
+                "average_routing_confidence": 0.97,
+            }
+        ]
+        recent_fit = snapshot["recent_fit_decisions"][0]
+        assert recent_fit["cv_route"] == "ai_engineer"
+        assert recent_fit["quality_eligible"] is True
+        assert len(recent_fit["evidence"]) == 7
+        assert snapshot["automation_policy"]["daily_remaining"] == 21
+        assert snapshot["automation_policy"]["role_family_count"] == 1
+        serialized = json.dumps(snapshot, default=str)
+        for forbidden in (
+            "private-employer",
+            "Secret employer",
+            "private-job-123",
+            "private role name",
+        ):
+            assert forbidden not in serialized
+    finally:
+        db.close()
         engine.dispose()
 
 

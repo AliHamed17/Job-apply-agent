@@ -265,6 +265,47 @@ def receive_heartbeat(
     device.release_digest = envelope.payload.release_digest
     device.status = envelope.payload.status.value
     device.last_seen_at = checked_at
+    payload = envelope.payload
+    if payload.pipeline is None or payload.policy is None:
+        device.operations_digest = None
+        device.policy_status = "unavailable"
+        device.policy_revision = 0
+        device.policy_expires_at = None
+        device.policy_daily_remaining = 0
+        device.policy_hourly_remaining = 0
+        device.kill_switch_active = False
+        device.pipeline_counters_json = "{}"
+        device.source_status_json = "[]"
+        device.adapter_status_json = "[]"
+    else:
+        device.operations_digest = payload.operations_digest
+        device.policy_status = payload.policy.state.value
+        device.policy_revision = payload.policy.revision
+        device.policy_expires_at = payload.policy.expires_at
+        device.policy_daily_remaining = payload.policy.daily_remaining
+        device.policy_hourly_remaining = payload.policy.hourly_remaining
+        device.kill_switch_active = payload.policy.kill_switch_active
+        device.pipeline_counters_json = json.dumps(
+            payload.pipeline.model_dump(mode="json"),
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        device.source_status_json = json.dumps(
+            [item.model_dump(mode="json") for item in payload.sources],
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        device.adapter_status_json = json.dumps(
+            [item.model_dump(mode="json") for item in payload.adapters],
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     return Receipt(identifier=device.id, duplicate=False)
 
 

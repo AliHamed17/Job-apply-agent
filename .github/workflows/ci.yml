@@ -126,8 +126,9 @@ jobs:
           --disable-error-code union-attr
           --disable-error-code return-value
           api/routes/operations.py
-          core/dashboard_operations.py core/operational_labels.py
-          core/operational_metrics.py core/restore_safety.py
+          core/dashboard_operations.py core/control_plane_status.py
+          core/operational_labels.py core/operational_metrics.py
+          core/v5_operational_metrics.py core/restore_safety.py
           scripts/build_adapter_qualification_matrix.py
           scripts/control_plane_identity.py
           scripts/quarantine_restored_control_plane.py
@@ -246,7 +247,8 @@ jobs:
           core/form_planning.py core/form_plan_persistence.py
           core/material_audit.py core/operations.py core/runtime_identity.py
           core/dashboard_operations.py core/operational_labels.py
-          core/operational_metrics.py core/restore_safety.py
+          core/operational_metrics.py core/control_plane_status.py
+          core/v5_operational_metrics.py core/restore_safety.py
           core/sensitive_policy.py core/submission_domain.py core/submission_service.py
           core/submit_permits.py
           core/control_plane_review_permits.py core/utils.py db/models.py

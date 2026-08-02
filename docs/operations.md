@@ -80,6 +80,14 @@ days and 100,000 rows, permanent content-free replay receipts containing only
 a SHA-256 event key and timestamp, and aggregate rollups. Prometheus labels are
 normalized to fixed vocabularies before storage and collection.
 
+The dedicated v5 collector exposes discovery lag and feed failures,
+insert/update/deduplication/closure totals, current fit disposition, held-out
+qualification precision/coverage/abstention, preparation latency, signed-policy
+decisions/denials, immutable attempt outcomes, and exact employer-confirmed
+applications. See the [v5 operations handoff](v5-operations-handoff.md) for the
+metric names, label restrictions, dashboard boundaries, deployment order, and
+staged rollout gates.
+
 These probe endpoints must stay on loopback or an internal network and must not
 be exposed through an internet-facing proxy. Detailed application and
 operational routes require bearer authentication outside the explicit
@@ -108,6 +116,7 @@ No LLM runs during the final external-action stage.
 - [Backup and restore](control-plane-backup-restore.md)
 - [Recovery runbooks](recovery-runbooks.md)
 - [Private-data retention and deletion](private-data-retention.md)
+- [v5 operations and rollout handoff](v5-operations-handoff.md)
 
 A restore is not ready when PostgreSQL starts. Before any worker reconnects,
 run private and cloud quarantine, require an idempotent zero-change second

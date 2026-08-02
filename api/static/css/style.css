@@ -1484,11 +1484,62 @@ h1, h2, h3, h4, h5 {
     gap: 12px;
 }
 
+.operations-kpi-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 .operations-summary-card,
 .operations-card {
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
+}
+
+.operations-policy-grid {
+    align-items: stretch;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(120px, 1fr));
+}
+
+.operations-policy-state,
+.operations-policy-limit {
+    background: var(--bg-base);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    min-width: 0;
+    padding: 11px;
+}
+
+.operations-policy-state {
+    align-items: flex-start;
+    display: flex;
+    gap: 9px;
+}
+
+.operations-policy-limit {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.operations-policy-limit span,
+.operations-policy-detail {
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    line-height: 1.45;
+}
+
+.operations-policy-limit strong {
+    color: var(--text-main);
+    font-family: var(--font-heading);
+    font-size: 0.92rem;
+}
+
+.operations-policy-detail {
+    grid-column: 1 / -1;
 }
 
 .operations-summary-card {
@@ -1680,6 +1731,20 @@ h1, h2, h3, h4, h5 {
     text-align: left;
 }
 
+.operations-table-dense {
+    min-width: 980px;
+}
+
+.operations-status-inline {
+    align-items: center;
+    display: inline-flex;
+    gap: 7px;
+}
+
+.operations-status-inline .operations-status-dot {
+    margin-top: 0;
+}
+
 .operations-table th {
     color: var(--text-muted);
     font-size: 0.65rem;
@@ -1702,6 +1767,12 @@ h1, h2, h3, h4, h5 {
     color: var(--primary);
     display: inline-flex;
     padding: 2px 8px;
+}
+
+.operations-tier.is-confirmed {
+    background: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.28);
+    color: var(--success);
 }
 
 /* ── Toasts ─────────────────────────────────────────── */
@@ -1789,6 +1860,8 @@ h1, h2, h3, h4, h5 {
     .operations-section-heading { flex-direction: column; }
     .operations-generated-at { text-align: left; white-space: normal; }
     .operations-summary-grid { grid-template-columns: 1fr; }
+    .operations-policy-grid { grid-template-columns: 1fr; }
+    .operations-policy-detail { grid-column: auto; }
     .operations-card-heading { align-items: flex-start; flex-direction: column; }
     .operations-card-heading span { text-align: left; }
 }

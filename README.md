@@ -212,6 +212,10 @@ prepare-only placeholder-auth bypass.
 | GET | `/health/live` | Process liveness only |
 | GET | `/health/ready` | Dependency and runtime readiness |
 | GET | `/metrics` | Bounded Prometheus exposition |
+| GET | `/api/dashboard/operations` | Protected full local operations snapshot |
+| GET | `/api/discovery/sources` | Versioned discovery-source health and schedule |
+| GET | `/api/discovery/runs` | Bounded durable discovery-run history |
+| POST | `/api/discovery/run` | Discovery trigger; never submission authority |
 | GET | `/api/runtime/capabilities` | Build, mode, runner, LLM, and send guards |
 | GET | `/api/ats/adapters` | Version and qualification inventory |
 | GET | `/api/jobs/{id}/automation-decision` | Calibrated fit/CV decision; never send authority |
@@ -252,6 +256,11 @@ The protected control plane can send a separately signed, five-minute,
 activation-only emergency-stop command. It cannot clear the stop or create
 autopilot authority; clearing remains a local authenticated action.
 
+The private runner sends a signed redacted operations heartbeat every ten
+seconds. The Vercel view shows only bounded counters, fixed source/adapter
+codes, policy state, release identity, timestamps, and evidence digests. The
+full role/CV, fit, application, and attempt views remain local.
+
 ## Operations and recovery
 
 - [Production operations](docs/operations.md)
@@ -264,6 +273,7 @@ autopilot authority; clearing remains a local authenticated action.
 - [Backup and restore](docs/control-plane-backup-restore.md)
 - [Recovery runbooks](docs/recovery-runbooks.md)
 - [Private-data retention and deletion](docs/private-data-retention.md)
+- [v5 operations and rollout handoff](docs/v5-operations-handoff.md)
 
 Validate the deterministic qualification aggregate:
 
