@@ -147,6 +147,26 @@ the DPAPI bundle or invoke Vercel. Review the reported `node_js` mode, eight
 variable names, project, scope, environment, and expected CLI version, then
 repeat without `--dry-run`. Before decrypting, the live command invokes the
 exact command shape `[node.exe, absolute\vercel\dist\vc.js, --version]`.
+
+On an enterprise network that performs authorized TLS inspection, the helper
+still discards ambient `NODE_EXTRA_CA_CERTS`. Export only the public inspection
+CA chain to a bounded PEM file on local NTFS outside OneDrive and reparse
+paths, pin its SHA-256, and opt in explicitly:
+
+```powershell
+$vercelCa = "C:\private\certificates\enterprise-vercel-ca.pem"
+$vercelCaSha256 = (Get-FileHash -LiteralPath $vercelCa -Algorithm SHA256).Hash.ToLowerInvariant()
+# Add both arguments to configure-vercel, in dry-run and live invocations:
+--vercel-ca-certificate $vercelCa `
+--vercel-ca-certificate-sha256 $vercelCaSha256
+```
+
+The helper validates that the file contains PEM certificates and rehashes it
+before metadata reads and every identity write. Supplying only one argument,
+an invalid bundle, a OneDrive/reparse path, or a changed digest
+fails closed before the next external action. This option adds trust; it never
+disables TLS verification.
+
 It then requests only non-decrypted environment metadata and matches records
 by exact key plus exact built-in target. Before every secret write it rehashes
 both files, then creates a missing target record or patches that exact record

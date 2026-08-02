@@ -111,6 +111,14 @@ from worker.submission_commands import (
 )
 
 _NOW = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _freeze_submission_service_wall_clock(monkeypatch) -> None:
+    # Production still reads the real clock; only these fixed-time scenarios are frozen.
+    monkeypatch.setattr("core.submission_service._utc_now", lambda: _NOW)
+
+
 _CV_HASH = "c" * 64
 _ROUTING_DIGEST = "a" * 64
 _MANIFEST_DIGEST = "b" * 64

@@ -87,6 +87,12 @@ DescriptorResolver = Callable[[str], AdapterDescriptor | None]
 SessionChecker = Callable[[str, AdapterDescriptor, Settings], bool]
 
 
+def _utc_now() -> datetime:
+    """Return the current UTC time through a narrow, testable clock seam."""
+
+    return datetime.now(UTC)
+
+
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     decoded: dict[str, object] = {}
     for key, value in pairs:
@@ -885,7 +891,7 @@ def create_submission_commands(
     if db.bind.dialect.name != "postgresql" and resolved_settings.app_env != "test":
         raise SubmissionAdmissionError("DATABASE_SERIALIZATION_REQUIRED")
     resolved_capabilities = capabilities or _runtime_capabilities(resolved_settings, db)
-    timestamp = now or datetime.now(UTC).replace(tzinfo=None)
+    timestamp = now or _utc_now().replace(tzinfo=None)
     results: list[CreatedSubmissionCommand] = []
     try:
         for request in sorted(requests, key=lambda item: item.application_id):
@@ -900,7 +906,7 @@ def create_submission_commands(
                     now=timestamp,
                 )
             )
-        wall_clock = datetime.now(UTC)
+        wall_clock = _utc_now()
         if any(
             deadline is not None and deadline <= wall_clock
             for deadline in (_aware_utc(request.authority_expires_at) for request in requests)

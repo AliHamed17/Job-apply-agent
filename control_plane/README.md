@@ -101,6 +101,12 @@ sequence-bound native Windows clipboard lease and clears after a bounded TTL
 only if the clipboard is unchanged. See the repository-level bootstrap
 runbook for the exact commands.
 
+Enterprise TLS inspection is supported only through the explicit paired
+`--vercel-ca-certificate` and `--vercel-ca-certificate-sha256` arguments. The
+PEM must be on local NTFS outside OneDrive and reparse paths;
+it is parsed and rehashed before every Vercel metadata read or identity write.
+Ambient CA variables are ignored, and TLS verification is never disabled.
+
 Enable Vercel system environment variables so `VERCEL_URL` and
 `VERCEL_PROJECT_ID` are available. `VERCEL_ORG_ID` is not a Vercel runtime
 system variable and is neither required nor trusted. The expected scope ID
