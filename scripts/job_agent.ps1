@@ -30,7 +30,12 @@ param(
 
     [switch]$RepairOwnedTask,
 
-    [switch]$UpgradeRelease
+    [switch]$UpgradeRelease,
+
+    [string]$EnterpriseCaCertificatePath,
+
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+    [string]$EnterpriseCaSha256
 )
 
 Set-StrictMode -Version Latest
@@ -42,6 +47,16 @@ Import-Module $modulePath -Force -ErrorAction Stop
 $common = @{
     RepositoryPath = $RepositoryPath
     LocalAppDataRoot = $LocalAppDataRoot
+}
+
+if (
+    $Command -ne 'bootstrap' -and
+    (
+        -not [string]::IsNullOrWhiteSpace($EnterpriseCaCertificatePath) -or
+        -not [string]::IsNullOrWhiteSpace($EnterpriseCaSha256)
+    )
+) {
+    throw 'ENTERPRISE_CA_BOOTSTRAP_ONLY'
 }
 
 switch ($Command) {
@@ -73,6 +88,18 @@ switch ($Command) {
         }
         if ($UpgradeRelease) {
             $arguments['UpgradeRelease'] = $true
+        }
+        $enterpriseCaRequested = -not [string]::IsNullOrWhiteSpace(
+            $EnterpriseCaCertificatePath
+        )
+        if ($enterpriseCaRequested -ne (-not [string]::IsNullOrWhiteSpace(
+            $EnterpriseCaSha256
+        ))) {
+            throw 'ENTERPRISE_CA_PATH_AND_SHA256_REQUIRED'
+        }
+        if ($enterpriseCaRequested) {
+            $arguments['EnterpriseCaCertificatePath'] = $EnterpriseCaCertificatePath
+            $arguments['EnterpriseCaSha256'] = $EnterpriseCaSha256
         }
         if ($WhatIfPreference) {
             $arguments['WhatIf'] = $true

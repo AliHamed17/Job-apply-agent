@@ -12,6 +12,12 @@ volumes:
   prometheus-data:
   grafana-data:
 
+# Optional build-only trust material. The managed Windows runtime replaces the
+# public marker file with a pinned CA bundle mounted only as a BuildKit secret.
+secrets:
+  job-agent-enterprise-ca:
+    file: ${JOB_AGENT_ENTERPRISE_CA_FILE:-./config/empty-enterprise-ca.txt}
+
 # ── Services ───────────────────────────────────────────────────────────────
 services:
 
@@ -57,6 +63,9 @@ services:
     build:
       context: .
       target: web-api
+      secrets:
+        - source: job-agent-enterprise-ca
+          target: enterprise_ca
     restart: unless-stopped
     env_file: ${JOB_AGENT_ENV_FILE:-.env}
     environment:
@@ -123,6 +132,9 @@ services:
     build:
       context: .
       target: celery-worker
+      secrets:
+        - source: job-agent-enterprise-ca
+          target: enterprise_ca
     restart: unless-stopped
     env_file: ${JOB_AGENT_ENV_FILE:-.env}
     environment:
@@ -175,6 +187,9 @@ services:
     build:
       context: .
       target: celery-worker
+      secrets:
+        - source: job-agent-enterprise-ca
+          target: enterprise_ca
     restart: unless-stopped
     env_file: ${JOB_AGENT_ENV_FILE:-.env}
     environment:

@@ -297,6 +297,7 @@ function Get-JobAgentLayout {
         ProfileData = Join-Path $root 'profile-data'
         BrowserState = Join-Path $root 'browser-state'
         Tls = Join-Path $root 'tls'
+        EnterpriseBuildCa = Join-Path (Join-Path $root 'tls') 'enterprise-build-ca.pem'
         Identity = $identity
         IdentityCurrent = Join-Path $identity 'current.json'
         Logs = Join-Path $root 'logs'
@@ -627,9 +628,217 @@ function Set-JobAgentPrivateAcl {
     if ([string]::IsNullOrWhiteSpace($identity)) {
         throw 'WINDOWS_IDENTITY_UNAVAILABLE'
     }
-    & icacls.exe $Path '/inheritance:r' '/grant:r' "$identity`:(OI)(CI)F" | Out-Null
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $grant = if ($item.PSIsContainer) {
+        "$identity`:(OI)(CI)F"
+    }
+    else {
+        "$identity`:F"
+    }
+    & icacls.exe $Path '/inheritance:r' '/grant:r' $grant | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw 'RUNTIME_ACL_FAILED'
+    }
+}
+
+function Get-JobAgentEnterpriseCaMetadata {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+        [string]$ExpectedSha256 = ''
+    )
+
+    if (-not [System.IO.Path]::IsPathFullyQualified($Path)) {
+        throw 'ENTERPRISE_CA_PATH_NOT_ABSOLUTE'
+    }
+    $canonical = ConvertTo-JobAgentCanonicalPath -LiteralPath $Path -RequireExisting
+    if (
+        (Test-JobAgentNetworkPath -LiteralPath $canonical) -or
+        (Test-JobAgentOneDrivePath -CandidatePaths @($canonical))
+    ) {
+        throw 'ENTERPRISE_CA_PATH_NOT_LOCAL'
+    }
+    if (Test-JobAgentRawReparseAncestor -LiteralPath $canonical) {
+        throw 'ENTERPRISE_CA_PATH_REPARSE_POINT'
+    }
+    $item = Get-Item -LiteralPath $canonical -Force -ErrorAction Stop
+    if ($item.PSIsContainer -or $item.Length -lt 1 -or $item.Length -gt 128KB) {
+        throw 'ENTERPRISE_CA_FILE_INVALID'
+    }
+
+    $bytes = [System.IO.File]::ReadAllBytes($canonical)
+    $digest = [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($bytes)
+    )
+    if (
+        -not [string]::IsNullOrWhiteSpace($ExpectedSha256) -and
+        -not [string]::Equals(
+            $digest,
+            $ExpectedSha256,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    ) {
+        throw 'ENTERPRISE_CA_SHA256_MISMATCH'
+    }
+
+    try {
+        $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+        $text = $utf8.GetString($bytes).TrimStart([char]0xFEFF)
+    }
+    catch {
+        throw 'ENTERPRISE_CA_PEM_INVALID'
+    }
+    if ($text -match '-----BEGIN [^-]*PRIVATE KEY-----') {
+        throw 'ENTERPRISE_CA_PRIVATE_KEY_FORBIDDEN'
+    }
+    $pattern = (
+        '(?ms)^-----BEGIN CERTIFICATE-----\s*' +
+        '(?<body>[A-Za-z0-9+/=\r\n]+?)\s*' +
+        '-----END CERTIFICATE-----\s*'
+    )
+    $matches = [regex]::Matches($text, $pattern)
+    $remainder = [regex]::Replace($text, $pattern, '').Trim()
+    if ($matches.Count -lt 1 -or $matches.Count -gt 16 -or $remainder.Length -ne 0) {
+        throw 'ENTERPRISE_CA_PEM_INVALID'
+    }
+    foreach ($match in $matches) {
+        $certificate = $null
+        try {
+            $der = [Convert]::FromBase64String(
+                ($match.Groups['body'].Value -replace '\s', '')
+            )
+            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $der
+            )
+            $basicConstraints = @(
+                $certificate.Extensions | Where-Object {
+                    $_.Oid.Value -eq '2.5.29.19'
+                }
+            )
+            $basicConstraint = if ($basicConstraints.Count -eq 1) {
+                [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension](
+                    $basicConstraints[0]
+                )
+            }
+            else {
+                $null
+            }
+            if (
+                $certificate.HasPrivateKey -or
+                $basicConstraints.Count -ne 1 -or
+                -not $basicConstraint.CertificateAuthority
+            ) {
+                throw 'ENTERPRISE_CA_CERTIFICATE_NOT_CA'
+            }
+        }
+        catch {
+            if ($_.Exception.Message -eq 'ENTERPRISE_CA_CERTIFICATE_NOT_CA') {
+                throw
+            }
+            throw 'ENTERPRISE_CA_PEM_INVALID'
+        }
+        finally {
+            if ($null -ne $certificate) {
+                $certificate.Dispose()
+            }
+        }
+    }
+    return [pscustomobject]@{
+        Path = $canonical
+        Sha256 = $digest.ToLowerInvariant()
+        CertificateCount = $matches.Count
+    }
+}
+
+function Install-JobAgentEnterpriseBuildCa {
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$Layout,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SourcePath,
+
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+        [string]$ExpectedSha256
+    )
+
+    $source = Get-JobAgentEnterpriseCaMetadata `
+        -Path $SourcePath `
+        -ExpectedSha256 $ExpectedSha256
+    $destination = ConvertTo-JobAgentCanonicalPath -LiteralPath $Layout.EnterpriseBuildCa
+    $expectedDestination = Join-Path (
+        ConvertTo-JobAgentCanonicalPath -LiteralPath $Layout.Tls -RequireExisting
+    ) 'enterprise-build-ca.pem'
+    if (-not [string]::Equals(
+        $destination,
+        $expectedDestination,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'ENTERPRISE_CA_DESTINATION_INVALID'
+    }
+    if (Test-Path -LiteralPath $destination) {
+        $existing = Get-JobAgentEnterpriseCaMetadata -Path $destination
+        if ($existing.Sha256 -eq $source.Sha256) {
+            return [pscustomobject]@{
+                Applied = $false
+                Sha256 = $existing.Sha256
+                CertificateCount = $existing.CertificateCount
+            }
+        }
+    }
+    if (-not $PSCmdlet.ShouldProcess(
+        $destination,
+        'Install pinned public enterprise CA for BuildKit dependency downloads'
+    )) {
+        return [pscustomobject]@{
+            Applied = $false
+            Sha256 = $source.Sha256
+            CertificateCount = $source.CertificateCount
+        }
+    }
+
+    $temporary = Join-Path $Layout.Tls (
+        '.enterprise-build-ca-' + [guid]::NewGuid().ToString('N') + '.tmp'
+    )
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($source.Path)
+        $stream = [System.IO.File]::Open(
+            $temporary,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally {
+            $stream.Dispose()
+        }
+        Get-JobAgentEnterpriseCaMetadata `
+            -Path $temporary `
+            -ExpectedSha256 $source.Sha256 | Out-Null
+        [System.IO.File]::Move($temporary, $destination, $true)
+        $installed = Get-JobAgentEnterpriseCaMetadata `
+            -Path $destination `
+            -ExpectedSha256 $source.Sha256
+        Set-JobAgentPrivateAcl -Path $Layout.Tls
+        Set-JobAgentPrivateAcl -Path $destination
+        return [pscustomobject]@{
+            Applied = $true
+            Sha256 = $installed.Sha256
+            CertificateCount = $installed.CertificateCount
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
     }
 }
 
@@ -1605,6 +1814,12 @@ function Invoke-JobAgentCompose {
     }
     $runtimeValues = Read-JobAgentRuntimeEnvironment -Path $runtimePath
     Assert-JobAgentSafeRuntimeEnvironment -Values $runtimeValues -Layout $layout | Out-Null
+    $enterpriseCaComposePath = $null
+    if (Test-Path -LiteralPath $layout.EnterpriseBuildCa -PathType Leaf) {
+        Get-JobAgentEnterpriseCaMetadata -Path $layout.EnterpriseBuildCa | Out-Null
+        $enterpriseCaComposePath = ConvertTo-JobAgentComposePath `
+            -LiteralPath $layout.EnterpriseBuildCa
+    }
 
     $composeFile = Join-Path (
         ConvertTo-JobAgentCanonicalPath -LiteralPath $RepositoryPath
@@ -1653,6 +1868,9 @@ function Invoke-JobAgentCompose {
             }
             $safeValue = if ($forcedClearNames.Contains($name)) {
                 $null
+            }
+            elseif ($name -eq 'JOB_AGENT_ENTERPRISE_CA_FILE') {
+                $enterpriseCaComposePath
             }
             elseif ($runtimeValues.ContainsKey($name)) {
                 [string]$runtimeValues[$name]
@@ -2749,9 +2967,25 @@ function Invoke-JobAgentBootstrap {
 
         [switch]$RepairOwnedTask,
 
-        [switch]$UpgradeRelease
+        [switch]$UpgradeRelease,
+
+        [string]$EnterpriseCaCertificatePath = '',
+
+        [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+        [string]$EnterpriseCaSha256 = ''
     )
 
+    $enterpriseCaRequested = -not [string]::IsNullOrWhiteSpace(
+        $EnterpriseCaCertificatePath
+    )
+    if ($enterpriseCaRequested -ne (-not [string]::IsNullOrWhiteSpace($EnterpriseCaSha256))) {
+        throw 'ENTERPRISE_CA_PATH_AND_SHA256_REQUIRED'
+    }
+    if ($enterpriseCaRequested) {
+        Get-JobAgentEnterpriseCaMetadata `
+            -Path $EnterpriseCaCertificatePath `
+            -ExpectedSha256 $EnterpriseCaSha256 | Out-Null
+    }
     $repository = ConvertTo-JobAgentCanonicalPath -LiteralPath $RepositoryPath -RequireExisting
     if (-not (Test-Path -LiteralPath (Join-Path $repository 'docker-compose.yml') -PathType Leaf)) {
         throw 'COMPOSE_FILE_UNAVAILABLE'
@@ -2794,6 +3028,17 @@ function Invoke-JobAgentBootstrap {
             -BuildSha $build `
             -UpgradeRelease:$UpgradeRelease `
             -Confirm:$false | Out-Null
+        $enterpriseCa = $null
+        if ($enterpriseCaRequested) {
+            $enterpriseCa = Install-JobAgentEnterpriseBuildCa `
+                -Layout $layout `
+                -SourcePath $EnterpriseCaCertificatePath `
+                -ExpectedSha256 $EnterpriseCaSha256 `
+                -Confirm:$false
+        }
+        elseif (Test-Path -LiteralPath $layout.EnterpriseBuildCa -PathType Leaf) {
+            $enterpriseCa = Get-JobAgentEnterpriseCaMetadata -Path $layout.EnterpriseBuildCa
+        }
         $runtimeValues = Read-JobAgentRuntimeEnvironment -Path $layout.RuntimeEnv
         Assert-JobAgentRuntimeRelease `
             -Values $runtimeValues `
@@ -2866,6 +3111,13 @@ function Invoke-JobAgentBootstrap {
             RunnerConfig = $runnerConfig
             TaskName = $TaskName
             BuildSha = $build
+            EnterpriseCaConfigured = $null -ne $enterpriseCa
+            EnterpriseCaSha256 = if ($null -ne $enterpriseCa) {
+                [string]$enterpriseCa.Sha256
+            }
+            else {
+                $null
+            }
         }
     }
     finally {
@@ -3675,6 +3927,7 @@ Export-ModuleMember -Function @(
     'Get-JobAgentComposeContainers',
     'Get-JobAgentComposeOwnership',
     'Get-JobAgentEndpointOwnership',
+    'Get-JobAgentEnterpriseCaMetadata',
     'Get-JobAgentExpectedTaskAction',
     'Get-JobAgentIdentitySelection',
     'Get-JobAgentLayout',
@@ -3685,6 +3938,7 @@ Export-ModuleMember -Function @(
     'Get-JobAgentTaskOwnership',
     'Get-JobAgentTaskState',
     'Initialize-JobAgentExternalLayout',
+    'Install-JobAgentEnterpriseBuildCa',
     'Invoke-JobAgentBootstrap',
     'Invoke-JobAgentCompose',
     'Invoke-JobAgentOpen',

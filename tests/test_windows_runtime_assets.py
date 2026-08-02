@@ -53,6 +53,11 @@ def test_windows_runtime_entrypoints_and_fail_closed_contract_are_present() -> N
     assert "RELEASE_NOT_MAIN_DERIVED" in module
     assert "RUNTIME_RELEASE_STALE" in module
     assert "UpgradeRelease" in cli
+    assert "EnterpriseCaCertificatePath" in cli
+    assert "EnterpriseCaSha256" in cli
+    assert "ENTERPRISE_CA_PATH_AND_SHA256_REQUIRED" in cli
+    assert "Install-JobAgentEnterpriseBuildCa" in module
+    assert "JOB_AGENT_ENTERPRISE_CA_FILE" in module
     assert "Update-JobAgentRuntimeRelease" in module
     assert "[System.IO.File]::Move($temporary, $runtimePath, $true)" in module
     assert "-RequireClean" in module
