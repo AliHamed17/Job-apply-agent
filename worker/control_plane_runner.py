@@ -1099,7 +1099,7 @@ class ControlPlaneRunner:
         identity = get_runtime_identity()
         readiness = self._runtime_readiness()
         status = "ready" if readiness.get("status") == "ready" else "degraded"
-        payload = {
+        payload: dict[str, object] = {
             "boot_id": self._boot_id,
             "release_digest": identity.release_id,
             "status": status,

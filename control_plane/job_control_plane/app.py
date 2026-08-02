@@ -6,7 +6,7 @@ import html
 import json
 import logging
 import os
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -956,22 +956,23 @@ def _dashboard_html(
     runner: dict[str, object],
 ) -> str:
     grant_rows_parts: list[str] = []
-    for row in grants:
-        state = grant_states[row.id]
+    for grant in grants:
+        state = grant_states[grant.id]
         grant_rows_parts.append(
             "<tr>"
-            f"<td><code>{html.escape(row.id)}</code></td>"
-            f"<td>{html.escape(row.adapter)} {html.escape(row.adapter_version)}</td>"
-            f"<td><code>{html.escape(row.application_ref)}</code> r{row.application_revision}</td>"
+            f"<td><code>{html.escape(grant.id)}</code></td>"
+            f"<td>{html.escape(grant.adapter)} {html.escape(grant.adapter_version)}</td>"
+            f"<td><code>{html.escape(grant.application_ref)}</code> "
+            f"r{grant.application_revision}</td>"
             f"<td>{state}</td>"
             "<td>"
             + (
                 (
                     "<button class='send' "
-                    f"data-grant='{html.escape(row.id)}' "
-                    f"data-ref='{html.escape(row.application_ref)}' "
-                    f"data-revision='{row.application_revision}' "
-                    f"data-fingerprint='{html.escape(row.form_fingerprint_digest)}'>"
+                    f"data-grant='{html.escape(grant.id)}' "
+                    f"data-ref='{html.escape(grant.application_ref)}' "
+                    f"data-revision='{grant.application_revision}' "
+                    f"data-fingerprint='{html.escape(grant.form_fingerprint_digest)}'>"
                     "Send application</button>"
                 )
                 if state == "eligible"
@@ -981,8 +982,8 @@ def _dashboard_html(
         )
     grant_rows = "".join(grant_rows_parts)
     command_rows_parts: list[str] = []
-    for row in commands:
-        events = sorted(row.events, key=lambda item: item.received_at)
+    for command in commands:
+        events = sorted(command.events, key=lambda item: item.received_at)
         latest_event = events[-1] if events else None
         evidence = (
             f"{html.escape(str(latest_event.evidence_type))} "
@@ -994,30 +995,40 @@ def _dashboard_html(
         )
         command_rows_parts.append(
             "<tr>"
-            f"<td><code>{html.escape(row.id)}</code></td>"
-            f"<td>{html.escape(row.adapter)}</td>"
-            f"<td>{html.escape(row.status)}</td>"
+            f"<td><code>{html.escape(command.id)}</code></td>"
+            f"<td>{html.escape(command.adapter)}</td>"
+            f"<td>{html.escape(command.status)}</td>"
             f"<td>{evidence}</td>"
-            f"<td>{html.escape(row.created_at.isoformat())}</td>"
+            f"<td>{html.escape(command.created_at.isoformat())}</td>"
             "</tr>"
         )
     command_rows = "".join(command_rows_parts)
     kill_rows = "".join(
         (
             "<tr>"
-            f"<td><code>{html.escape(row.id)}</code></td>"
-            f"<td>{html.escape(str(_kill_switch_command_view(row)['status']))}</td>"
-            f"<td>{html.escape(row.created_at.isoformat())}</td>"
+            f"<td><code>{html.escape(kill_command.id)}</code></td>"
+            f"<td>{html.escape(str(_kill_switch_command_view(kill_command)['status']))}</td>"
+            f"<td>{html.escape(kill_command.created_at.isoformat())}</td>"
             "</tr>"
         )
-        for row in kill_commands
+        for kill_command in kill_commands
     )
-    pipeline = runner.get("pipeline") if isinstance(runner.get("pipeline"), dict) else {}
-    policy = runner.get("policy") if isinstance(runner.get("policy"), dict) else {}
+    raw_pipeline = runner.get("pipeline")
+    raw_policy = runner.get("policy")
+    pipeline: Mapping[str, object] = raw_pipeline if isinstance(raw_pipeline, dict) else {}
+    policy: Mapping[str, object] = raw_policy if isinstance(raw_policy, dict) else {}
     raw_sources = runner.get("sources")
     raw_adapters = runner.get("adapters")
-    sources = raw_sources if isinstance(raw_sources, list) else []
-    adapters = raw_adapters if isinstance(raw_adapters, list) else []
+    sources: list[Mapping[str, object]] = (
+        [item for item in raw_sources if isinstance(item, dict)]
+        if isinstance(raw_sources, list)
+        else []
+    )
+    adapters: list[Mapping[str, object]] = (
+        [item for item in raw_adapters if isinstance(item, dict)]
+        if isinstance(raw_adapters, list)
+        else []
+    )
     pipeline_rows = "".join(
         f"<tr><td>{html.escape(label)}</td><td>{html.escape(str(pipeline.get(key, 0)))}</td></tr>"
         for key, label in (
@@ -1038,7 +1049,6 @@ def _dashboard_html(
         f"{html.escape(str(item.get('source_count', 0)))}</td>"
         "</tr>"
         for item in sources
-        if isinstance(item, dict)
     )
     adapter_rows = "".join(
         "<tr>"
@@ -1050,7 +1060,6 @@ def _dashboard_html(
         "</td>"
         "</tr>"
         for item in adapters
-        if isinstance(item, dict)
     )
     operations_state = "verified" if runner.get("operations_valid") is True else "unavailable"
     policy_expiry = policy.get("expires_at") or "none"
