@@ -1516,6 +1516,65 @@ $owned = Get-JobAgentTaskOwnership `
     -ExpectedAction $expected `
     -ExpectedUser $principal.UserId
 Assert-Equal $owned.Classification 'OwnedExact' 'marker plus exact action is owned'
+if ($IsWindows) {
+    $qualifiedCurrentUser = (
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    )
+    $shortCurrentUser = ($qualifiedCurrentUser -split '\\')[-1]
+    if (-not [string]::Equals(
+        $qualifiedCurrentUser,
+        $shortCurrentUser,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        $normalizedPrincipal = [pscustomobject]@{
+            UserId = $shortCurrentUser
+            RunLevel = 'Limited'
+            LogonType = 'Interactive'
+        }
+        $normalizedTrigger = [pscustomobject]@{
+            Type = 'Logon'
+            UserId = $shortCurrentUser
+            Enabled = $true
+        }
+        $normalizedTask = [pscustomobject]@{
+            Description = $constants.RunnerTaskOwnershipMarker
+            Principal = $normalizedPrincipal
+            Actions = @($exactAction)
+            Triggers = @($normalizedTrigger)
+            Settings = $taskSettings
+            State = 'Ready'
+        }
+        $normalizedOwnership = Get-JobAgentTaskOwnership `
+            -Task $normalizedTask `
+            -ExpectedAction $expected `
+            -ExpectedUser $qualifiedCurrentUser
+        Assert-Equal `
+            $normalizedOwnership.Classification `
+            'OwnedExact' `
+            'qualified and short names resolving to the same SID are owned'
+    }
+}
+$differentIdentityPrincipal = [pscustomobject]@{
+    UserId = 'OTHER\operator'
+    RunLevel = 'Limited'
+    LogonType = 'Interactive'
+}
+$differentIdentityTask = [pscustomobject]@{
+    Description = $constants.RunnerTaskOwnershipMarker
+    Principal = $differentIdentityPrincipal
+    Actions = @($exactAction)
+    Triggers = @($trigger)
+    Settings = $taskSettings
+    State = 'Ready'
+}
+$differentIdentityOwnership = Get-JobAgentTaskOwnership `
+    -Task $differentIdentityTask `
+    -ExpectedAction $expected `
+    -ExpectedUser $principal.UserId
+Assert-Equal `
+    $differentIdentityOwnership.Classification `
+    'OwnedDrifted' `
+    'unresolved or different principal identities fail closed'
 $emergencyOwned = & $runtimeModule {
     param([object]$Task)
     Get-JobAgentEmergencyTaskOwnership -Task $Task

@@ -990,6 +990,54 @@ function Get-JobAgentExpectedTaskAction {
     }
 }
 
+function Test-JobAgentWindowsIdentityMatch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$First,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Second
+    )
+
+    $firstIdentity = $First.Trim()
+    $secondIdentity = $Second.Trim()
+    if (
+        [string]::IsNullOrWhiteSpace($firstIdentity) -or
+        [string]::IsNullOrWhiteSpace($secondIdentity)
+    ) {
+        return $false
+    }
+    if ([string]::Equals(
+        $firstIdentity,
+        $secondIdentity,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        return $true
+    }
+    if (-not $IsWindows) {
+        return $false
+    }
+
+    try {
+        $sidType = [System.Security.Principal.SecurityIdentifier]
+        $firstSid = (
+            [System.Security.Principal.NTAccount]::new($firstIdentity)
+        ).Translate($sidType).Value
+        $secondSid = (
+            [System.Security.Principal.NTAccount]::new($secondIdentity)
+        ).Translate($sidType).Value
+        return [string]::Equals(
+            $firstSid,
+            $secondSid,
+            [System.StringComparison]::Ordinal
+        )
+    }
+    catch {
+        return $false
+    }
+}
+
 function Get-JobAgentTaskOwnership {
     [CmdletBinding()]
     param(
@@ -1054,11 +1102,9 @@ function Get-JobAgentTaskOwnership {
         }
         $principalExact = (
             $null -ne $Task.Principal -and
-            [string]::Equals(
-                ([string]$Task.Principal.UserId).Trim(),
-                $ExpectedUser.Trim(),
-                [System.StringComparison]::OrdinalIgnoreCase
-            ) -and
+            (Test-JobAgentWindowsIdentityMatch `
+                -First ([string]$Task.Principal.UserId) `
+                -Second $ExpectedUser) -and
             ([string]$Task.Principal.RunLevel) -eq 'Limited' -and
             $logonType -in @('Interactive', 'InteractiveToken')
         )
@@ -1098,11 +1144,9 @@ function Get-JobAgentTaskOwnership {
         $triggerExact = (
             $triggerType -in @('MSFT_TaskLogonTrigger', 'Logon') -and
             $triggerEnabled -and
-            [string]::Equals(
-                $triggerUser.Trim(),
-                $ExpectedUser.Trim(),
-                [System.StringComparison]::OrdinalIgnoreCase
-            )
+            (Test-JobAgentWindowsIdentityMatch `
+                -First $triggerUser `
+                -Second $ExpectedUser)
         )
     }
     $settingsExact = (
