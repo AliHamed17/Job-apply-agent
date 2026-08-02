@@ -336,6 +336,12 @@ Keep PostgreSQL, Redis, Chromium, browser profiles, CVs, and Ollama private.
 The runner makes outbound TLS requests to the control plane; no inbound browser
 worker port is exposed.
 
+Deploy and migrate the control-plane server before updating this runner. The
+new server accepts the legacy heartbeat during a rolling upgrade; the previous
+server rejects the new operations-summary fields. After the server is promoted,
+require a fresh signed summary heartbeat and matching operations digest before
+considering the runner online.
+
 Start with:
 
 ```dotenv
@@ -361,6 +367,12 @@ owned task and Compose project and preserves data volumes.
 Require local readiness and a healthy signed heartbeat before allowing
 preparation. A heartbeat only proves runner availability; it does not qualify
 an adapter or authorize a final action.
+
+The runner log is external to Git and the release checkout at
+`%LOCALAPPDATA%\JobApplyAgent\logs\control-plane-runner.jsonl`. It contains only
+structured fixed events/statuses, stable reason codes, and exception class
+names. It rotates at 5 MiB with five backups and never stores exception text or
+protocol payloads.
 
 ## 7. Operator acceptance
 

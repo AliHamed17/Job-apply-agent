@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import signal
@@ -14,6 +15,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -39,6 +41,8 @@ from core.control_plane_review_permits import (
     release_review_grant_revocation,
     validate_control_plane_review_grant,
 )
+from core.control_plane_status import build_control_plane_status
+from core.operational_labels import normalize_reason_code
 from core.operations import readiness_report
 from core.runtime_identity import build_runtime_capabilities, get_runtime_identity
 from core.submission_service import (
@@ -73,6 +77,69 @@ MAX_COMMAND_LIFETIME_SECONDS = 300
 MAX_REVOCATIONS_PER_CYCLE = 25
 _SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_RUNNER_LOGGER_NAME = "job_apply_agent.control_plane_runner"
+_RUNNER_LOG_FILENAME = "control-plane-runner.jsonl"
+_RUNNER_LOG_MAX_BYTES = 5 * 1024 * 1024
+_RUNNER_LOG_BACKUP_COUNT = 5
+_LOG_EVENTS = frozenset(
+    {
+        "runner_started",
+        "runner_cycle",
+        "runner_cycle_failed",
+        "runner_stopped",
+        "runner_once_started",
+        "runner_once_failed",
+        "runner_once_finished",
+    }
+)
+_LOG_STATUSES = frozenset(
+    {
+        "accepted",
+        "degraded",
+        "failed",
+        "idle",
+        "kill_switch_activated",
+        "kill_switch_replayed",
+        "replayed",
+        "revocations_draining",
+        "running",
+        "stopped",
+        "unknown",
+    }
+)
+_LOG_ERROR_TYPES = frozenset(
+    {
+        "ConnectionError",
+        "ControlPlaneClientError",
+        "ControlPlaneRunnerError",
+        "JSONDecodeError",
+        "OSError",
+        "RuntimeError",
+        "TimeoutError",
+        "ValueError",
+    }
+)
+_LOG_REASON_CATEGORIES = (
+    ("CONTROL_", "CONTROL_RUNNER_ERROR"),
+    ("RUNNER_", "RUNNER_RUNTIME_ERROR"),
+    ("KILL_SWITCH_", "KILL_SWITCH_ERROR"),
+    ("SECRET_", "RUNNER_CONFIGURATION_ERROR"),
+    ("REVIEW_GRANT_", "CONTROL_GRANT_ERROR"),
+    ("APPLICATION_", "SUBMISSION_BINDING_ERROR"),
+    ("ADAPTER_", "SUBMISSION_BINDING_ERROR"),
+    ("FORM_", "SUBMISSION_BINDING_ERROR"),
+)
+_LOG_REASON_CODES = frozenset(
+    {
+        "CONTROL_GRANT_ERROR",
+        "CONTROL_RUNNER_ERROR",
+        "KILL_SWITCH_ERROR",
+        "RUNNER_CONFIGURATION_ERROR",
+        "RUNNER_CYCLE_FAILED",
+        "RUNNER_RUNTIME_ERROR",
+        "SUBMISSION_BINDING_ERROR",
+    }
+)
 
 
 class ControlPlaneRunnerError(RuntimeError):
@@ -81,6 +148,106 @@ class ControlPlaneRunnerError(RuntimeError):
     def __init__(self, reason_code: str):
         super().__init__(reason_code)
         self.reason_code = reason_code
+
+
+class _RunnerJsonFormatter(logging.Formatter):
+    """Serialize only fixed operational fields; ignore log messages entirely."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "event": getattr(record, "event", "runner_event_invalid"),
+            "status": getattr(record, "status_code", "unknown"),
+        }
+        reason_code = getattr(record, "reason_code", None)
+        error_type = getattr(record, "error_type", None)
+        if reason_code:
+            payload["reason_code"] = reason_code
+        if error_type:
+            payload["error_type"] = error_type
+        return json.dumps(
+            payload,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+
+def runner_log_path(config: RunnerConfig) -> Path:
+    """Derive the external managed log path from the validated runtime layout."""
+
+    if config.runtime_env_path is None:
+        raise ControlPlaneRunnerError("RUNNER_ENV_REQUIRED")
+    root = config.runtime_env_path.resolve().parent.parent
+    path = (root / "logs" / _RUNNER_LOG_FILENAME).resolve()
+    project_root = Path(__file__).resolve().parents[1]
+    if path.is_relative_to(project_root):
+        raise ControlPlaneRunnerError("RUNNER_LOG_PATH_NOT_EXTERNAL")
+    return path
+
+
+def configure_runner_logging(config: RunnerConfig) -> logging.Logger:
+    """Create one bounded rotating JSONL logger below the external runtime root."""
+
+    path = runner_log_path(config)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            path,
+            maxBytes=_RUNNER_LOG_MAX_BYTES,
+            backupCount=_RUNNER_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise ControlPlaneRunnerError("RUNNER_LOG_UNAVAILABLE") from exc
+    handler.setFormatter(_RunnerJsonFormatter())
+    logger = logging.getLogger(_RUNNER_LOGGER_NAME)
+    for existing in tuple(logger.handlers):
+        logger.removeHandler(existing)
+        existing.close()
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+    return logger
+
+
+def _log_runner_event(
+    logger: logging.Logger,
+    event: str,
+    *,
+    status: str,
+    reason_code: str | None = None,
+    error: BaseException | None = None,
+) -> None:
+    safe_event = event if event in _LOG_EVENTS else "runner_event_invalid"
+    safe_status = status if status in _LOG_STATUSES else "unknown"
+    normalized_reason = normalize_reason_code(reason_code) if reason_code else "NONE"
+    safe_reason = str(reason_code) if reason_code in _LOG_REASON_CODES else None
+    if safe_reason is None and normalized_reason not in {"NONE", "OTHER"}:
+        safe_reason = normalized_reason
+    if reason_code and safe_reason is None:
+        safe_reason = next(
+            (
+                category
+                for prefix, category in _LOG_REASON_CATEGORIES
+                if str(reason_code).startswith(prefix)
+            ),
+            "RUNNER_CYCLE_FAILED",
+        )
+    raw_error_type = type(error).__name__ if error is not None else None
+    safe_error_type = raw_error_type if raw_error_type in _LOG_ERROR_TYPES else None
+    if raw_error_type and safe_error_type is None:
+        safe_error_type = "OtherError"
+    logger.info(
+        "",
+        extra={
+            "event": safe_event,
+            "status_code": safe_status,
+            "reason_code": safe_reason,
+            "error_type": safe_error_type,
+        },
+    )
 
 
 def _aware(value: datetime) -> datetime:
@@ -708,6 +875,7 @@ class ControlPlaneRunner:
         settings: Settings | None = None,
         session_factory: Callable[[], Any] | None = None,
         clock: Callable[[], datetime] = _utc_now,
+        logger: logging.Logger | None = None,
     ):
         self.config = config
         self.client = client or ControlPlaneClient(
@@ -744,6 +912,7 @@ class ControlPlaneRunner:
         self._last_heartbeat: datetime | None = None
         self._stop = asyncio.Event()
         self._boot_id = str(uuid4())
+        self._logger = logger or logging.getLogger(_RUNNER_LOGGER_NAME)
 
     @staticmethod
     def _key_text(raw: bytes) -> str:
@@ -930,11 +1099,58 @@ class ControlPlaneRunner:
         identity = get_runtime_identity()
         readiness = self._runtime_readiness()
         status = "ready" if readiness.get("status") == "ready" else "degraded"
-        payload = {
+        payload: dict[str, object] = {
             "boot_id": self._boot_id,
             "release_digest": identity.release_id,
             "status": status,
         }
+        session_opener = getattr(self, "_open_database_session", None)
+        summary_contract_available = all(
+            hasattr(self._protocol, name)
+            for name in (
+                "AdapterStatusSummary",
+                "AutomationPolicySummary",
+                "DiscoverySourceSummary",
+                "PipelineCounters",
+                "operations_summary_digest",
+            )
+        )
+        if callable(session_opener) and summary_contract_available:
+            db = None
+            try:
+                db = session_opener()
+                summary = build_control_plane_status(db, now=now)
+                pipeline = self._protocol.PipelineCounters.model_validate(summary["pipeline"])
+                policy = self._protocol.AutomationPolicySummary.model_validate(summary["policy"])
+                sources = tuple(
+                    self._protocol.DiscoverySourceSummary.model_validate(item)
+                    for item in summary["sources"]
+                )
+                adapters = tuple(
+                    self._protocol.AdapterStatusSummary.model_validate(item)
+                    for item in summary["adapters"]
+                )
+                payload.update(
+                    {
+                        "pipeline": pipeline.model_dump(mode="json"),
+                        "policy": policy.model_dump(mode="json"),
+                        "sources": [item.model_dump(mode="json") for item in sources],
+                        "adapters": [item.model_dump(mode="json") for item in adapters],
+                        "operations_digest": self._protocol.operations_summary_digest(
+                            pipeline=pipeline,
+                            policy=policy,
+                            sources=sources,
+                            adapters=adapters,
+                        ),
+                    }
+                )
+            except Exception:
+                # A summary failure degrades this heartbeat but never expands
+                # the protocol or leaks database/error text to the control plane.
+                payload["status"] = "degraded"
+            finally:
+                if db is not None:
+                    db.close()
         envelope = self._signed_envelope(
             purpose=self._protocol.EnvelopePurpose.RUNNER_HEARTBEAT,
             payload=payload,
@@ -1268,14 +1484,32 @@ class ControlPlaneRunner:
         return "replayed" if accepted.replayed else "accepted"
 
     async def run(self) -> None:
+        _log_runner_event(self._logger, "runner_started", status="running")
         try:
             while not self._stop.is_set():
                 try:
-                    await self.run_once()
-                except Exception:
+                    result = await self.run_once()
+                    if result != "idle":
+                        _log_runner_event(
+                            self._logger,
+                            "runner_cycle",
+                            status=result,
+                        )
+                except Exception as exc:
                     # Fail closed, remain outbound-only, and retry after the
-                    # configured interval. Never print envelope/private data.
-                    pass
+                    # configured interval. The structured logger receives only
+                    # stable codes and exception types, never exception text.
+                    _log_runner_event(
+                        self._logger,
+                        "runner_cycle_failed",
+                        status="degraded",
+                        reason_code=(
+                            exc.reason_code
+                            if isinstance(exc, ControlPlaneRunnerError)
+                            else "RUNNER_CYCLE_FAILED"
+                        ),
+                        error=exc,
+                    )
                 try:
                     now = datetime.now(UTC)
                     heartbeat_remaining = (
@@ -1297,6 +1531,7 @@ class ControlPlaneRunner:
                 except TimeoutError:
                     continue
         finally:
+            _log_runner_event(self._logger, "runner_stopped", status="stopped")
             if self._owns_client:
                 await self.client.close()
             self._database_engine.dispose()
@@ -1326,14 +1561,30 @@ async def _run_cli(command: str, config_path: Path) -> int:
         _read_private_path(config.control_plane_public_key_path)
         print("configured")  # noqa: T201 - intentional bounded CLI output
         return 0
-    runner = ControlPlaneRunner(config)
+    logger = configure_runner_logging(config)
+    runner = ControlPlaneRunner(config, logger=logger)
     if command == "once":
+        _log_runner_event(logger, "runner_once_started", status="running")
         try:
             result = await runner.run_once()
+        except Exception as exc:
+            _log_runner_event(
+                logger,
+                "runner_once_failed",
+                status="failed",
+                reason_code=(
+                    exc.reason_code
+                    if isinstance(exc, ControlPlaneRunnerError)
+                    else "RUNNER_CYCLE_FAILED"
+                ),
+                error=exc,
+            )
+            raise
         finally:
             if runner._owns_client:
                 await runner.client.close()
             runner._database_engine.dispose()
+        _log_runner_event(logger, "runner_once_finished", status=result)
         print(result)  # noqa: T201 - intentional bounded CLI output
         return 0
 

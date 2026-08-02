@@ -15,11 +15,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
 from job_control_plane.app import create_app
 from job_control_plane.config import Settings
 from job_control_plane.db import Base, current_revision
-from job_control_plane.models import OperatorSession
+from job_control_plane.models import OperatorSession, RunnerDevice
 from job_control_plane.protocol import (
     AdapterCode,
     AttemptStage,
@@ -145,7 +146,7 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
 
     command.upgrade(config, "head")
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
-    assert current_revision(engine) == "0005_kill_switch_commands"
+    assert current_revision(engine) == "0006_runner_operations_summary"
     table_names = set(inspect(engine).get_table_names())
     assert {
         "control_runner_devices",
@@ -166,6 +167,21 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
         column["name"] for column in inspect(engine).get_columns("control_kill_switch_commands")
     }
     assert "runner_boot_id" in kill_command_columns
+    runner_columns = {
+        column["name"] for column in inspect(engine).get_columns("control_runner_devices")
+    }
+    assert {
+        "operations_digest",
+        "policy_status",
+        "policy_revision",
+        "policy_expires_at",
+        "policy_daily_remaining",
+        "policy_hourly_remaining",
+        "kill_switch_active",
+        "pipeline_counters_json",
+        "source_status_json",
+        "adapter_status_json",
+    } <= runner_columns
     migrated_kill_indexes = {
         index["name"] for index in inspect(engine).get_indexes("control_kill_switch_commands")
     }
@@ -209,6 +225,12 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
             json=heartbeat.model_dump(mode="json"),
         )
         assert accepted.status_code == 200  # Nonce BigInteger variant also works.
+        with Session(engine) as db:
+            device = db.execute(select(RunnerDevice)).scalar_one()
+            assert device.policy_status == "unavailable"
+            assert device.pipeline_counters_json == "{}"
+            assert device.source_status_json == "[]"
+            assert device.adapter_status_json == "[]"
     engine.dispose()
 
     command.downgrade(config, "0003_login_throttle")
@@ -244,6 +266,92 @@ def test_migration_upgrade_runtime_write_downgrade_round_trip(
     command.downgrade(config, "base")
     downgraded = create_engine(database_url)
     assert not any(name.startswith("control_") for name in inspect(downgraded).get_table_names())
+    downgraded.dispose()
+
+
+def test_operations_summary_migration_preserves_runner_identity_and_round_trips(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    database_url = f"sqlite:///{tmp_path / 'operations-summary-migration.sqlite'}"
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("CONTROL_DATABASE_URL", database_url)
+    config = Config(str(root / "alembic.ini"))
+    command.upgrade(config, "0005_kill_switch_commands")
+    engine = create_engine(database_url)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO control_runner_devices ("
+                "id, public_key_b64, active, created_at, last_seen_at, boot_id, "
+                "release_digest, status"
+                ") VALUES ("
+                ":id, :public_key, true, :created_at, :last_seen_at, :boot_id, "
+                ":release_digest, 'ready'"
+                ")"
+            ),
+            {
+                "id": "00000000-0000-4000-8000-000000000006",
+                "public_key": "A" * 43,
+                "created_at": now,
+                "last_seen_at": now,
+                "boot_id": "00000000-0000-4000-8000-000000000007",
+                "release_digest": "a" * 64,
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    upgraded = create_engine(database_url)
+    assert current_revision(upgraded) == "0006_runner_operations_summary"
+    with upgraded.connect() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT id, release_digest, status, operations_digest, policy_status, "
+                    "policy_revision, policy_daily_remaining, policy_hourly_remaining, "
+                    "kill_switch_active, pipeline_counters_json, source_status_json, "
+                    "adapter_status_json FROM control_runner_devices"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert row["id"] == "00000000-0000-4000-8000-000000000006"
+    assert row["release_digest"] == "a" * 64
+    assert row["status"] == "ready"
+    assert row["operations_digest"] is None
+    assert row["policy_status"] == "unavailable"
+    assert row["policy_revision"] == 0
+    assert row["policy_daily_remaining"] == 0
+    assert row["policy_hourly_remaining"] == 0
+    assert bool(row["kill_switch_active"]) is False
+    assert row["pipeline_counters_json"] == "{}"
+    assert row["source_status_json"] == "[]"
+    assert row["adapter_status_json"] == "[]"
+    upgraded.dispose()
+
+    command.downgrade(config, "0005_kill_switch_commands")
+    downgraded = create_engine(database_url)
+    assert current_revision(downgraded) == "0005_kill_switch_commands"
+    columns = {item["name"] for item in inspect(downgraded).get_columns("control_runner_devices")}
+    assert "operations_digest" not in columns
+    assert "pipeline_counters_json" not in columns
+    with downgraded.connect() as connection:
+        preserved = (
+            connection.execute(
+                text("SELECT id, release_digest, status FROM control_runner_devices")
+            )
+            .mappings()
+            .one()
+        )
+    assert preserved == {
+        "id": "00000000-0000-4000-8000-000000000006",
+        "release_digest": "a" * 64,
+        "status": "ready",
+    }
     downgraded.dispose()
 
 

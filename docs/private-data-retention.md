@@ -18,7 +18,8 @@ below is an operational policy that must be reviewed and executed deliberately.
 | Operational metric details | Private PostgreSQL | Redacted bounded labels only | Keep at most 90 days and 100,000 rows |
 | Operational metric receipts | Private PostgreSQL | SHA-256 event key and timestamp only | Retain for replay prevention; contains no labels or private content |
 | Operational metric rollups | Private PostgreSQL | Redacted aggregate | Retain for historical counters; review annually |
-| Logs | Private host | Potentially sensitive | 30 days maximum unless an incident hold exists |
+| Structured control-plane runner logs | `$env:LOCALAPPDATA\JobApplyAgent\logs` | Redacted fixed fields only | 5 MiB plus five backups (about 30 MiB); delete files older than 30 days unless an incident hold exists |
+| Other or legacy logs | Private host | Potentially sensitive | 30 days maximum unless an incident hold exists |
 | Prometheus metrics | Private host | Redacted aggregate | 15 days |
 | Control-plane sessions/commands/events | Dedicated cloud PostgreSQL | Redacted metadata | Sessions expire quickly; review command/event retention annually |
 | Encrypted backups | Approved backup storage | Same sensitivity as source | Rotate under the backup schedule and expire after verified replacement |
@@ -44,6 +45,11 @@ because storage is available.
 - Metric detail pruning deletes only the bounded labeled observation. Its
   content-free SHA-256 receipt remains so delayed task replay cannot count the
   same domain event twice.
+- The managed control-plane runner never logs exception messages, URLs,
+  envelopes, tokens, identity, answers, CV data, or application content. Its
+  JSONL fields are limited to timestamp, fixed event/status, stable reason code,
+  and exception class name. Absence from this log is not evidence that an
+  employer action did or did not occur.
 - Sensitive factual answers require exact user-confirmed evidence.
 - Ollama inputs remain local and have no cloud fallback in production.
 

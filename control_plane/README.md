@@ -47,6 +47,12 @@ executors.
   `inspecting`/`preparing`/`ready` transition may reset to `queued`. A terminal
   `unknown` or `legacy_unverified` outcome may receive exactly one later
   non-green operator reconciliation event; it can never become employer proof.
+- Every signed heartbeat binds the runner boot/release identity to an optional
+  canonical operations digest. The summary contains only seven pipeline
+  counters, bounded policy status, fixed discovery-source codes, and fixed
+  ATS/qualification codes. The server recomputes the digest before storage and
+  again before rendering. A malformed or mixed summary is rejected, and a
+  legacy heartbeat clears any stale summary during the rolling upgrade.
 - OpenAPI and interactive documentation are disabled.
 
 ## Required environment
@@ -163,9 +169,17 @@ submission evidence, or signed revocation envelopes. Run it a second time and
 require zero changed rows, then generate a new device UUID and new Ed25519
 identities. Old devices are never reactivated.
 
+Migration `0006_runner_operations_summary` adds only the redacted heartbeat
+summary columns and preserves existing device rows. Deploy and migrate this
+server before starting a summary-capable private runner. The server accepts
+legacy heartbeats for the rolling boundary; an older server does not accept the
+new summary fields.
+
 See the repository-level
 [control-plane bootstrap](../docs/control-plane-bootstrap.md) and
-[backup/restore runbook](../docs/control-plane-backup-restore.md).
+[backup/restore runbook](../docs/control-plane-backup-restore.md). The
+[v5 operations handoff](../docs/v5-operations-handoff.md) defines the
+server-first rolling upgrade, bounded metrics, and staged rollout gates.
 
 ## Local verification
 

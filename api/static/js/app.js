@@ -813,6 +813,12 @@ function operationalCount(value) {
     return Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
 }
 
+function operationalDecimal(value, maximum = 100, digits = 1) {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0 || number > maximum) return '0';
+    return number.toFixed(digits);
+}
+
 function operationalToken(value, fallback = 'unknown') {
     if (value === null || value === undefined || value === '') return fallback;
     return String(value).replace(/_/g, ' ');
@@ -998,6 +1004,179 @@ function renderOperationsDashboard() {
         </table></div>`
         : '<div class="operations-empty">No versioned adapter inventory is available.</div>';
 
+    const pipelineCounts = data.pipeline_counts && typeof data.pipeline_counts === 'object'
+        && !Array.isArray(data.pipeline_counts)
+        ? data.pipeline_counts
+        : {};
+    const pipelineItems = [
+        ['Discovered', pipelineCounts.discovered, 'Jobs created in this bounded window'],
+        ['Occurrences', pipelineCounts.source_occurrences, 'Source observations retained for audit'],
+        ['Deduplicated', pipelineCounts.deduplicated, 'Duplicate observations in this window'],
+        ['Auto-eligible', pipelineCounts.eligible, 'Latest calibrated decisions'],
+        ['Prepared', pipelineCounts.prepared, 'Current reviewed revision'],
+        ['Quarantined', pipelineCounts.quarantined, 'Stopped for operator review'],
+        ['Employer confirmed', pipelineCounts.employer_confirmed, 'Exact verified applications'],
+    ];
+    const pipelineHtml = `<div class="operations-kpi-grid">${pipelineItems.map(([label, value, detail]) => `
+        <div class="operations-summary-card">
+            <div class="operations-summary-label">${esc(label)}</div>
+            <div class="operations-summary-value">${esc(operationalCount(value))}</div>
+            <div class="operations-summary-detail">${esc(detail)}</div>
+        </div>`).join('')}</div>`;
+
+    const policy = data.automation_policy && typeof data.automation_policy === 'object'
+        && !Array.isArray(data.automation_policy)
+        ? data.automation_policy
+        : {};
+    const policyState = policy.kill_switch_active === true
+        ? 'kill switch active'
+        : policy.active === true
+            ? 'active'
+            : policy.reason_code === 'AUTOMATION_POLICY_NOT_ACTIVE'
+                ? 'inactive'
+                : 'blocked';
+    const policyClass = policy.kill_switch_active === true
+        ? 'is-danger'
+        : policy.active === true
+            ? 'is-neutral'
+            : 'is-warning';
+    const policyAdapters = Array.isArray(policy.permitted_adapters)
+        ? policy.permitted_adapters.slice(0, 16).map(value => operationalToken(value)).join(', ')
+        : '';
+    const policyGeographies = Array.isArray(policy.geographies)
+        ? policy.geographies.slice(0, 8).map(value => operationalToken(value)).join(', ')
+        : '';
+    const policyHtml = `<div class="operations-policy-grid">
+        <div class="operations-policy-state">
+            <span class="operations-status-dot ${policyClass}" aria-hidden="true"></span>
+            <div>
+                <div class="operations-dependency-name">${esc(operationalToken(policyState))}</div>
+                <div class="operations-dependency-status">
+                    revision ${esc(operationalCount(policy.revision))}
+                    ${policy.reason_code ? ` · ${esc(operationalToken(policy.reason_code))}` : ''}
+                    ${policy.expires_at ? ` · expires ${esc(fmtDateTime(policy.expires_at))}` : ''}
+                </div>
+            </div>
+        </div>
+        <div class="operations-policy-limit">
+            <span>Daily remaining</span>
+            <strong>${esc(operationalCount(policy.daily_remaining))} / ${esc(operationalCount(policy.daily_limit))}</strong>
+        </div>
+        <div class="operations-policy-limit">
+            <span>Hourly remaining</span>
+            <strong>${esc(operationalCount(policy.hourly_remaining))} / ${esc(operationalCount(policy.hourly_limit))}</strong>
+        </div>
+        <div class="operations-policy-limit">
+            <span>Company cap</span>
+            <strong>${esc(operationalCount(policy.company_limit))} / ${esc(operationalCount(policy.company_window_days))} days</strong>
+        </div>
+        <div class="operations-policy-detail">
+            fit ≥ ${esc(operationalDecimal(policy.minimum_fit_score, 100, 1))}
+            · ${esc(operationalCount(policy.role_family_count))} role families
+            · ${esc(operationalCount(policy.qualified_form_contract_count))} qualified contracts
+            ${policyAdapters ? ` · adapters ${esc(policyAdapters)}` : ''}
+            ${policyGeographies ? ` · geography ${esc(policyGeographies)}` : ''}
+        </div>
+    </div>`;
+
+    const discoverySources = boundedOperationalItems(data.discovery_sources);
+    const discoverySourceHtml = discoverySources.length
+        ? `<div class="operations-table-wrap"><table class="operations-table">
+            <thead><tr>
+                <th>Source</th><th>Status</th><th>Enabled</th><th>Cadence</th>
+                <th>Next poll</th><th>Last success</th><th>Last error</th>
+            </tr></thead>
+            <tbody>${discoverySources.map(source => `<tr>
+                <td>${esc(operationalToken(source.source_type))}</td>
+                <td><span class="operations-status-inline">
+                    <span class="operations-status-dot ${operationalStatusClass(source.status)}" aria-hidden="true"></span>
+                    ${esc(operationalToken(source.status))}
+                </span></td>
+                <td>${esc(operationalCount(source.enabled_count))} / ${esc(operationalCount(source.source_count))}</td>
+                <td>${esc(operationalCount(source.cadence_seconds))}s</td>
+                <td>${esc(fmtDateTime(source.next_poll_at))}</td>
+                <td>${esc(fmtDateTime(source.last_success_at))}</td>
+                <td>${esc(operationalToken(source.last_error_code, 'none'))}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`
+        : '<div class="operations-empty">No configured discovery sources are recorded.</div>';
+
+    const roleMatrix = boundedOperationalItems(data.role_cv_matrix);
+    const roleMatrixHtml = roleMatrix.length
+        ? `<div class="operations-table-wrap"><table class="operations-table">
+            <thead><tr>
+                <th>CV route</th><th>Total</th><th>Eligible</th><th>Review</th><th>Excluded</th>
+                <th>Avg fit</th><th>Routing confidence</th>
+            </tr></thead>
+            <tbody>${roleMatrix.map(row => `<tr>
+                <td>${esc(operationalToken(row.cv_route))}</td>
+                <td>${esc(operationalCount(row.total))}</td>
+                <td>${esc(operationalCount(row.eligible))}</td>
+                <td>${esc(operationalCount(row.needs_review))}</td>
+                <td>${esc(operationalCount(row.excluded))}</td>
+                <td>${esc(operationalDecimal(row.average_fit_score, 100, 1))}</td>
+                <td>${esc(operationalDecimal(row.average_routing_confidence, 1, 3))}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`
+        : '<div class="operations-empty">No calibrated role-to-CV decisions are recorded.</div>';
+
+    const fitDecisions = boundedOperationalItems(data.recent_fit_decisions);
+    const fitDecisionHtml = fitDecisions.length
+        ? `<div class="operations-table-wrap"><table class="operations-table operations-table-dense">
+            <thead><tr>
+                <th>Decision</th><th>CV route</th><th>Fit</th><th>Routing</th>
+                <th>Disposition</th><th>Bounded evidence</th><th>Observed</th>
+            </tr></thead>
+            <tbody>${fitDecisions.map(item => {
+                const factors = boundedOperationalItems(item.evidence, 7)
+                    .map(evidence => `${operationalToken(evidence.factor)}:${operationalToken(evidence.result)}`)
+                    .join(' · ');
+                const blockers = [
+                    ...(Array.isArray(item.hard_exclusions) ? item.hard_exclusions.slice(0, 20) : []),
+                    ...(Array.isArray(item.uncertainty) ? item.uncertainty.slice(0, 30) : []),
+                ].map(value => operationalToken(value)).join(', ');
+                const evidenceDetail = blockers || factors || 'none';
+                return `<tr>
+                    <td>#${esc(operationalCount(item.decision_id))} / job #${esc(operationalCount(item.job_id))}</td>
+                    <td>${esc(operationalToken(item.cv_route))}</td>
+                    <td>${esc(operationalDecimal(item.fit_score, 100, 1))}</td>
+                    <td>${esc(operationalDecimal(item.routing_confidence, 1, 3))} · margin ${esc(operationalDecimal(item.routing_margin, 1, 3))}</td>
+                    <td>${esc(operationalToken(item.disposition))}${item.quality_eligible === true ? ' · calibrated' : ''}</td>
+                    <td>${esc(evidenceDetail)}${operationalCount(item.unsupported_required_skill_count) ? ` · ${esc(operationalCount(item.unsupported_required_skill_count))} unsupported` : ''}</td>
+                    <td>${esc(fmtDateTime(item.created_at))}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table></div>`
+        : '<div class="operations-empty">No current fit decisions are available.</div>';
+
+    const recentAttempts = boundedOperationalItems(data.recent_attempts);
+    const recentAttemptHtml = recentAttempts.length
+        ? `<div class="operations-table-wrap"><table class="operations-table operations-table-dense">
+            <thead><tr>
+                <th>Attempt</th><th>Stage / outcome</th><th>ATS build</th><th>CV / attachment</th>
+                <th>Authority</th><th>Evidence</th><th>Timeline</th>
+            </tr></thead>
+            <tbody>${recentAttempts.map(attempt => {
+                const outcome = operationalToken(attempt.outcome);
+                const outcomeClass = attempt.outcome === 'confirmed_submitted'
+                    ? 'operations-tier is-confirmed'
+                    : 'operations-tier';
+                const evidence = attempt.evidence_digest
+                    ? `${operationalToken(attempt.verification_kind)} ${shortOperationalToken(attempt.evidence_digest, 12)}`
+                    : operationalToken(attempt.verification_kind, 'none');
+                return `<tr>
+                    <td>#${esc(operationalCount(attempt.attempt_id))} · app #${esc(operationalCount(attempt.application_id))} · try ${esc(operationalCount(attempt.attempt_number))}</td>
+                    <td>${esc(operationalToken(attempt.stage))} · <span class="${outcomeClass}">${esc(outcome)}</span><br>${esc(operationalToken(attempt.reason_code))}</td>
+                    <td>${esc(operationalToken(attempt.ats))}<br>${esc(shortOperationalToken(attempt.adapter_version))} · ${esc(shortOperationalToken(attempt.selector_version))}</td>
+                    <td>${esc(operationalToken(attempt.cv_route))}<br>${attempt.attachment_verified === true ? 'verified attachment' : 'attachment unverified'}</td>
+                    <td>${esc(operationalToken(attempt.authority_kind))}</td>
+                    <td>${esc(evidence)}${attempt.form_fingerprint ? `<br>form ${esc(shortOperationalToken(attempt.form_fingerprint, 12))}` : ''}</td>
+                    <td>created ${esc(fmtDateTime(attempt.created_at))}${attempt.final_action_at ? `<br>final action ${esc(fmtDateTime(attempt.final_action_at))}` : ''}${attempt.finished_at ? `<br>finished ${esc(fmtDateTime(attempt.finished_at))}` : ''}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table></div>`
+        : '<div class="operations-empty">No submission attempts are recorded.</div>';
+
     container.innerHTML = `
         <div class="operations-summary-grid">
             <div class="operations-summary-card">
@@ -1021,6 +1200,54 @@ function renderOperationsDashboard() {
                     · runner ${esc(shortOperationalToken(runtimeIdentity.runner_release, 12))}
                 </div>
             </div>
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Qualified autopilot policy</h4>
+                <span>Locally signed authority; an environment variable cannot activate it</span>
+            </div>
+            ${policyHtml}
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Pipeline truth</h4>
+                <span>Current state plus the ${esc(windowDays || 0)}-day discovery window</span>
+            </div>
+            ${pipelineHtml}
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Discovery source health</h4>
+                <span>Tenant identifiers and hosts are withheld</span>
+            </div>
+            ${discoverySourceHtml}
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Role-to-CV matrix</h4>
+                <span>Latest deterministic fit decision per job</span>
+            </div>
+            ${roleMatrixHtml}
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Fit and routing evidence</h4>
+                <span>Stable factors and reason codes only; no job or CV text</span>
+            </div>
+            ${fitDecisionHtml}
+        </div>
+
+        <div class="operations-card operations-card-wide">
+            <div class="operations-card-heading">
+                <h4>Recent attempt timeline</h4>
+                <span>Only confirmed submitted outcomes receive a green badge</span>
+            </div>
+            ${recentAttemptHtml}
         </div>
 
         <div class="operations-card operations-card-wide">

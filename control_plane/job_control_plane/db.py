@@ -10,7 +10,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import Settings
 
-EXPECTED_SCHEMA_REVISION = "0005_kill_switch_commands"
+EXPECTED_SCHEMA_REVISION = "0006_runner_operations_summary"
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",

@@ -7,6 +7,7 @@ identifiers/hashes, answers, and arbitrary text have no representation here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from enum import StrEnum
 from typing import Annotated, Generic, Literal, TypeVar
@@ -59,6 +60,38 @@ class RunnerStatus(StrEnum):
     READY = "ready"
     DEGRADED = "degraded"
     DRAINING = "draining"
+
+
+class DiscoverySourceCode(StrEnum):
+    GREENHOUSE = "greenhouse"
+    LEVER = "lever"
+    ASHBY = "ashby"
+    SMARTRECRUITERS = "smartrecruiters"
+    REMOTIVE = "remotive"
+    GMAIL_ALERT = "gmail_alert"
+    LINKEDIN_PARTNER = "linkedin_partner"
+    GENERIC_JSONLD = "generic_jsonld"
+    GENERIC_FEED = "generic_feed"
+
+
+class SourceHealth(StrEnum):
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    DISABLED = "disabled"
+    UNKNOWN = "unknown"
+
+
+class QualificationTierCode(StrEnum):
+    DISABLED = "disabled"
+    FIXTURE_QUALIFIED = "fixture_qualified"
+    DRY_RUN_QUALIFIED = "dry_run_qualified"
+    LIVE_CANARY_QUALIFIED = "live_canary_qualified"
+
+
+class AutomationPolicyState(StrEnum):
+    INACTIVE = "inactive"
+    ACTIVE = "active"
+    BLOCKED = "blocked"
 
 
 class CommandAckStatus(StrEnum):
@@ -126,10 +159,126 @@ class EvidenceType(StrEnum):
     ATS_VISIBLE_CONFIRMATION = "ats_visible_confirmation"
 
 
+BoundedCounter = Annotated[int, Field(strict=True, ge=0, le=2_147_483_647)]
+
+
+class PipelineCounters(StrictProtocolModel):
+    discovered: BoundedCounter = 0
+    source_occurrences: BoundedCounter = 0
+    deduplicated: BoundedCounter = 0
+    eligible: BoundedCounter = 0
+    prepared: BoundedCounter = 0
+    quarantined: BoundedCounter = 0
+    employer_confirmed: BoundedCounter = 0
+
+
+class AutomationPolicySummary(StrictProtocolModel):
+    state: AutomationPolicyState
+    revision: BoundedCounter = 0
+    expires_at: AwareDatetime | None = None
+    daily_remaining: Annotated[int, Field(strict=True, ge=0, le=25)] = 0
+    hourly_remaining: Annotated[int, Field(strict=True, ge=0, le=5)] = 0
+    kill_switch_active: bool = False
+
+    @model_validator(mode="after")
+    def authority_state_is_consistent(self) -> AutomationPolicySummary:
+        if self.state is AutomationPolicyState.ACTIVE and self.expires_at is None:
+            raise ValueError("active policy summary requires an expiry")
+        if self.kill_switch_active and self.state is not AutomationPolicyState.BLOCKED:
+            raise ValueError("active kill switch requires a blocked policy state")
+        return self
+
+
+class DiscoverySourceSummary(StrictProtocolModel):
+    source: DiscoverySourceCode
+    status: SourceHealth
+    enabled_count: BoundedCounter
+    source_count: BoundedCounter
+
+    @model_validator(mode="after")
+    def enabled_count_is_bounded(self) -> DiscoverySourceSummary:
+        if self.enabled_count > self.source_count:
+            raise ValueError("enabled source count cannot exceed source count")
+        return self
+
+
+class AdapterStatusSummary(StrictProtocolModel):
+    adapter: AdapterCode
+    qualification_tier: QualificationTierCode
+    final_execution_enabled: bool = False
+    qualified_form_scope_count: BoundedCounter = 0
+
+    @model_validator(mode="after")
+    def final_execution_requires_live_scope(self) -> AdapterStatusSummary:
+        if self.final_execution_enabled and (
+            self.qualification_tier is not QualificationTierCode.LIVE_CANARY_QUALIFIED
+            or self.qualified_form_scope_count < 1
+        ):
+            raise ValueError("final execution requires a live-qualified scope")
+        return self
+
+
+def operations_summary_digest(
+    *,
+    pipeline: PipelineCounters,
+    policy: AutomationPolicySummary,
+    sources: tuple[DiscoverySourceSummary, ...],
+    adapters: tuple[AdapterStatusSummary, ...],
+) -> str:
+    payload = {
+        "pipeline": pipeline.model_dump(mode="json"),
+        "policy": policy.model_dump(mode="json"),
+        "sources": [item.model_dump(mode="json") for item in sources],
+        "adapters": [item.model_dump(mode="json") for item in adapters],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 class HeartbeatPayload(StrictProtocolModel):
     boot_id: UUID
     release_digest: ReleaseDigest
     status: RunnerStatus
+    pipeline: PipelineCounters | None = None
+    policy: AutomationPolicySummary | None = None
+    sources: tuple[DiscoverySourceSummary, ...] = Field(default=(), max_length=9)
+    adapters: tuple[AdapterStatusSummary, ...] = Field(default=(), max_length=5)
+    operations_digest: Sha256Digest | None = None
+
+    @model_validator(mode="after")
+    def operations_summary_is_complete_and_canonical(self) -> HeartbeatPayload:
+        summary_present = bool(
+            self.pipeline is not None
+            or self.policy is not None
+            or self.sources
+            or self.adapters
+            or self.operations_digest is not None
+        )
+        if not summary_present:
+            return self
+        if self.pipeline is None or self.policy is None or self.operations_digest is None:
+            raise ValueError("operations heartbeat summary must be complete")
+        source_codes = tuple(item.source.value for item in self.sources)
+        adapter_codes = tuple(item.adapter.value for item in self.adapters)
+        if source_codes != tuple(sorted(set(source_codes))):
+            raise ValueError("source summaries must be unique and sorted")
+        if adapter_codes != tuple(sorted(set(adapter_codes))):
+            raise ValueError("adapter summaries must be unique and sorted")
+        expected = operations_summary_digest(
+            pipeline=self.pipeline,
+            policy=self.policy,
+            sources=self.sources,
+            adapters=self.adapters,
+        )
+        if self.operations_digest != expected:
+            raise ValueError("operations summary digest mismatch")
+        return self
 
 
 class ReviewGrantPayload(StrictProtocolModel):
@@ -298,6 +447,9 @@ __all__ = [
     "PROTOCOL_VERSION",
     "RUNNER_AUDIENCE",
     "AdapterCode",
+    "AdapterStatusSummary",
+    "AutomationPolicyState",
+    "AutomationPolicySummary",
     "AttemptOutcome",
     "AttemptStage",
     "CommandAckEnvelope",
@@ -307,6 +459,8 @@ __all__ = [
     "CommandPollPayload",
     "ControlCommandEnvelope",
     "ControlCommandPayload",
+    "DiscoverySourceCode",
+    "DiscoverySourceSummary",
     "EnvelopePurpose",
     "EvidenceType",
     "HeartbeatEnvelope",
@@ -321,7 +475,11 @@ __all__ = [
     "RunnerEventEnvelope",
     "RunnerEventPayload",
     "RunnerStatus",
+    "PipelineCounters",
+    "QualificationTierCode",
     "SignedEnvelope",
+    "SourceHealth",
     "canonical_envelope_bytes",
     "canonical_unsigned_bytes",
+    "operations_summary_digest",
 ]

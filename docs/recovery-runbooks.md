@@ -14,6 +14,9 @@ action becomes `unknown`, never an automatic retry.
 4. Restore only that dependency and wait for a fresh heartbeat.
 5. Reinspect the application. Readiness recovery does not revive an expired
    form plan or permit.
+6. Inspect the external structured runner log for fixed event/status/reason
+   transitions. It intentionally omits exception text and private payloads, so
+   use database attempt/evidence state—not log absence—as submission truth.
 
 ## Worker crash during submission
 
@@ -124,3 +127,7 @@ quarantine pass must report zero changes.
 
 Passing this checklist enables preparation only. It does not change adapter
 qualification or authorize an employer submission.
+
+For deployment order, bounded metrics, runner-log location, and the staged
+discovery/preparation/canary/autopilot ramp, use the
+[v5 operations handoff](v5-operations-handoff.md).

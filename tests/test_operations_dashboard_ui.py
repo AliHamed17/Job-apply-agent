@@ -23,6 +23,11 @@ def test_operations_dashboard_uses_structured_fields_and_safe_fallbacks() -> Non
     for field in (
         "dependencies",
         "last_successful_discovery",
+        "discovery_sources",
+        "pipeline_counts",
+        "role_cv_matrix",
+        "recent_fit_decisions",
+        "automation_policy",
         "adapter_matrix",
         "failure_clusters",
         "queue_depth",
@@ -31,6 +36,7 @@ def test_operations_dashboard_uses_structured_fields_and_safe_fallbacks() -> Non
         "form_resolution",
         "attachment_results",
         "evidence_types",
+        "recent_attempts",
         "runtime_identity",
     ):
         assert f"data.{field}" in APP_JS
@@ -51,11 +57,33 @@ def test_operations_values_are_escaped_and_status_classes_are_fixed() -> None:
     assert "${esc(operationalToken(adapter.ats))}" in APP_JS
     assert "${esc(shortOperationalToken(runtimeIdentity.build_sha, 12))}" in APP_JS
     assert "${esc(fmtDateTime(lastDiscoveryAt))}" in APP_JS
+    assert "${esc(operationalToken(source.source_type))}" in APP_JS
+    assert "${esc(operationalToken(row.cv_route))}" in APP_JS
+    assert "${esc(evidenceDetail)}" in APP_JS
+    assert "${esc(operationalToken(attempt.authority_kind))}" in APP_JS
     assert "return 'is-danger'" in APP_JS
     assert "return 'is-warning'" in APP_JS
     assert "return 'is-ready'" in APP_JS
     assert "return 'is-neutral'" in APP_JS
     assert ".operations-status-dot.is-ready { background: var(--primary); }" in STYLES
+    assert "attempt.outcome === 'confirmed_submitted'" in APP_JS
+    assert "operations-tier is-confirmed" in APP_JS
+    assert ".operations-tier.is-confirmed" in STYLES
+
+
+def test_operations_dashboard_shows_policy_limits_without_private_scope_text() -> None:
+    assert "Qualified autopilot policy" in APP_JS
+    assert "an environment variable cannot activate it" in APP_JS
+    assert "policy.daily_remaining" in APP_JS
+    assert "policy.hourly_remaining" in APP_JS
+    assert "policy.kill_switch_active === true" in APP_JS
+    assert "policy.role_families" not in APP_JS
+    assert "source.source_key" not in APP_JS
+    assert "source.host" not in APP_JS
+    assert "item.job_title" not in APP_JS
+    assert "item.company" not in APP_JS
+    assert "item.question" not in APP_JS
+    assert "item.answer" not in APP_JS
 
 
 def test_review_timeline_exposes_only_redacted_attempt_audit_fields() -> None:

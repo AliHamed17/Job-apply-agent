@@ -495,6 +495,7 @@ def test_canary_command_is_one_use_and_confirmation_promotes_in_same_flow(
     tmp_path,
     monkeypatch,
 ):
+    scenario_now = datetime.now(UTC).replace(microsecond=0)
     monkeypatch.setattr(
         "llm.qualification_registry.qualified_model_report_is_current",
         lambda: True,
@@ -507,7 +508,7 @@ def test_canary_command_is_one_use_and_confirmation_promotes_in_same_flow(
             plan=plan,
             job_url=_JOB_URL,
             runner_release=_RUNNER_RELEASE,
-            now=_NOW,
+            now=scenario_now,
         )
         authorization = mint_qualification_canary_authorization(
             db,
@@ -515,7 +516,7 @@ def test_canary_command_is_one_use_and_confirmation_promotes_in_same_flow(
             plan=plan,
             job_url=_JOB_URL,
             runner_release=_RUNNER_RELEASE,
-            now=_NOW,
+            now=scenario_now,
         )
         request = SubmissionCommandRequest(
             application_id=application.id,
@@ -542,7 +543,7 @@ def test_canary_command_is_one_use_and_confirmation_promotes_in_same_flow(
             settings=settings,
             capabilities=_capabilities(first_canary=True),
             session_checker=lambda *_args: True,
-            now=_NOW.replace(tzinfo=None),
+            now=scenario_now.replace(tzinfo=None),
         )
         [replayed] = create_submission_commands(
             db,
@@ -550,7 +551,7 @@ def test_canary_command_is_one_use_and_confirmation_promotes_in_same_flow(
             settings=settings,
             capabilities=_capabilities(first_canary=True),
             session_checker=lambda *_args: True,
-            now=_NOW.replace(tzinfo=None),
+            now=scenario_now.replace(tzinfo=None),
         )
         assert replayed.replayed is True
         assert replayed.attempt_id == created.attempt_id
@@ -567,7 +568,7 @@ def test_canary_command_is_one_use_and_confirmation_promotes_in_same_flow(
             claim_submission_command(
                 db,
                 command_id=created.command_id,
-                now=_NOW.replace(tzinfo=None),
+                now=scenario_now.replace(tzinfo=None),
             )
             == created.command_id
         )

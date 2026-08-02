@@ -38,6 +38,10 @@ instead. Do not assume the legacy repo-relative `.portal_profiles/` and
    version, and SHA-256 digest of every archive.
 5. Do not back up Redis as authoritative state. It is a wake-up/cache layer and
    must be recreated empty.
+6. The bounded structured runner logs under
+   `$env:LOCALAPPDATA\JobApplyAgent\logs` are diagnostic, not authoritative.
+   Include them only when incident policy requires it; encrypt them with the
+   private-runtime archive and expire them on the log-retention schedule.
 
 ### Redacted control plane
 

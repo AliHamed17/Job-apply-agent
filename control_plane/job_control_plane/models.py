@@ -39,6 +39,56 @@ class RunnerDevice(Base):
     boot_id: Mapped[str | None] = mapped_column(String(36))
     release_digest: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str | None] = mapped_column(String(16))
+    operations_digest: Mapped[str | None] = mapped_column(String(64))
+    policy_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="unavailable",
+        server_default="unavailable",
+    )
+    policy_revision: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    policy_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    policy_daily_remaining: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    policy_hourly_remaining: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    kill_switch_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    pipeline_counters_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default="{}",
+    )
+    source_status_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="[]",
+        server_default="[]",
+    )
+    adapter_status_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="[]",
+        server_default="[]",
+    )
 
     review_grants: Mapped[list[ReviewGrant]] = relationship(back_populates="device")
     commands: Mapped[list[SubmissionCommand]] = relationship(back_populates="device")
