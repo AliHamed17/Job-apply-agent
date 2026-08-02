@@ -59,6 +59,32 @@ repository and OneDrive. It installs the exact owned runner task without
 starting it. Use the lower-level identity command below only for an explicitly
 managed custom provisioning flow.
 
+If HTTPS dependency downloads pass through an enterprise inspection proxy,
+install its **public CA certificate only** by pinning the exact file digest at
+bootstrap. The source must be an absolute local, non-OneDrive, non-reparse path
+and a valid CA-only PEM bundle. A private key, malformed certificate, or digest
+mismatch is rejected:
+
+```powershell
+$enterpriseCa = "C:\absolute\local\enterprise-root.pem"
+$enterpriseCaSha256 = (
+  Get-FileHash -LiteralPath $enterpriseCa -Algorithm SHA256
+).Hash
+pwsh -NoProfile -File .\scripts\job_agent.ps1 bootstrap `
+  -RepositoryPath "C:\absolute\path\to\Job-apply-agent" `
+  -ControlPlaneUrl "https://your-control-plane.example" `
+  -VercelProjectId "prj_12345678abcdef" `
+  -VercelScopeId "team_12345678abcdef" `
+  -EnterpriseCaCertificatePath $enterpriseCa `
+  -EnterpriseCaSha256 $enterpriseCaSha256
+```
+
+The managed copy is ACL-restricted under
+`$env:LOCALAPPDATA\JobApplyAgent\tls`. Compose mounts it only as an ephemeral
+BuildKit secret while downloading dependencies. It is not copied into an image
+or runtime container. Do not use `--trusted-host`, `PIP_TRUSTED_HOST`, disabled
+verification, or a private-key file as a workaround.
+
 Bootstrap creates empty private-data roots; it does not copy personal files or
 browser sessions from the checkout. Before `start`, place the reviewed private
 profile, routing configuration, CVs, and version storage under

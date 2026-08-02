@@ -29,16 +29,20 @@ COPY . .
 # `email` extra (aiosmtplib) is required at runtime: text-post ingestion in
 # web-api sends the CV by email when a recruiter post has only an email
 # contact — without it that send is swallowed and reported as no_contact.
-RUN pip install --upgrade pip "setuptools>=78.1.1,<82" wheel && \
-    pip install ".[pdf,email,postgres]"
+RUN --mount=type=secret,id=enterprise_ca,required=false \
+    sh /app/scripts/docker_build_with_optional_ca.sh sh -c \
+    'pip install --upgrade pip "setuptools>=78.1.1,<82" wheel && \
+    pip install ".[pdf,email,postgres]"'
 
 # ── Stage 3: web-api ───────────────────────────────────────────────────────
 FROM deps AS web-api
 
 COPY . .
-RUN pip install -e ".[pdf,email,postgres]" && \
+RUN --mount=type=secret,id=enterprise_ca,required=false \
+    sh /app/scripts/docker_build_with_optional_ca.sh sh -c \
+    'pip install -e ".[pdf,email,postgres]" && \
     python -m pip uninstall -y setuptools wheel && \
-    python -m pip uninstall -y pip
+    python -m pip uninstall -y pip'
 
 # Run DB migrations then start Uvicorn
 CMD ["sh", "-c", "mkdir -p /app/profile-data && if [ ! -f /app/profile-data/user_profile.yaml ]; then cp /app/user_profile.yaml.example /app/profile-data/user_profile.yaml; fi && alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
@@ -50,10 +54,12 @@ CMD ["sh", "-c", "mkdir -p /app/profile-data && if [ ! -f /app/profile-data/user
 FROM deps AS celery-worker
 
 COPY . .
-RUN pip install -e ".[pdf,browser,email,postgres]" && \
+RUN --mount=type=secret,id=enterprise_ca,required=false \
+    sh /app/scripts/docker_build_with_optional_ca.sh sh -c \
+    'pip install -e ".[pdf,browser,email,postgres]" && \
     playwright install --with-deps chromium && \
     python -m pip uninstall -y setuptools wheel && \
-    python -m pip uninstall -y pip
+    python -m pip uninstall -y pip'
 
 # Each Celery worker handles all queues by default; override via CELERY_QUEUES env var
 CMD ["celery", "-A", "worker.celery_app", "worker", \

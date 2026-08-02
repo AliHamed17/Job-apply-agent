@@ -1,6 +1,8 @@
 import tomllib
 from pathlib import Path
 
+import yaml
+
 
 def test_docker_context_excludes_private_data_and_keeps_public_templates() -> None:
     rules = Path(".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -51,3 +53,30 @@ def test_final_images_remove_build_only_python_packaging_tools() -> None:
     assert worker_image.index("playwright install --with-deps chromium") < worker_image.index(
         "python -m pip uninstall -y pip"
     )
+
+
+def test_enterprise_ca_is_an_optional_buildkit_secret_without_tls_bypass() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    helper = Path("scripts/docker_build_with_optional_ca.sh").read_text(encoding="utf-8")
+    marker = Path("config/empty-enterprise-ca.txt").read_text(encoding="utf-8")
+
+    assert dockerfile.count("--mount=type=secret,id=enterprise_ca,required=false") == 3
+    assert dockerfile.count("docker_build_with_optional_ca.sh") == 3
+    assert compose["secrets"]["job-agent-enterprise-ca"]["file"] == (
+        "${JOB_AGENT_ENTERPRISE_CA_FILE:-./config/empty-enterprise-ca.txt}"
+    )
+    for service_name in ("web-api", "celery-worker", "celery-beat"):
+        assert compose["services"][service_name]["build"]["secrets"] == [
+            {"source": "job-agent-enterprise-ca", "target": "enterprise_ca"}
+        ]
+
+    assert "PIP_CERT" in helper
+    assert "SSL_CERT_FILE" in helper
+    assert "NODE_EXTRA_CA_CERTS" in helper
+    assert "PRIVATE KEY" in helper
+    assert "BEGIN CERTIFICATE" not in marker
+    assert "PRIVATE KEY" not in marker
+    combined = "\n".join((dockerfile, helper)).casefold()
+    for forbidden in ("--trusted-host", "pip_trusted_host", "verify=false", "curl -k"):
+        assert forbidden not in combined

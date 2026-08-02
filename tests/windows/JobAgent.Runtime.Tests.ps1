@@ -245,6 +245,90 @@ try {
             "release upgrade preserves $secretName"
     }
 
+    [System.IO.Directory]::CreateDirectory($releaseLayout.Tls) | Out-Null
+    $enterpriseCaSource = Join-Path $releaseTestRoot 'enterprise-ca-source.pem'
+    $enterpriseCaKey = [System.Security.Cryptography.RSA]::Create(2048)
+    try {
+        $enterpriseCaRequest = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+            'CN=Job Agent Runtime Test CA',
+            $enterpriseCaKey,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+        )
+        $enterpriseCaRequest.CertificateExtensions.Add(
+            [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new(
+                $true,
+                $false,
+                0,
+                $true
+            )
+        )
+        $enterpriseCaCertificate = $enterpriseCaRequest.CreateSelfSigned(
+            [DateTimeOffset]::UtcNow.AddDays(-1),
+            [DateTimeOffset]::UtcNow.AddDays(30)
+        )
+        try {
+            $enterpriseCaPem = [System.Security.Cryptography.PemEncoding]::WriteString(
+                'CERTIFICATE',
+                $enterpriseCaCertificate.Export(
+                    [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert
+                )
+            )
+        }
+        finally {
+            $enterpriseCaCertificate.Dispose()
+        }
+    }
+    finally {
+        $enterpriseCaKey.Dispose()
+    }
+    [System.IO.File]::WriteAllText(
+        $enterpriseCaSource,
+        $enterpriseCaPem,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $enterpriseCaDigest = (
+        Get-FileHash -LiteralPath $enterpriseCaSource -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    Assert-Throws `
+        -Action {
+            Install-JobAgentEnterpriseBuildCa `
+                -Layout $releaseLayout `
+                -SourcePath $enterpriseCaSource `
+                -ExpectedSha256 (('0' * 64) -join '') `
+                -Confirm:$false | Out-Null
+        } `
+        -Pattern 'ENTERPRISE_CA_SHA256_MISMATCH'
+    $enterpriseCaInstall = Install-JobAgentEnterpriseBuildCa `
+        -Layout $releaseLayout `
+        -SourcePath $enterpriseCaSource `
+        -ExpectedSha256 $enterpriseCaDigest `
+        -Confirm:$false
+    Assert-True -Condition $enterpriseCaInstall.Applied -Message 'pinned enterprise CA is installed'
+    Assert-Equal `
+        $enterpriseCaInstall.Sha256 `
+        $enterpriseCaDigest `
+        'installed enterprise CA preserves pinned digest'
+    Assert-True `
+        -Condition (Test-Path -LiteralPath $releaseLayout.EnterpriseBuildCa -PathType Leaf) `
+        -Message 'enterprise CA is stored under the private managed TLS root'
+    $enterpriseCaRepeat = Install-JobAgentEnterpriseBuildCa `
+        -Layout $releaseLayout `
+        -SourcePath $enterpriseCaSource `
+        -ExpectedSha256 $enterpriseCaDigest `
+        -Confirm:$false
+    Assert-True `
+        -Condition (-not $enterpriseCaRepeat.Applied) `
+        -Message 'installing the same pinned enterprise CA is idempotent'
+    $privateKeyFixture = Join-Path $releaseTestRoot 'private-key-forbidden.pem'
+    [System.IO.File]::WriteAllText(
+        $privateKeyFixture,
+        "-----BEGIN PRIVATE KEY-----`nZmFrZQ==`n-----END PRIVATE KEY-----`n"
+    )
+    Assert-Throws `
+        -Action { Get-JobAgentEnterpriseCaMetadata -Path $privateKeyFixture | Out-Null } `
+        -Pattern 'ENTERPRISE_CA_PRIVATE_KEY_FORBIDDEN'
+
     $identityVersion = [guid]::NewGuid().ToString()
     $identityBundle = Join-Path (
         Join-Path $releaseLayout.Identity 'versions'
@@ -638,6 +722,11 @@ try {
         'DOCKER_CERT_PATH',
         'Process'
     )
+    $originalEnterpriseCa = [Environment]::GetEnvironmentVariable(
+        'JOB_AGENT_ENTERPRISE_CA_FILE',
+        'Process'
+    )
+    $expectedEnterpriseCaComposePath = $releaseLayout.EnterpriseBuildCa.Replace('\', '/')
     $runtimeEnvironmentBeforeComposeProbe = [System.IO.File]::ReadAllText(
         $releaseLayout.RuntimeEnv
     )
@@ -663,6 +752,7 @@ try {
         $env:DOCKER_CONTEXT = 'remote-production'
         $env:DOCKER_TLS_VERIFY = '1'
         $env:DOCKER_CERT_PATH = 'C:\remote-certs'
+        $env:JOB_AGENT_ENTERPRISE_CA_FILE = 'C:\untrusted-parent-ca.pem'
         $assertEqualCommand = ${function:Assert-Equal}
         $assertTrueCommand = ${function:Assert-True}
         $composeProbe = {
@@ -686,6 +776,10 @@ try {
             & $assertTrueCommand `
                 -Condition ($CommandArguments -contains '--env-file') `
                 -Message 'compose receives the trusted env file'
+            & $assertEqualCommand `
+                $env:JOB_AGENT_ENTERPRISE_CA_FILE `
+                $expectedEnterpriseCaComposePath `
+                'managed pinned CA overrides an inherited Compose CA path'
             & $assertTrueCommand `
                 -Condition (
                     $CommandArguments[0] -eq '--context' -and
@@ -725,6 +819,10 @@ try {
             $env:DOCKER_CONTEXT `
             'remote-production' `
             'remote Docker context is restored only after the probe'
+        Assert-Equal `
+            $env:JOB_AGENT_ENTERPRISE_CA_FILE `
+            'C:\untrusted-parent-ca.pem' `
+            'parent enterprise CA override is restored only after the probe'
     }
     finally {
         [System.IO.File]::WriteAllText(
@@ -748,6 +846,11 @@ try {
         [Environment]::SetEnvironmentVariable(
             'DOCKER_CERT_PATH',
             $originalDockerCertPath,
+            'Process'
+        )
+        [Environment]::SetEnvironmentVariable(
+            'JOB_AGENT_ENTERPRISE_CA_FILE',
+            $originalEnterpriseCa,
             'Process'
         )
     }
