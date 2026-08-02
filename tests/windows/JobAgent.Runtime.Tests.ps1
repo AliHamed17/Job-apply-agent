@@ -1757,6 +1757,18 @@ $foreignCompose = Get-JobAgentComposeOwnership `
     -RepositoryPath $repository
 Assert-Equal $foreignCompose.Classification 'Foreign' 'foreign compose path is never owned'
 
+$absentEndpoint = Get-JobAgentEndpointOwnership `
+    -Listeners $null `
+    -Containers $null `
+    -Port 8000
+Assert-Equal `
+    $absentEndpoint.Classification `
+    'Absent' `
+    'a no-output listener probe is classified as absent'
+Assert-True `
+    -Condition (-not $absentEndpoint.Exact) `
+    -Message 'an absent endpoint is never exact ownership'
+
 $listeners = @(
     [pscustomobject]@{
         LocalAddress = '127.0.0.1'
@@ -1791,6 +1803,51 @@ Assert-Equal `
     $verifiedEndpoint.Proof `
     'AuthenticatedRuntimeIdentity' `
     'exact ownership records the authenticated proof source'
+$malformedListenerEndpoint = Get-JobAgentEndpointOwnership `
+    -Listeners @(
+        [pscustomobject]@{
+            LocalAddress = '127.0.0.1'
+            OwningProcess = 4321
+        }
+    ) `
+    -Containers $containers `
+    -Port 8000
+Assert-Equal `
+    $malformedListenerEndpoint.Classification `
+    'Unverifiable' `
+    'malformed non-null listener metadata fails closed'
+$malformedContainerEndpoint = Get-JobAgentEndpointOwnership `
+    -Listeners $listeners `
+    -Containers @(
+        [pscustomobject]@{
+            State = 'running'
+            Publishers = @()
+        }
+    ) `
+    -Port 8000
+Assert-Equal `
+    $malformedContainerEndpoint.Classification `
+    'Unverifiable' `
+    'malformed non-null container metadata fails closed'
+$malformedPublisherEndpoint = Get-JobAgentEndpointOwnership `
+    -Listeners $listeners `
+    -Containers @(
+        [pscustomobject]@{
+            Service = 'web-api'
+            State = 'running'
+            Publishers = @(
+                [pscustomobject]@{
+                    URL = '127.0.0.1'
+                    TargetPort = 8000
+                }
+            )
+        }
+    ) `
+    -Port 8000
+Assert-Equal `
+    $malformedPublisherEndpoint.Classification `
+    'Unverifiable' `
+    'malformed non-null publisher metadata fails closed'
 $wildcard = @(
     [pscustomobject]@{
         LocalAddress = '0.0.0.0'
