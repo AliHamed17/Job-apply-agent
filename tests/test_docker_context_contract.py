@@ -24,9 +24,7 @@ def test_docker_context_excludes_private_data_and_keeps_public_templates() -> No
 
     assert rules.index("!user_profile.yaml.example") > rules.index("user_profile.yaml.*")
     assert rules.index("!cv_routing.yaml.example") > rules.index("cv_routing.yaml.*")
-    assert rules.index("!employer_catalog.yaml.example") > rules.index(
-        "employer_catalog.yaml.*"
-    )
+    assert rules.index("!employer_catalog.yaml.example") > rules.index("employer_catalog.yaml.*")
 
 
 def test_web_image_bootstrap_uses_the_public_profile_template() -> None:
