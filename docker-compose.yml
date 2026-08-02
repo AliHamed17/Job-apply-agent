@@ -153,7 +153,7 @@ services:
       OLLAMA_NO_CLOUD: "true"
       OLLAMA_EXPECTED_MODEL_DIGEST: ${OLLAMA_EXPECTED_MODEL_DIGEST:-sha256:845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e}
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
-    command: ["celery", "-A", "worker.celery_app", "worker", "-Q", "ingestion,processing,llm,submission,discovery", "--loglevel=info"]
+    command: ["celery", "-A", "worker.celery_app", "worker", "-Q", "ingestion,processing,llm,submission,discovery", "--loglevel=info", "--concurrency=${CELERY_WORKER_CONCURRENCY:-2}"]
     depends_on:
       postgres:
         condition: service_healthy
