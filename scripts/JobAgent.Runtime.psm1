@@ -1390,7 +1390,23 @@ function Get-JobAgentEndpointOwnership {
         [switch]$AuthenticatedRuntimeVerified
     )
 
-    $matchingListeners = @($Listeners | Where-Object { [int]$_.LocalPort -eq $Port })
+    $nonNullListeners = @($Listeners | Where-Object { $null -ne $_ })
+    $malformedListeners = @($nonNullListeners | Where-Object {
+        $null -eq $_.PSObject.Properties['LocalPort'] -or
+        $null -eq $_.PSObject.Properties['LocalAddress']
+    })
+    if ($malformedListeners.Count -gt 0) {
+        return [pscustomobject]@{
+            Classification = 'Unverifiable'
+            Owned = $false
+            Exact = $false
+            MetadataMatched = $false
+            Proof = 'None'
+        }
+    }
+    $matchingListeners = @($nonNullListeners | Where-Object {
+        [int]$_.LocalPort -eq $Port
+    })
     if ($matchingListeners.Count -eq 0) {
         return [pscustomobject]@{
             Classification = 'Absent'
@@ -1435,7 +1451,22 @@ function Get-JobAgentEndpointOwnership {
             Proof = 'None'
         }
     }
-    $web = @($Containers | Where-Object { [string]$_.Service -eq 'web-api' })
+    $nonNullContainers = @($Containers | Where-Object { $null -ne $_ })
+    $malformedContainers = @($nonNullContainers | Where-Object {
+        $null -eq $_.PSObject.Properties['Service']
+    })
+    if ($malformedContainers.Count -gt 0) {
+        return [pscustomobject]@{
+            Classification = 'Unverifiable'
+            Owned = $false
+            Exact = $false
+            MetadataMatched = $false
+            Proof = 'None'
+        }
+    }
+    $web = @($nonNullContainers | Where-Object {
+        [string]$_.Service -eq 'web-api'
+    })
     $runningWeb = @($web | Where-Object {
         $null -ne $_.PSObject.Properties['State'] -and
         [string]$_.State -eq 'running'
@@ -1457,7 +1488,22 @@ function Get-JobAgentEndpointOwnership {
     else {
         @()
     }
-    $matchingPublishers = @($publishers | Where-Object {
+    $nonNullPublishers = @($publishers | Where-Object { $null -ne $_ })
+    $malformedPublishers = @($nonNullPublishers | Where-Object {
+        $null -eq $_.PSObject.Properties['PublishedPort'] -or
+        $null -eq $_.PSObject.Properties['TargetPort'] -or
+        $null -eq $_.PSObject.Properties['URL']
+    })
+    if ($malformedPublishers.Count -gt 0) {
+        return [pscustomobject]@{
+            Classification = 'Unverifiable'
+            Owned = $false
+            Exact = $false
+            MetadataMatched = $false
+            Proof = 'None'
+        }
+    }
+    $matchingPublishers = @($nonNullPublishers | Where-Object {
         [int]$_.PublishedPort -eq $Port -and
         [int]$_.TargetPort -eq 8000 -and
         [string]$_.URL -eq '127.0.0.1'
