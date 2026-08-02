@@ -100,6 +100,44 @@ Assert-True `
 Assert-Throws `
     -Action { Assert-JobAgentGitPorcelainClean -Lines @(' M core/config.py') | Out-Null } `
     -Pattern 'REPOSITORY_NOT_CLEAN'
+$cleanGitFixture = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'job-agent-clean-git-' + [guid]::NewGuid()
+)
+[System.IO.Directory]::CreateDirectory($cleanGitFixture) | Out-Null
+try {
+    & git -C $cleanGitFixture init --initial-branch main | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'CLEAN_GIT_FIXTURE_INIT_FAILED'
+    }
+    & git -C $cleanGitFixture config user.name 'Job Agent Runtime Test'
+    & git -C $cleanGitFixture config user.email 'runtime-test@example.invalid'
+    [System.IO.File]::WriteAllText(
+        (Join-Path $cleanGitFixture 'fixture.txt'),
+        'clean runtime release fixture'
+    )
+    & git -C $cleanGitFixture add fixture.txt
+    & git -C $cleanGitFixture commit -m 'Create clean runtime fixture' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'CLEAN_GIT_FIXTURE_COMMIT_FAILED'
+    }
+    $expectedCleanBuild = (& git -C $cleanGitFixture rev-parse HEAD).Trim()
+    $observedCleanBuild = Get-JobAgentBuildSha `
+        -RepositoryPath $cleanGitFixture `
+        -RequireClean `
+        -RequireMain
+    Assert-True `
+        -Condition ($observedCleanBuild -is [string]) `
+        -Message 'clean release build lookup emits only the SHA string'
+    Assert-Equal `
+        $observedCleanBuild `
+        $expectedCleanBuild `
+        'clean release build lookup preserves the exact SHA'
+}
+finally {
+    if (Test-Path -LiteralPath $cleanGitFixture) {
+        Remove-Item -LiteralPath $cleanGitFixture -Recurse -Force
+    }
+}
 Assert-True `
     -Condition (Assert-JobAgentMainRelease -HeadBuildSha $build -MainBuildSha $build) `
     -Message 'exact main build is accepted'

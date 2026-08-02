@@ -737,7 +737,7 @@ function Get-JobAgentBuildSha {
         if ($LASTEXITCODE -ne 0) {
             throw 'GIT_STATUS_UNAVAILABLE'
         }
-        Assert-JobAgentGitPorcelainClean -Lines @($status)
+        Assert-JobAgentGitPorcelainClean -Lines @($status) | Out-Null
     }
     $result = & git -C $repository rev-parse HEAD 2>$null
     if ($LASTEXITCODE -ne 0) {
