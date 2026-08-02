@@ -55,6 +55,18 @@ def test_final_images_remove_build_only_python_packaging_tools() -> None:
     )
 
 
+def test_celery_worker_concurrency_is_bounded_within_its_memory_limit() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    environment_example = Path(".env.example").read_text(encoding="utf-8")
+    worker = compose["services"]["celery-worker"]
+
+    assert "--concurrency=2" in dockerfile
+    assert "--concurrency=${CELERY_WORKER_CONCURRENCY:-2}" in worker["command"]
+    assert worker["deploy"]["resources"]["limits"]["memory"] == "512M"
+    assert "CELERY_WORKER_CONCURRENCY=2" in environment_example
+
+
 def test_enterprise_ca_is_an_optional_buildkit_secret_without_tls_bypass() -> None:
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
     compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
