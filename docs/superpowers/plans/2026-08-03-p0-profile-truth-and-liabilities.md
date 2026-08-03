@@ -776,6 +776,54 @@ Expected: no `PROFILE_*` reason codes, and `latest_profile_version(db)` returns 
 - [ ] The autopilot regression test reaches `state == "queued"` with no injected resolver
 - [ ] `ruff check .`, `ruff format --check .` and `pytest -q` all pass
 
+## Execution Notes (what the plan got wrong)
+
+Recorded during execution, 2026-08-03. All five code tasks landed; Task 6 awaits the
+operator.
+
+1. **Task 2 found a second credential path.** The spec and this plan both named
+   `submitters/indeed.py` as the only violation. The guard test found
+   `submitters/linkedin.py:69` doing `os.getenv("LINKEDIN_PASSWORD")` and typing it, with
+   its own docstring conceding LinkedIn "may trigger 2FA or CAPTCHA". Both modules had
+   zero importers. Both deleted, along with `linkedin_email`/`linkedin_password`/
+   `linkedin_cookies_file` — `LinkedInV2Submitter` takes no credentials and already uses a
+   persistent profile. The dead block was 415 lines, not ~140.
+2. **Task 3's key convention was impossible.** The plan specified `work_authorization:il`.
+   `canonical_fact_key` (`profile/models.py:133`) rewrites every non-alphanumeric
+   character to `_`, so the colon form silently normalises to `work_authorization_il`; the
+   evidence namespace is `[a-z0-9_]` only. Caught by a test failing with `KeyError` on the
+   colon form. Also, jurisdiction scoping was made **additive** rather than a rename:
+   `work_authorization`/`sponsorship` are `min_length=1` required fields with a
+   `model_validator` demanding citizenship-or-nationality, so renaming them would break
+   the live contract and existing tests for no safety gain. The flat key now means
+   "jurisdiction unspecified" and satisfies no country-named question.
+3. **Task 1's test helper had to change.** `_gov` passed a duck-typed stub exposing only
+   `.hour` and `.strftime`, which is also why `_epoch()` carries a defensive
+   `hasattr(n, "timestamp")`. Replaced with a real tz-aware datetime rather than adding a
+   second workaround to production code.
+4. **Task 4's fabrication target was already fixed.** `discovery/israel_boards.py`'s
+   `else "Software Engineer"` / `else "Drushim Employer"` lines are inside a **docstring**
+   documenting the historical bug; the module delegates to `parse_israeli_board` and
+   returns `None`. The live defect was in `jobs/parsers/israeli_boards.py`, where a
+   CAPTCHA page's `<h1>` satisfied `is_complete` — the site's own landing page parsed as a
+   job titled "Drushim".
+5. **Task 5 could not be tested end-to-end.** The autopilot scenario's descriptor is
+   synthetic (`qualified_form_scope=('ffff…')`, `selector_version='greenhouse-candidate-v9'`)
+   and `plan.job_url` is `None`, so the real qualification path cannot resolve there. The
+   test pins the defect itself — that no resolver is forwarded when none is supplied —
+   rather than passing for the wrong reason. Real coverage lands with P1's fixture work.
+   Also found: `qualified_autopilot` was missing from `_ALLOWED_ACTORS`, and
+   `core/application_audit.py` silently relabels an unknown actor as `"system"`, so
+   unattended sends were indistinguishable from routine worker activity in the audit trail.
+6. **CI's lint gate is narrower than this plan's Global Constraints claimed.**
+   `.github/workflows/ci.yml` runs `ruff check . --select E9,F63,F7,F82` repo-wide and the
+   full ruleset only on **changed** files. The repo carries 107 pre-existing full-ruleset
+   errors in untouched files. Consequence: appending to a file inherits its lint debt into
+   the gate. `tests/test_adversarial.py` had four pre-existing errors, one of which was a
+   test whose comment claimed a mismatched job yields SKIP while asserting nothing about
+   it — it scores 22.5, above `SKIP_THRESHOLD` of 20, so the action is DRAFT. Fixed to
+   assert the property that matters: such a job never reaches `AUTO_APPLY`.
+
 ## Self-Review Notes
 
 Spec coverage checked against §6 and §7 (P0): §6.2 → Task 1, §6.4 → Task 2, §6.5 → Task 4, §6.3 → Task 5, answer bank (§5.1) → Task 3, profile bootstrap (§7 P0) → Task 6. §6.1 (Greenhouse selectors) and §6.6 (discovery catalog) are deliberately **out of scope** — they belong to P1 and P3 respectively.
