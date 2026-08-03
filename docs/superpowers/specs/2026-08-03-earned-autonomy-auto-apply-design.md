@@ -73,7 +73,9 @@ These are existing properties of the system. This design does not relax any of t
   constraint in `db/models.py`. A Python defect alone cannot persist a false green.
 - **No passwords.** Login is a persistent browser profile: the operator signs in manually
   once in the agent's Chromium; session cookies persist. No credential is stored, typed
-  or read. The one existing violation (`submitters/indeed.py`) is deleted in P0.
+  or read. Two existing violations were found and deleted in P0: `submitters/indeed.py`
+  (`INDEED_PASSWORD`) and `submitters/linkedin.py` (`LINKEDIN_PASSWORD`). The second was
+  not in the original survey; the guard test written for the first found it.
 - **No CAPTCHA or bot-check bypass.** Detection terminalises that one attempt and flags it.
 - **Legal and demographic answers come only from operator-confirmed facts** in
   `evidence.user_confirmed`, never from LLM inference and never from CV-extracted facts.
@@ -98,20 +100,26 @@ Six subsystem designs collided on `core/form_planning.py`,
 ### 5.1 The answer bank
 
 `evidence.user_confirmed` is the sole source for facts that carry legal or personal
-weight. ~15 recurring keys are added in P0 (`security_clearance`, `notice_period`,
-`salary_expectations`, `availability_date`, `years_experience`, `languages`,
-`relocation`, `work_mode`, `highest_degree`, `how_did_you_hear`,
-`demographic_disclosure`, …). It is written **only** through
+weight. The recurring keys added in P0 are `security_clearance`, `notice_period`,
+`salary_expectation`, `salary_currency`, `availability_date`, `years_experience` (which
+derives both `"2 years"` and `years_experience_number` `"2"` from one input),
+`languages`, `relocation`, `work_mode`, `highest_degree`, `how_did_you_hear` and
+`demographic_disclosure`. It is written **only** through
 `PUT /api/profile/onboarding`, which already forbids extra keys, strips control
 characters, merges preserving unknown keys, and versions inside
 `profile_write_transaction`.
+
+Keys live in a `[a-z0-9_]` namespace: `canonical_fact_key`
+(`profile/models.py:133`) rewrites every non-alphanumeric character to `_`, so a
+colon-suffixed key silently normalises to the underscore form. An empty value removes
+the key rather than storing `""`, so an unset fact abstains.
 
 A `promote_to_profile` path that would convert a form-scoped answer into portable
 cross-employer truth was rejected: it validated neither token, jurisdiction nor polarity,
 and accepted uncatalogued keys.
 
-**Legal facts are jurisdiction-keyed and polarity-declared.** `work_authorization:il` is
-not `work_authorization:us`. Every alias declares its jurisdiction and whether it asserts
+**Legal facts are jurisdiction-keyed and polarity-declared.** `work_authorization_il` is
+not `work_authorization_us`. Every alias declares its jurisdiction and whether it asserts
 *authorized* or *requires sponsorship*. A label naming a jurisdiction with no matching
 confirmed fact abstains; any alias with undeclared polarity abstains. Today
 `"Are you legally authorized to work in the United States?"` abstains, and that
@@ -119,7 +127,7 @@ abstention is the only thing preventing a false legal claim — the design must 
 collapse US and Israeli authorization into one flat key.
 
 **Consent and attestation are bound to the notice text**, not to a category. The fact is
-scoped `profile:user_confirmed:consent:<normalized_disclosure_digest>`; an unseen notice
+scoped `profile:user_confirmed:consent_<normalized_disclosure_digest>`; an unseen notice
 abstains, and thereafter resolves only for a byte-identical normalized disclosure. A
 blanket `consent = true` would, at stage 4, silently accept *"I certify I am not bound by
 any non-compete and consent to a background investigation and to arbitration"*.

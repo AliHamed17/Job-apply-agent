@@ -86,19 +86,49 @@ qualify a tenant. An unknown source value causes review rather than a guess.
 
 ## Confirmed profile evidence
 
-Keep personal facts only in the ignored/private profile. Examples of keys a
-portal may ask for are:
+Keep personal facts only in the ignored/private profile, and write them through
+`PUT /api/profile/onboarding` rather than by editing the file: only that route
+and the CV upload mint a `UserProfileVersion`, and a profile with no version
+cannot receive a final-submit permit.
+
+Keys live in a `[a-z0-9_]` namespace — `canonical_fact_key`
+(`profile/models.py`) rewrites every other character to `_`, so `authorized to
+work` becomes `authorized_to_work`, which no resolver looks up. Use the exact
+keys the route writes:
 
 ```yaml
 evidence:
   user_confirmed:
-    authorized to work: "<confirmed answer>"
-    visa sponsorship: "<confirmed answer>"
+    # Legal authorisation. The unsuffixed key is the jurisdiction-*unspecified*
+    # answer and satisfies no question naming a country; a question about the
+    # United States resolves only from work_authorization_us.
+    work_authorization: "<confirmed answer>"
+    work_authorization_il: "<confirmed answer>"
+    work_authorization_us: "<confirmed answer>"
+    visa_sponsorship: "<confirmed answer>"
+    visa_sponsorship_il: "<confirmed answer>"
+    visa_sponsorship_us: "<confirmed answer>"
     citizenship: "<confirmed answer>"
     nationality: "<confirmed answer>"
+    security_clearance: "<confirmed answer>"
+    notice_period: "<confirmed answer>"
+    salary_expectation: "<confirmed answer>"
+    salary_currency: "<confirmed answer>"
+    availability_date: "<confirmed answer>"
+    years_experience: "2 years"          # derived
+    years_experience_number: "2"         # derived from the same input
+    languages: "<confirmed answer>"
+    relocation: "<confirmed answer>"
+    work_mode: "<confirmed answer>"
+    highest_degree: "<confirmed answer>"
+    how_did_you_hear: "<confirmed answer>"
+    demographic_disclosure: "decline"    # or "disclose"
     gender: "<confirmed answer>"
-    terms and conditions: "<confirmed answer>"
 ```
+
+An absent or empty fact **abstains**: the field is left for review rather than
+answered. Consent and attestation are not in this list because they are scoped
+to the exact notice text, not to a category.
 
 Legal, authorization, clearance, certification, nationality, demographic,
 terms, consent, and attestation questions never use CV extraction, an LLM, or
