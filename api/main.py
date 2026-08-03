@@ -15,12 +15,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
-# Initialize Celery before importing route modules that import ``@shared_task``
-# proxies.  Without this composition-root binding, API calls publish through
-# Celery's implicit localhost app even though worker and Beat use configured
-# Redis successfully.
-from worker.celery_app import celery_app as _configured_celery_app  # noqa: F401
-
 try:
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 except ImportError:  # pragma: no cover - exercised in dependency-light smokes

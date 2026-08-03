@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from api.submission_display import job_submission_display
+from api.task_publication import publish_configured_task
 from db.models import ExtractedURL, Job, JobStatus, Message, URLStatus
 from db.session import get_db
 from ingestion.url_utils import normalize_url, url_hash
@@ -146,7 +147,7 @@ async def ingest_url(body: IngestRequest, db: Session = Depends(get_db)):
     if settings.tasks_always_eager:
         process_url_task.apply(args=[db_url.id])
     else:
-        process_url_task.delay(db_url.id)
+        publish_configured_task(process_url_task, db_url.id)
 
     logger.info("url_ingested", url=normalized, source=body.source)
     return {"added": 1, "skipped": 0}

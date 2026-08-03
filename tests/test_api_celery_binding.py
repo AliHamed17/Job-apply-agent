@@ -1,15 +1,30 @@
 """Regression coverage for API-to-Celery task publication."""
 
-from api.main import app  # noqa: F401
-from worker.celery_app import celery_app as configured_celery_app
-from worker.discovery_tasks import discover_jobs_task
-from worker.tasks import process_url_task
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from api import task_publication
 
 
-def test_api_shared_tasks_use_the_configured_celery_application() -> None:
-    """API imports must never leave queued tasks on Celery's localhost app."""
+def test_api_publication_uses_the_configured_celery_application() -> None:
+    task = SimpleNamespace(name="worker.discovery_tasks.discover_jobs_task")
 
-    assert discover_jobs_task.app is configured_celery_app
-    assert process_url_task.app is configured_celery_app
-    assert discover_jobs_task.app.main == "job_apply_agent"
-    assert process_url_task.app.conf.broker_url == configured_celery_app.conf.broker_url
+    with patch.object(task_publication.celery_app, "send_task") as send_task:
+        task_publication.publish_configured_task(task, 7, force=True)
+
+    send_task.assert_called_once_with(
+        "worker.discovery_tasks.discover_jobs_task",
+        args=(7,),
+        kwargs={"force": True},
+    )
+
+
+def test_api_routes_never_publish_through_shared_task_delay() -> None:
+    offenders = [
+        str(path)
+        for path in Path("api/routes").glob("*.py")
+        if ".delay(" in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []

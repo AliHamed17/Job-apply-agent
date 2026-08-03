@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from api.task_publication import publish_configured_task
 from db.models import DiscoveryRun, DiscoverySourceState, SearchIntentRevision
 from db.session import get_db
 from worker.discovery_tasks import discover_jobs_task
@@ -124,7 +125,7 @@ def queue_discovery_run(
         background.add_task(discover_jobs_task.apply, kwargs=kwargs)
     else:
         try:
-            discover_jobs_task.delay(**kwargs)
+            publish_configured_task(discover_jobs_task, **kwargs)
         except Exception as exc:
             raise HTTPException(
                 status_code=503,

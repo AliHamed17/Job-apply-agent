@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from api.task_publication import publish_configured_task
 from core.application_state import (
     prepared_application_count,
     prepared_applications_query,
@@ -563,7 +564,7 @@ async def manual_ingest(req: ManualIngestRequest, db: Session = Depends(get_db))
             if settings.tasks_always_eager:
                 process_url_task.apply(args=[db_url.id])
             else:
-                process_url_task.delay(db_url.id)
+                publish_configured_task(process_url_task, db_url.id)
         except Exception as exc:
             db.rollback()
             db_url = db.get(ExtractedURL, db_url.id)
@@ -661,7 +662,7 @@ async def retry_url(url_id: int, db: Session = Depends(get_db)):
     if settings.tasks_always_eager:
         process_url_task.apply(args=[db_url.id])
     else:
-        process_url_task.delay(db_url.id)
+        publish_configured_task(process_url_task, db_url.id)
 
     logger.info("url_retry_queued", url_id=url_id, url=db_url.normalized_url)
     return {"message": "URL re-queued for processing", "url_id": url_id}

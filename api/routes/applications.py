@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 from sqlalchemy.orm import Session
 
+from api.task_publication import publish_configured_task
 from core.application_audit import record_application_event
 from core.application_mutations import (
     ApplicationMutationBlockedError,
@@ -1436,7 +1437,10 @@ async def _inspect_application_form_impl(
         try:
             from worker.autopilot import evaluate_qualified_autopilot_task
 
-            evaluate_qualified_autopilot_task.delay(app.id, row.id)
+            if get_settings().tasks_always_eager:
+                evaluate_qualified_autopilot_task.apply(args=[app.id, row.id])
+            else:
+                publish_configured_task(evaluate_qualified_autopilot_task, app.id, row.id)
         except Exception:
             logger.exception(
                 "qualified_autopilot_wake_failed",
@@ -1838,7 +1842,10 @@ def _wake_submission_command(command_id: int) -> None:
     from worker.submission_commands import execute_submission_command_task
 
     try:
-        execute_submission_command_task.delay(command_id)
+        if get_settings().tasks_always_eager:
+            execute_submission_command_task.apply(args=[command_id])
+        else:
+            publish_configured_task(execute_submission_command_task, command_id)
     except Exception:
         logger.exception(
             "submission_command_wake_failed",
