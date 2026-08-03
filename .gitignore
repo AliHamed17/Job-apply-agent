@@ -148,3 +148,8 @@ control_plane/**/*device*.key
 control_plane/**/*.pem
 control_plane/**/*.p12
 control_plane/**/*.pfx
+
+# Selector-capture output. Contains real employer markup and, until reviewed,
+# possibly operator data. Sanitised fixtures are copied into tests/fixtures/
+# deliberately, never synced from here.
+.capture/
