@@ -153,15 +153,10 @@ class Settings(BaseSettings):
     lever_api_key: str = ""
     smartrecruiters_api_key: str = ""  # optional — public postings work without it
 
-    # ── Browser-automation credentials (LinkedIn / Indeed) ──
-    # Option A — cookie file (JSON export from browser, recommended)
-    linkedin_cookies_file: str = ""
-    indeed_cookies_file: str = ""
-    # Option B — email + password (triggers auto-login)
-    linkedin_email: str = ""
-    linkedin_password: str = ""
-    indeed_email: str = ""
-    indeed_password: str = ""
+    # ── Browser-automation session settings (LinkedIn) ──
+    # Sessions come from a persistent browser profile the operator signs into
+    # manually (see linkedin_browser_profile_dir). Credential settings were
+    # removed with submitters/linkedin.py: no code path may hold a password.
 
     # ── Paths ───────────────────────────────────────────
     user_profile_path: str = "user_profile.yaml"
