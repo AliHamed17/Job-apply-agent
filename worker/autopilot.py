@@ -24,7 +24,6 @@ from core.submission_service import (
 )
 from db.models import ApplicationPolicyDecision, FormPlan
 from db.session import get_session_factory
-from submitters.platforms import adapter_for_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +62,7 @@ def dispatch_qualified_autopilot(
     form_plan_id: int,
     settings: Settings | None = None,
     capabilities=None,
-    descriptor_resolver: DescriptorResolver = adapter_for_url,
+    descriptor_resolver: DescriptorResolver | None = None,
     session_checker: SessionChecker | None = None,
     now: datetime | None = None,
 ) -> AutopilotDispatchResult:
@@ -115,13 +114,20 @@ def dispatch_qualified_autopilot(
         create_kwargs = {
             "settings": resolved_settings,
             "capabilities": capabilities,
-            "descriptor_resolver": descriptor_resolver,
             "now": (
                 timestamp.astimezone(UTC).replace(tzinfo=None)
                 if timestamp.tzinfo is not None
                 else timestamp
             ),
         }
+        # Forward only when explicitly supplied. Passing adapter_for_url
+        # unconditionally shadowed create_submission_commands' own default,
+        # effective_live_descriptor_for_plan, so the qualification-aware
+        # resolution never ran and every autopilot send raised
+        # ADAPTER_NOT_QUALIFIED. Every test injected a resolver, so nothing
+        # covered the production default.
+        if descriptor_resolver is not None:
+            create_kwargs["descriptor_resolver"] = descriptor_resolver
         if session_checker is not None:
             create_kwargs["session_checker"] = session_checker
         [created] = create_submission_commands(db, [request], **create_kwargs)
