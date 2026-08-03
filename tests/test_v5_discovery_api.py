@@ -146,6 +146,7 @@ def test_discovery_run_rejects_unknown_source_and_queues_known_source(tmp_path):
         with (
             patch("core.config.get_settings", return_value=settings),
             patch.object(discovery_routes, "discover_jobs_task", task),
+            patch.object(discovery_routes, "publish_configured_task") as publish,
         ):
             unknown = client.post(
                 "/api/discovery/run",
@@ -165,13 +166,12 @@ def test_discovery_run_rejects_unknown_source_and_queues_known_source(tmp_path):
         "source_key": "remotive",
         "force": True,
     }
-    task.delay.assert_called_once_with(force=True, source_key="remotive")
+    publish.assert_called_once_with(task, force=True, source_key="remotive")
 
 
 def test_discovery_run_fails_closed_when_broker_is_unavailable(tmp_path):
     settings = Settings(_env_file=None, tasks_always_eager=False)
     task = MagicMock()
-    task.delay.side_effect = RuntimeError("fixture broker unavailable")
     with _client(tmp_path) as (client, factory):
         db = factory()
         db.add(_source())
@@ -180,6 +180,11 @@ def test_discovery_run_fails_closed_when_broker_is_unavailable(tmp_path):
         with (
             patch("core.config.get_settings", return_value=settings),
             patch.object(discovery_routes, "discover_jobs_task", task),
+            patch.object(
+                discovery_routes,
+                "publish_configured_task",
+                side_effect=RuntimeError("fixture broker unavailable"),
+            ),
         ):
             response = client.post(
                 "/api/discovery/run",
