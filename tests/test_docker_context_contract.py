@@ -14,11 +14,17 @@ def test_docker_context_excludes_private_data_and_keeps_public_templates() -> No
     assert "user_profile.yaml.*" in rules
     assert "cv_routing.yaml" in rules
     assert "cv_routing.yaml.*" in rules
+    assert "employer_catalog.yaml" in rules
+    assert "employer_catalog.yaml.*" in rules
+    assert ".gmail_oauth.json" in rules
+    assert ".gmail_oauth.json.*" in rules
+    assert ".job-alerts/" in rules
     assert ".portal_profiles/" in rules
     assert ".linkedin_profile/" in rules
 
     assert rules.index("!user_profile.yaml.example") > rules.index("user_profile.yaml.*")
     assert rules.index("!cv_routing.yaml.example") > rules.index("cv_routing.yaml.*")
+    assert rules.index("!employer_catalog.yaml.example") > rules.index("employer_catalog.yaml.*")
 
 
 def test_web_image_bootstrap_uses_the_public_profile_template() -> None:

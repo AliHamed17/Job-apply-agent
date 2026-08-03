@@ -84,6 +84,8 @@ services:
       APPLICATION_DATA_DIR: /app/profile-data
       CV_ROUTING_PATH: /app/profile-data/cv_routing.yaml
       CV_DIRECTORY: /app/profile-data/cvs
+      EMPLOYER_CATALOG_PATH: /app/profile-data/employer_catalog.yaml
+      GMAIL_OAUTH_TOKEN_PATH: /app/profile-data/.gmail_oauth.json
       EMPLOYER_WORKFLOW_PATH: /app/profile-data/employer_workflows.yaml
       LINKEDIN_BROWSER_PROFILE_DIR: /app/browser-state/linkedin
       PORTAL_BROWSER_PROFILE_ROOT: /app/browser-state/portals
@@ -146,6 +148,8 @@ services:
       APPLICATION_DATA_DIR: /app/profile-data
       CV_ROUTING_PATH: /app/profile-data/cv_routing.yaml
       CV_DIRECTORY: /app/profile-data/cvs
+      EMPLOYER_CATALOG_PATH: /app/profile-data/employer_catalog.yaml
+      GMAIL_OAUTH_TOKEN_PATH: /app/profile-data/.gmail_oauth.json
       EMPLOYER_WORKFLOW_PATH: /app/profile-data/employer_workflows.yaml
       LINKEDIN_BROWSER_PROFILE_DIR: /app/browser-state/linkedin
       PORTAL_BROWSER_PROFILE_ROOT: /app/browser-state/portals
@@ -201,6 +205,8 @@ services:
       APPLICATION_DATA_DIR: /app/profile-data
       CV_ROUTING_PATH: /app/profile-data/cv_routing.yaml
       CV_DIRECTORY: /app/profile-data/cvs
+      EMPLOYER_CATALOG_PATH: /app/profile-data/employer_catalog.yaml
+      GMAIL_OAUTH_TOKEN_PATH: /app/profile-data/.gmail_oauth.json
       EMPLOYER_WORKFLOW_PATH: /app/profile-data/employer_workflows.yaml
       LINKEDIN_BROWSER_PROFILE_DIR: /app/browser-state/linkedin
       PORTAL_BROWSER_PROFILE_ROOT: /app/browser-state/portals

@@ -42,10 +42,15 @@ user_profile.yaml
 user_profile.yaml.*
 cv_routing.yaml
 cv_routing.yaml.*
+employer_catalog.yaml
+employer_catalog.yaml.*
 employer_workflows.yaml
 routing-evaluation-report.json
 linkedin-smoke-qualification.json
 fit_routing_qualification.json
+.gmail_oauth.json
+.gmail_oauth.json.*
+.job-alerts/
 .portal_profiles/
 .linkedin_profile/
 .browser-state/
@@ -62,6 +67,7 @@ bridge/session/
 # these exact public examples after the private wildcard exclusions above.
 !user_profile.yaml.example
 !cv_routing.yaml.example
+!employer_catalog.yaml.example
 !fit_routing_qualification.json.example
 
 # Logs

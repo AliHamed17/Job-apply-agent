@@ -257,6 +257,14 @@ def test_compose_uses_only_loopback_ports_and_external_private_mounts() -> None:
         service = compose["services"][service_name]
         assert service["env_file"] == "${JOB_AGENT_ENV_FILE:-.env}"
         assert service["environment"]["JOB_AGENT_ENV_FILE"] == ""
+        assert (
+            service["environment"]["EMPLOYER_CATALOG_PATH"]
+            == "/app/profile-data/employer_catalog.yaml"
+        )
+        assert (
+            service["environment"]["GMAIL_OAUTH_TOKEN_PATH"]
+            == "/app/profile-data/.gmail_oauth.json"
+        )
         mounts = "\n".join(service.get("volumes", []))
         assert "${JOB_AGENT_PROFILE_DATA_DIR:-./profile-data}" in mounts
         assert "${JOB_AGENT_BROWSER_STATE_DIR:-./.browser-state}" in mounts
