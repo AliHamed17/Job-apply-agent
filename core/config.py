@@ -178,7 +178,11 @@ class Settings(BaseSettings):
     linkedin_daily_cap: int = 45
     linkedin_min_gap_s: int = 120
     linkedin_max_gap_s: int = 360
-    active_hours: str = "09:00-21:00"
+    active_hours: str = "08:00-21:00"
+    # Timezone the active-hours window is evaluated in. Must match the signed
+    # autopilot policy window, or a policy-allowed decision still fails
+    # GOVERNOR_DENIED at the commit boundary.
+    active_hours_timezone: str = "Asia/Jerusalem"
     linkedin_browser_profile_dir: str = ".linkedin_profile"
     dry_run: bool = False
 
