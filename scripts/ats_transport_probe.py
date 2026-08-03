@@ -6,17 +6,33 @@ through a native multipart form POST, or through client-side XHR?
 
 Measured 2026-08-04 against real postings, rendered in Chromium:
 
-    adapter          forms  method  enctype  controls(named)  submit  file
-    greenhouse         1     get     none        24 (1)         1      2
-    ashby              0      -        -         38 (35)        0      2
-    smartrecruiters    0      -        -          1 (0)         0      -
+    adapter            forms  method  enctype              controls(named)  submit  file
+    lever/gopuff         1     post    multipart/form-data     76 (76)         1      1
+    lever/shieldai       1     post    multipart/form-data     89 (89)         1      1
+    greenhouse/gitlab    1     get     (none)                  24 (1)          1      2
+    ashby/ashby          0      -       -                      38 (35)         0      2
+    smartrecruiters      0      -       -                       1 (0)          0      -
 
-Greenhouse has a form but almost no named controls; Ashby has named controls but
-no form element at all. Those are mirror-image failures of the same assumption,
-so any transport built on "find the form, build a payload from named fields, call
-HTMLFormElement.prototype.submit" cannot work on either. SmartRecruiters renders
-its form behind a further navigation not followed here. Lever was not reached —
-the candidate tenants in TARGETS missed; add a known one before citing it.
+The answer differs per ATS, which is the whole reason to measure rather than
+assume:
+
+* Lever is a classic server-rendered multipart POST form with every control
+  named — the existing two-phase native transport fits it. Confirmed on two
+  independent tenants. Note labels *wrap* their inputs (label[for] is 0,
+  "label input" is 43-59), so label association must use an ancestor label.
+* Greenhouse has a form, but method=get, no enctype and 1 named control out of
+  24. Ashby has 35 named controls and no <form> element at all. Those are
+  mirror-image failures of the same assumption, so a transport built on "find the
+  form, build a payload from named fields, call HTMLFormElement.prototype.submit"
+  cannot work on either.
+* SmartRecruiters redirects off-domain to smartr.me/oneclick-ui and still renders
+  no controls once followed, so its shape remains unmeasured. The off-domain hop
+  matters independently: the adapter's exact-hostname subresource guard would
+  abort it.
+
+An earlier version of this file claimed the native transport was obsolete across
+the board. Lever refutes that. The claim was an overgeneralisation from three
+data points and is corrected here.
 
 Static HTML is not enough to answer this: fetched without a browser, Ashby and
 SmartRecruiters return zero forms and zero controls because they are SPA shells.
@@ -34,6 +50,10 @@ import sys
 from playwright.sync_api import sync_playwright
 
 TARGETS = [
+    # Lever's apply page is a separate /apply path and is the one adapter whose
+    # transport matches the existing native two-phase model.
+    ("lever", "https://jobs.lever.co/gopuff/f87aa199-0e43-4fdf-8879-9419f93b8078/apply"),
+    ("lever", "https://jobs.lever.co/shieldai/41468aca-c1c2-4a7b-aec8-f499e64b6d1e/apply"),
     ("greenhouse", "https://job-boards.greenhouse.io/gitlab/jobs/8503792002"),
     ("ashby", "https://jobs.ashbyhq.com/ashby/7458d4e9-da2e-47bd-98cb-adfda43d42b2/application"),
     ("smartrecruiters", "https://jobs.smartrecruiters.com/Visa/744000133907678"),
