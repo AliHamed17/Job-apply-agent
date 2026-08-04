@@ -6,6 +6,7 @@ from __future__ import annotations
 from scripts.greenhouse_selector_capture import (
     RequestRecord,
     evaluate_tripwires,
+    form_shape_tripwires,
     sanitize_html,
 )
 
@@ -115,3 +116,43 @@ def test_missing_submit_is_reported_rather_than_assumed_fine():
 def test_redacted_request_drops_the_query_string():
     r = _req(url="https://boards.greenhouse.io/x/apply?token=SECRET&id=99")
     assert r.redacted()["url"] == "https://boards.greenhouse.io/x/apply"
+
+
+def test_form_shape_tripwires_readable_from_blank_form_alone():
+    """These three need no keystroke, upload or submit to detect."""
+    assert form_shape_tripwires(_shape()) == []
+    assert [f["tripwire"] for f in form_shape_tripwires(_shape(found=False))] == ["NO_FORM_FOUND"]
+    assert [f["tripwire"] for f in form_shape_tripwires(_shape(method="get"))] == [
+        "FORM_METHOD_NOT_POST"
+    ]
+    assert [f["tripwire"] for f in form_shape_tripwires(_shape(enctype=""))] == [
+        "FORM_ENCTYPE_NOT_MULTIPART"
+    ]
+    assert [f["tripwire"] for f in form_shape_tripwires(_shape(file_input_count=2))] == [
+        "MULTIPLE_FILE_INPUTS"
+    ]
+
+
+def test_form_shape_tripwires_matches_a_real_greenhouse_react_shell():
+    """The exact shape curl-fetched from a live job-boards.greenhouse.io posting:
+    method=get, no enctype, zero data-field-id. This is what the early-exit in
+    main() must catch before the operator ever touches Step 2."""
+    real_shape = {
+        "found": True,
+        "method": "get",
+        "enctype": "",
+        "file_input_count": 2,
+        "submit_button_count": 1,
+    }
+    findings = [f["tripwire"] for f in form_shape_tripwires(real_shape)]
+    assert "FORM_METHOD_NOT_POST" in findings
+    assert "FORM_ENCTYPE_NOT_MULTIPART" in findings
+
+
+def test_evaluate_tripwires_still_includes_form_shape_findings():
+    """evaluate_tripwires (the end-of-run check) must not regress now that it
+    delegates the form-shape portion to form_shape_tripwires."""
+    findings = evaluate_tripwires([_req()], _shape(method="get", enctype=""))
+    tripwires = {f["tripwire"] for f in findings}
+    assert "FORM_METHOD_NOT_POST" in tripwires
+    assert "FORM_ENCTYPE_NOT_MULTIPART" in tripwires

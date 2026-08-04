@@ -20,8 +20,19 @@ submit — it only observes, and records:
 * a request transcript classifying the submit and any upload;
 * candidate confirmation selectors.
 
-Two tripwires are evaluated from the transcript, because either one invalidates
-the P1 plan and must stop it rather than be worked around:
+Three of the tripwires below — method, enctype, and multiple file inputs — are
+readable from the blank form alone, before a single keystroke. The script
+checks those immediately after Step 1 and aborts right there if any trips,
+rather than walking the operator through attaching a CV, filling every field
+and clicking a real submit button only to report afterward that none of it
+could have worked. A real application, once submitted, cannot be un-submitted
+and most ATSs bar reapplying to the same posting for 6-12 months, so an early,
+free abort is not an optimisation — it is what keeps this script from costing
+exactly what it exists to avoid.
+
+Two further tripwires can only be evaluated from the full transcript, because
+either one invalidates the P1 plan and must stop it rather than be worked
+around:
 
 1. **The submit is XHR/JSON rather than a navigating form POST.**
    ``structureReady()`` demands a literal ``method=post``/``enctype=multipart``
@@ -297,6 +308,57 @@ def _form_shape(page) -> dict[str, Any]:
         return {"found": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def form_shape_tripwires(form_shape: dict[str, Any]) -> list[dict[str, str]]:
+    """Findings determinable from the blank form alone.
+
+    None of these need a keystroke, an upload or a submit — they read only the
+    just-loaded form's own attributes. Checking them before Steps 2-4 lets the
+    operator abort before spending a real, irreversible application on a
+    transport that provably cannot work, instead of learning that only after
+    a real submit.
+    """
+    if not form_shape.get("found"):
+        return [
+            {
+                "tripwire": "NO_FORM_FOUND",
+                "detail": "No application form matched any candidate selector.",
+            }
+        ]
+
+    findings: list[dict[str, str]] = []
+    if form_shape.get("method") != "post":
+        findings.append(
+            {
+                "tripwire": "FORM_METHOD_NOT_POST",
+                "detail": (
+                    f"form method is {form_shape.get('method')!r}; structureReady() requires post."
+                ),
+            }
+        )
+    if "multipart" not in (form_shape.get("enctype") or ""):
+        findings.append(
+            {
+                "tripwire": "FORM_ENCTYPE_NOT_MULTIPART",
+                "detail": (
+                    f"form enctype is {form_shape.get('enctype')!r}; the adapter's "
+                    "payload commitment assumes multipart/form-data."
+                ),
+            }
+        )
+    if (form_shape.get("file_input_count") or 0) > 1:
+        findings.append(
+            {
+                "tripwire": "MULTIPLE_FILE_INPUTS",
+                "detail": (
+                    f"{form_shape['file_input_count']} file inputs observed. The "
+                    "single-file payload commitment is coupled in four places; pick "
+                    "a posting with one."
+                ),
+            }
+        )
+    return findings
+
+
 def evaluate_tripwires(
     transcript: list[RequestRecord], form_shape: dict[str, Any]
 ) -> list[dict[str, str]]:
@@ -353,45 +415,7 @@ def evaluate_tripwires(
             }
         )
 
-    if form_shape.get("found"):
-        if form_shape.get("method") != "post":
-            findings.append(
-                {
-                    "tripwire": "FORM_METHOD_NOT_POST",
-                    "detail": (
-                        f"form method is {form_shape.get('method')!r}; "
-                        "structureReady() requires post."
-                    ),
-                }
-            )
-        if "multipart" not in (form_shape.get("enctype") or ""):
-            findings.append(
-                {
-                    "tripwire": "FORM_ENCTYPE_NOT_MULTIPART",
-                    "detail": (
-                        f"form enctype is {form_shape.get('enctype')!r}; the adapter's "
-                        "payload commitment assumes multipart/form-data."
-                    ),
-                }
-            )
-        if (form_shape.get("file_input_count") or 0) > 1:
-            findings.append(
-                {
-                    "tripwire": "MULTIPLE_FILE_INPUTS",
-                    "detail": (
-                        f"{form_shape['file_input_count']} file inputs observed. The "
-                        "single-file payload commitment is coupled in four places; pick "
-                        "a posting with one."
-                    ),
-                }
-            )
-    else:
-        findings.append(
-            {
-                "tripwire": "NO_FORM_FOUND",
-                "detail": "No application form matched any candidate selector.",
-            }
-        )
+    findings.extend(form_shape_tripwires(form_shape))
 
     return findings
 
@@ -449,6 +473,35 @@ def main() -> int:
             (args.output_dir / "form_blank.html").write_text(
                 sanitize_html(form_html), encoding="utf-8"
             )
+
+        early_findings = form_shape_tripwires(form_shape)
+        if early_findings:
+            print(f"\n{'=' * 72}")
+            print(
+                "STOP — the blank form already trips a tripwire that no amount of\n"
+                "typing, uploading or submitting can fix. Aborting now, before any of\n"
+                "that, so this doesn't cost a real application to learn."
+            )
+            for f in early_findings:
+                print(f"    [{f['tripwire']}] {f['detail']}")
+            print(f"{'=' * 72}")
+            context.close()
+            report = {
+                "form_selector": form_selector,
+                "form_shape": form_shape,
+                "controls_blank": blank_controls,
+                "any_control_has_data_field_id": any(
+                    c.get("has_data_field_id") for c in blank_controls if isinstance(c, dict)
+                ),
+                "tripwires": early_findings,
+                "proceed": False,
+                "aborted_before_submit": True,
+            }
+            (args.output_dir / "capture.json").write_text(
+                json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            print(f"Wrote {args.output_dir / 'capture.json'}")
+            return 1
 
         capture.phase = "file_selected"
         _prompt(
