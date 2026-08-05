@@ -14,16 +14,15 @@ Per HANDOVER_PLAN.md Phase 10:
 
 from __future__ import annotations
 
-import pytest
+from profile.models import Personal, Preferences, Resume, UserProfile
 
+from jobs.extractor import extract_jobs
 from jobs.models import JobData
 from jobs.parsers.html_heuristic import parse_html_heuristic
 from jobs.parsers.jsonld import parse_jsonld
 from jobs.parsers.workday import parse_workday
-from jobs.extractor import extract_jobs
 from llm.generation import _check_placeholders
-from match.scoring import decide_action, score_job
-from profile.models import Preferences, Personal, Resume, UserProfile
+from match.scoring import Action, decide_action
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -131,6 +130,7 @@ class TestAdversarialScoring:
         profile = _make_profile(blacklist=["Acme Corp"])
         job = _make_job(company="Acme Corp")
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         assert breakdown.total == 0.0
         assert breakdown.skip_reason is not None
@@ -145,6 +145,7 @@ class TestAdversarialScoring:
             employment_type="part-time",
         )
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         action = decide_action(
             breakdown.total,
@@ -152,8 +153,12 @@ class TestAdversarialScoring:
             draft_only=True,
             skip_reason=breakdown.skip_reason,
         )
-        # Very low score should result in SKIP
+        # A wildly mismatched job must score low and must never reach
+        # auto-apply. Note it lands just *above* SKIP_THRESHOLD (20), so the
+        # action is DRAFT rather than SKIP — the comment here previously
+        # claimed SKIP, but nothing asserted it and the claim was false.
         assert breakdown.total < 30
+        assert action is not Action.AUTO_APPLY
 
     def test_blacklist_takes_precedence_over_high_score(self):
         profile = _make_profile(
@@ -167,6 +172,7 @@ class TestAdversarialScoring:
             description="Python FastAPI AWS senior engineer role",
         )
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         assert breakdown.total == 0.0
 
@@ -174,6 +180,7 @@ class TestAdversarialScoring:
         profile = _make_profile()
         job = _make_job(title="", description="")
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         # Empty description means zero keyword overlap.
         # (Title score may be non-zero due to substring matching of "".)
@@ -186,17 +193,20 @@ class TestAdversarialScoring:
         # Profile wants senior/mid, job is director level
         job = _make_job(title="VP Engineering Director", seniority="director")
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         assert breakdown.seniority_score < 15  # should be penalised
 
     def test_decide_action_skip_below_threshold(self):
         action = decide_action(score=10.0, auto_apply_enabled=False, draft_only=True)
         from match.scoring import Action
+
         assert action == Action.SKIP
 
     def test_decide_action_draft_at_medium_score(self):
         action = decide_action(score=55.0, auto_apply_enabled=False, draft_only=True)
         from match.scoring import Action
+
         assert action == Action.DRAFT
 
     def test_decide_action_skip_with_reason(self):
@@ -207,6 +217,7 @@ class TestAdversarialScoring:
             skip_reason="blacklisted company",
         )
         from match.scoring import Action
+
         assert action == Action.SKIP
 
 
@@ -329,6 +340,7 @@ class TestMalformedContentResilience:
             seniority="",
         )
         from match.scoring import score_job as _score
+
         # Should not raise
         breakdown = _score(job, profile)
         assert 0 <= breakdown.total <= 100
@@ -337,6 +349,7 @@ class TestMalformedContentResilience:
         profile = _make_profile()
         job = _make_job(title="", company="", location="", description="", seniority="")
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         assert 0 <= breakdown.total <= 100
 
@@ -380,6 +393,7 @@ class TestFakeJobPostScenarios:
             description="Entry-level internship position",
         )
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         # Seniority mismatch should reduce the score
         assert breakdown.seniority_score < 15
@@ -399,6 +413,7 @@ class TestFakeJobPostScenarios:
             ),
         )
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         # Title score should be very low despite keyword stuffing
         assert breakdown.title_score < 15
@@ -412,6 +427,7 @@ class TestFakeJobPostScenarios:
             description="This role is fully on-site, no remote work available.",
         )
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         # Location score should reflect city match attempt
         assert isinstance(breakdown.location_score, float)
@@ -443,6 +459,58 @@ class TestFakeJobPostScenarios:
             description="Apply now!!!",  # spammy, minimal content
         )
         from match.scoring import score_job as _score
+
         breakdown = _score(job, profile)
         # Keyword overlap should be near zero
         assert breakdown.keyword_score < 15
+
+
+# ── Hard constraint: no submitter may hold a candidate credential ──────────
+# Login is a persistent browser profile: the operator signs in manually once and
+# session cookies persist. submitters/indeed.py used to read INDEED_PASSWORD and
+# type it into a password field; it was unreachable only because
+# submit_application_task returned early, with ~415 lines of dead v3 code below
+# that return still constructing IndeedSubmitter(password=...). A single return
+# statement is not a safety boundary, so the capability is deleted outright.
+
+
+def test_no_submitter_reads_a_candidate_credential():
+    import pathlib
+    import re
+
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    # email_sender.py is an outbound SMTP notification transport, not a
+    # credential typed into an employer form. It is the one legitimate
+    # password consumer in this package.
+    allowed = {"email_sender.py"}
+    pattern = re.compile(
+        r"settings\.\w*password\w*|INDEED_PASSWORD|getenv\(\s*['\"][A-Z_]*PASSWORD"
+    )
+    offenders = []
+    for path in (repo_root / "submitters").rglob("*.py"):
+        if path.name in allowed:
+            continue
+        for match in pattern.finditer(path.read_text(encoding="utf-8")):
+            offenders.append(f"{path.relative_to(repo_root)}: {match.group(0)}")
+    assert offenders == [], f"submitters must never read a candidate credential: {offenders}"
+
+
+def test_settings_expose_no_indeed_credentials():
+    from core.config import Settings
+
+    leaked = {name for name in Settings.model_fields if "indeed" in name.lower()}
+    assert leaked == set(), f"Indeed credentials must be gone: {leaked}"
+
+
+def test_no_module_imports_the_deleted_indeed_submitter():
+    import pathlib
+    import re
+
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    pattern = re.compile(r"from\s+submitters\.indeed\s+import|import\s+submitters\.indeed")
+    offenders = [
+        str(path.relative_to(repo_root))
+        for path in repo_root.rglob("*.py")
+        if ".git" not in path.parts and pattern.search(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == [], f"submitters.indeed is deleted; still imported by: {offenders}"

@@ -54,6 +54,7 @@ from core.submission_domain import (
 from core.submission_domain import (
     SubmissionEvidence as DomainSubmissionEvidence,
 )
+from core.submission_service import SubmissionAdmissionError
 from db.models import (
     AdapterQualificationRecord,
     Application,
@@ -1986,3 +1987,85 @@ def test_signed_remote_kill_is_replay_protected_and_can_never_clear(tmp_path) ->
             now=_NOW + timedelta(minutes=6),
         )
     db.close()
+
+
+def test_dispatch_does_not_shadow_qualification_aware_descriptor_resolution(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The production call site passes no resolver, and must not get one.
+
+    dispatch_qualified_autopilot defaulted descriptor_resolver to
+    adapter_for_url and forwarded it unconditionally, so
+    create_submission_commands never fell through to its own default,
+    effective_live_descriptor_for_plan. Qualification-aware resolution
+    therefore never ran on the production path and every autopilot send
+    raised ADAPTER_NOT_QUALIFIED. Every other test in this file injects a
+    resolver, which is exactly why the defect survived.
+
+    End-to-end coverage of the resolved path needs a real job URL and a real
+    fixture digest; this scenario's descriptor is synthetic. So this test pins
+    the defect itself: absent an explicit resolver, none is forwarded.
+    """
+    scenario = _scenario(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _capture(db, requests, **kwargs):
+        captured.update(kwargs)
+        raise SubmissionAdmissionError("PROBE_STOP")
+
+    monkeypatch.setattr("worker.autopilot.create_submission_commands", _capture)
+    db = scenario.factory()
+    dispatch_qualified_autopilot(
+        db,
+        application_id=scenario.application_id,
+        form_plan_id=scenario.plan_id,
+        settings=_settings(),
+        capabilities=_capabilities(),
+        session_checker=lambda *_args: True,
+        now=_NOW,
+    )
+    assert "descriptor_resolver" not in captured, (
+        "no resolver was supplied, so none may be forwarded — forwarding one "
+        "shadows effective_live_descriptor_for_plan"
+    )
+    db.close()
+
+
+def test_dispatch_still_honours_an_explicit_resolver(tmp_path, monkeypatch) -> None:
+    """An explicitly supplied resolver must still reach create_submission_commands."""
+    scenario = _scenario(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+    sentinel = lambda _url: scenario.live_descriptor  # noqa: E731
+
+    def _capture(db, requests, **kwargs):
+        captured.update(kwargs)
+        raise SubmissionAdmissionError("PROBE_STOP")
+
+    monkeypatch.setattr("worker.autopilot.create_submission_commands", _capture)
+    db = scenario.factory()
+    dispatch_qualified_autopilot(
+        db,
+        application_id=scenario.application_id,
+        form_plan_id=scenario.plan_id,
+        settings=_settings(),
+        capabilities=_capabilities(),
+        descriptor_resolver=sentinel,
+        session_checker=lambda *_args: True,
+        now=_NOW,
+    )
+    assert captured.get("descriptor_resolver") is sentinel
+    db.close()
+
+
+def test_qualified_autopilot_is_a_recognised_audit_actor() -> None:
+    """worker/autopilot_inspection.py records this actor.
+
+    Absent from _ALLOWED_ACTORS it was silently relabelled "system", making an
+    unattended send indistinguishable from routine worker activity in the
+    audit trail — in a design whose whole basis is knowing who authorised a
+    send.
+    """
+    from core.application_audit import _ALLOWED_ACTORS
+
+    assert "qualified_autopilot" in _ALLOWED_ACTORS

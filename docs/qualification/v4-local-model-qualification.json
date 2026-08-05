@@ -125,11 +125,11 @@
     "schema_version": "qualified-local-model-v1"
   },
   "runtime": {
-    "total_seconds": 1617.327
+    "total_seconds": 1524.027
   },
   "schema_version": "v4-local-model-qualification-v4",
   "source_integrity": {
-    "combined_sha256": "8f3179e3181c0734cdd8d8021858cc729ec7ec62f876f68ddb9633e700443cb1",
+    "combined_sha256": "1cf5881264072e98b03b4d495f1dc13190d6239119b5c75d1c5d7019b45fb02c",
     "files": {
       "config/qualified_local_model.json": {
         "file": "config/qualified_local_model.json",
@@ -141,7 +141,7 @@
       },
       "core/config.py": {
         "file": "core/config.py",
-        "sha256": "3868d9b3b25f2bfc1362637cb3975251ba961857d1e0e9d67542d794a514500e"
+        "sha256": "29889bce035091ec79b3a5fecba2e070c7bfc5a895967d320b3a04dabf394e3d"
       },
       "core/form_plan_evidence.py": {
         "file": "core/form_plan_evidence.py",
@@ -288,7 +288,7 @@
       "reason_counts": {
         "llm_abstained": 14
       },
-      "runtime_seconds": 120.733,
+      "runtime_seconds": 130.35,
       "successful_generation_cases": 22,
       "successful_generations": 22,
       "threshold": {
@@ -333,7 +333,7 @@
         "UNSUPPORTED_CLAIM": 63
       },
       "resolved_synthesis": 57,
-      "runtime_seconds": 626.624,
+      "runtime_seconds": 593.819,
       "sensitive_automatic_eligible": 0,
       "sensitive_provider_attempts": 0,
       "successful_generation_cases": 80,
@@ -379,7 +379,7 @@
       "provider_cases": 40,
       "provider_payloads": 40,
       "reason_counts": {},
-      "runtime_seconds": 868.212,
+      "runtime_seconds": 796.841,
       "sensitive_eligible": 0,
       "successful_generation_cases": 40,
       "successful_generations": 40,
@@ -426,7 +426,7 @@
         "UNTRUSTED_INPUT_BLOCKED": 6,
         "llm_input_rejected": 6
       },
-      "runtime_seconds": 0.037,
+      "runtime_seconds": 0.072,
       "semantic_prompt_injection_cases": 18,
       "semantic_prompt_injections_blocked": 18,
       "successful_generations": 0,

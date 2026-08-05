@@ -43,11 +43,45 @@ evidence:
   cv_extracted: {}
   # Add sensitive facts only after checking them yourself. They are consumed
   # by deterministic form policy and are NEVER sent to an LLM.
+  #
+  # Write these through PUT /api/profile/onboarding, not by editing this file:
+  # load_versioned_profile_snapshot reads the UserProfileVersion table and only
+  # falls back to YAML when that table is empty, returning version=None, which
+  # cannot receive a final-submit permit.
+  #
+  # An empty or absent fact ABSTAINS: the form field is left for review rather
+  # than answered. That is the safe outcome — never guess a legal answer.
   user_confirmed:
+    # Legal authorisation, per jurisdiction. The unsuffixed key below is the
+    # jurisdiction-*unspecified* answer and satisfies no question that names a
+    # country; a question asking specifically about the United States resolves
+    # only from work_authorization_us.
     work_authorization: ""
+    work_authorization_il: ""
+    work_authorization_us: ""
+    work_authorization_eu: ""
     visa_sponsorship: ""
+    visa_sponsorship_il: ""
+    visa_sponsorship_us: ""
+    visa_sponsorship_eu: ""
     citizenship: ""
-    security_clearance: ""
     nationality: ""
+    security_clearance: ""
+    # Recurring facts nearly every ATS application asks for.
+    notice_period: ""
+    salary_expectation: ""
+    salary_currency: ""
+    availability_date: ""
+    # Both shapes are derived server-side from one input: free-text fields want
+    # "2 years", NUMBER controls want "2".
+    years_experience: ""
+    years_experience_number: ""
+    languages: ""
+    relocation: ""
+    work_mode: ""
+    highest_degree: ""
+    how_did_you_hear: ""
+    # "decline" or "disclose". Declining is a valid, complete answer.
+    demographic_disclosure: ""
     gender: ""
   inferred_preferences: {}

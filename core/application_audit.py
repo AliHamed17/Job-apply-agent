@@ -26,6 +26,10 @@ _ALLOWED_ACTORS = {
     "operator",
     "batch_operator",
     "whatsapp_operator",
+    # worker/autopilot_inspection.py records this actor. Without it here, an
+    # unattended send was silently relabelled "system" and became
+    # indistinguishable from routine worker activity in the audit trail.
+    "qualified_autopilot",
     "worker",
     "system",
 }

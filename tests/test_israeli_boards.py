@@ -200,3 +200,82 @@ def test_hebrew_survives_the_full_extractor_path():
     # Mojibake signature: Hebrew mis-decoded as latin-1 produces these.
     assert "×" not in job.title
     assert "Ã" not in job.description
+
+
+# ── Fail closed on non-posting pages ────────────────────────────────────────
+# _parse_detail accepted any non-empty title, _TITLE_SELECTORS ends in bare
+# h1/h2/h3, and JobData.is_complete requires only a 3+ character title that is
+# not a template placeholder. A CAPTCHA interstitial therefore produced a
+# confident JobData(title="Are you a robot?"), which was then scored, generated
+# for, and applied to.
+
+_DETAIL_URL = "https://www.drushim.co.il/job/12345/"
+
+
+@pytest.mark.parametrize(
+    "html,label",
+    [
+        ("<html><body><h1>Are you a robot?</h1><p>Please verify.</p></body></html>", "captcha"),
+        (
+            "<html><head><title>Access Denied</title></head><body><h1>Forbidden</h1></body></html>",
+            "403",
+        ),
+        ("<html><body><h1>Page not found</h1></body></html>", "soft404"),
+        ("<html><body><h1>אין הרשאה</h1></body></html>", "hebrew_forbidden"),
+        ("<html><body><h1>הדף לא נמצא</h1></body></html>", "hebrew_not_found"),
+        ("<html><body><h1>Please enable JavaScript</h1></body></html>", "js_wall"),
+    ],
+)
+def test_challenge_and_error_pages_yield_no_jobs(html, label):
+    assert parse_israeli_board(html, _DETAIL_URL) == [], f"{label} page must not yield a job"
+
+
+def test_bare_heading_with_no_job_signal_yields_no_jobs():
+    """A generic heading alone is site chrome, not a posting."""
+    html = "<html><body><h1>Drushim</h1><p>Welcome to our site.</p></body></html>"
+    assert parse_israeli_board(html, _DETAIL_URL) == []
+
+
+def test_real_posting_still_parses():
+    html = """
+    <html><body>
+      <h1 class="job-title">מהנדס תוכנה משובץ</h1>
+      <div class="company-name">Parallel Wireless</div>
+      <div class="job-location">פתח תקווה</div>
+      <div>תיאור התפקיד: פיתוח קושחה בסביבת לינוקס.</div>
+      <div>דרישות התפקיד: C, C++, לינוקס.</div>
+    </body></html>
+    """
+    jobs = parse_israeli_board(html, _DETAIL_URL)
+    assert len(jobs) == 1
+    assert jobs[0].title == "מהנדס תוכנה משובץ"
+    assert jobs[0].company == "Parallel Wireless"
+
+
+def test_posting_with_only_a_bare_title_but_real_company_still_parses():
+    """Corroboration, not a specific selector, is what makes a page a posting."""
+    html = """
+    <html><body>
+      <h1>Embedded Software Engineer</h1>
+      <div class="company-name">Parallel Wireless</div>
+      <div>תיאור התפקיד: firmware work.</div>
+    </body></html>
+    """
+    jobs = parse_israeli_board(html, _DETAIL_URL)
+    assert len(jobs) == 1
+    assert jobs[0].title == "Embedded Software Engineer"
+
+
+def test_marker_in_description_does_not_discard_a_real_posting():
+    """The marker scan is head-only, so body prose cannot cause a false reject."""
+    html = """
+    <html><head><title>מהנדס תוכנה - דרושים</title></head><body>
+      <h1 class="job-title">Embedded Software Engineer</h1>
+      <div class="company-name">Parallel Wireless</div>
+      <div>תיאור התפקיד: debug why a device reports "page not found" and
+      handle access denied responses from the CAPTCHA service.</div>
+    </body></html>
+    """
+    jobs = parse_israeli_board(html, _DETAIL_URL)
+    assert len(jobs) == 1
+    assert jobs[0].company == "Parallel Wireless"

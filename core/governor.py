@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import threading
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -100,8 +101,22 @@ class RateGovernor:
 
     # ── active hours ──────────────────────────────────
     def within_active_hours(self) -> bool:
+        """Compare the wall-clock hour in the operator's timezone, not UTC.
+
+        The signed autopilot policy expresses its window in Asia/Jerusalem, so
+        evaluating it in UTC both refuses policy-allowed sends and permits
+        sends the policy forbids. A mistyped timezone degrades to the previous
+        UTC behaviour rather than raising inside ``can_act()``.
+        """
         start, end = self.s.active_hours_range()
-        return start <= self._now().hour < end
+        now = self._now()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        try:
+            local = now.astimezone(ZoneInfo(self.s.active_hours_timezone))
+        except Exception:
+            local = now.astimezone(UTC)
+        return start <= local.hour < end
 
     # ── jittered gap ──────────────────────────────────
     def next_gap_seconds(self) -> int:

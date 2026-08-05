@@ -72,6 +72,41 @@ def _clean(text: str | None) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Challenge, authorisation and not-found markers. A page carrying one of these
+# is not a posting no matter what its headings say: a CAPTCHA interstitial has
+# an h1, so title presence alone cannot distinguish it from a real job. English
+# vocabulary mirrors the challenge detection in submitters/workday.py.
+_UNREADABLE_MARKERS = (
+    "are you a robot",
+    "verify you are human",
+    "unusual traffic",
+    "access denied",
+    "forbidden",
+    "page not found",
+    "not found",
+    "not authorized",
+    "not authorised",
+    "enable javascript",
+    "captcha",
+    "אין הרשאה",
+    "הדף לא נמצא",
+    "לא נמצאה",
+    "אינך מורשה",
+)
+
+
+def _page_is_unreadable(soup: BeautifulSoup) -> bool:
+    """True when the page is a challenge, error or soft 404 rather than a job.
+
+    Only ``title``/``h1``/``h2`` are scanned, so a genuine posting that merely
+    mentions one of these phrases in its description is not discarded.
+    """
+    head = " ".join(
+        _clean(node.get_text(" ", strip=True)) for node in soup.select("title, h1, h2")
+    ).lower()
+    return any(marker in head for marker in _UNREADABLE_MARKERS)
+
+
 def _first(soup: BeautifulSoup, selectors: tuple[str, ...]) -> str:
     for sel in selectors:
         try:
@@ -146,7 +181,10 @@ def is_israeli_board(url: str) -> bool:
 # Ordered most- to least-specific. The generic fallbacks at the end are what
 # keep a posting parseable after the board reskins.
 
-_TITLE_SELECTORS = (
+# A specific selector is positive evidence that this page models a job. The
+# bare-tag fallbacks match any page at all, so a title found only through them
+# needs corroboration before the posting is trusted.
+_SPECIFIC_TITLE_SELECTORS = (
     "h1.job-title",
     "h1[itemprop='title']",
     ".job-title-h1",
@@ -155,11 +193,11 @@ _TITLE_SELECTORS = (
     # Class-only before bare tags: on a results card the title is an h2/h3,
     # and matching the class avoids picking up a page-level heading.
     ".job-title",
-    "h1",
     "h2.job-title",
-    "h2",
-    "h3",
 )
+_FALLBACK_TITLE_SELECTORS = ("h1", "h2", "h3")
+# Retained for existing importers; ordered most- to least-specific as before.
+_TITLE_SELECTORS = _SPECIFIC_TITLE_SELECTORS + _FALLBACK_TITLE_SELECTORS
 _COMPANY_SELECTORS = (
     "[itemprop='hiringOrganization']",
     ".company-name",
@@ -205,6 +243,12 @@ def parse_israeli_board(html: str, source_url: str) -> list[JobData]:
 
     board = _board_of(source_url)
     soup = _soup(html)
+
+    # Checked once here so the card path fails closed too: a challenge page
+    # served in place of a results page must not yield cards either.
+    if _page_is_unreadable(soup):
+        logger.info("israeli_board_page_unreadable", board=board, source_url=source_url)
+        return []
 
     # A results page carries many cards; a posting carries one detail block.
     cards: list = []
@@ -258,12 +302,31 @@ def _parse_cards(cards: list, source_url: str, board: str) -> list[JobData]:
 
 
 def _parse_detail(soup: BeautifulSoup, source_url: str, board: str) -> JobData | None:
-    title = _first(soup, _TITLE_SELECTORS)
+    if _page_is_unreadable(soup):
+        logger.info("israeli_board_page_unreadable", board=board, source_url=source_url)
+        return None
+
+    title = _first(soup, _SPECIFIC_TITLE_SELECTORS)
+    title_is_specific = bool(title)
+    if not title:
+        title = _first(soup, _FALLBACK_TITLE_SELECTORS)
     if not title:
         return None
 
+    company = _first(soup, _COMPANY_SELECTORS)
+    location = _first(soup, _LOCATION_SELECTORS)
     description = _labelled_section(soup, _DESCRIPTION_LABELS)
     requirements = _labelled_section(soup, _REQUIREMENT_LABELS)
+
+    # A generic heading with no company, no location and no labelled section is
+    # site chrome, not a posting. This check runs *before* the description
+    # fallbacks below, so page-body text cannot corroborate its own title.
+    # Returning None loses nothing real and keeps an invented job out of the
+    # pipeline, where it would be scored, generated for and applied to.
+    corroborated = bool(company or location or description or requirements)
+    if not title_is_specific and not corroborated:
+        logger.info("israeli_board_no_job_signal", board=board, source_url=source_url)
+        return None
 
     if not description:
         description = _first(soup, _DESCRIPTION_SELECTORS)
@@ -279,8 +342,8 @@ def _parse_detail(soup: BeautifulSoup, source_url: str, board: str) -> JobData |
 
     job = JobData(
         title=title,
-        company=_first(soup, _COMPANY_SELECTORS),
-        location=_first(soup, _LOCATION_SELECTORS),
+        company=company,
+        location=location,
         description=description,
         requirements=requirements,
         apply_url=apply_url or source_url,

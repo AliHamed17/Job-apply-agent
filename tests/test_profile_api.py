@@ -339,3 +339,139 @@ def test_local_onboarding_rejects_placeholder_current_location(tmp_path):
     finally:
         app.dependency_overrides.pop(get_settings, None)
         set_profile(UserProfile())
+
+
+# ── Answer bank: jurisdiction-scoped legal facts + recurring facts ──────────
+
+
+def _onboarding_base() -> dict:
+    return {
+        "legal_name": "Confirmed Candidate",
+        "primary_email": "candidate@domain.test",
+        "phone": "+972 50 000 0000",
+        "location": "Israel",
+        "search_locations": ["Tel Aviv, Israel"],
+        "work_authorization": "Confirmed by operator",
+        "sponsorship": "Confirmed by operator",
+        "citizenship": "",
+        "nationality": "Confirmed by operator",
+    }
+
+
+def _seeded_settings(tmp_path):
+    from core.config import Settings
+
+    profile_path = tmp_path / "user_profile.yaml"
+    save_profile(
+        UserProfile(
+            personal=Personal(name="Jane Doe", email="jane.doe@example.com"),
+            preferences=Preferences(roles=["Software Engineer"], locations=["Israel"]),
+        ),
+        profile_path,
+        db=None,
+    )
+    return profile_path, Settings(_env_file=None, user_profile_path=str(profile_path))
+
+
+def _put_onboarding(payload):
+    with (
+        patch("api.routes.profile.enqueue_pending_job_rescore", return_value=0),
+        patch("api.routes.profile.auto_prepare_scored_jobs_if_ready", return_value=0),
+    ):
+        return client.put("/api/profile/onboarding", headers=_auth(), json=payload)
+
+
+def test_onboarding_stores_jurisdiction_scoped_legal_facts(tmp_path):
+    """An Israeli authorisation fact must never be able to answer a US question.
+
+    The flat work_authorization key is the jurisdiction-*unspecified* answer, so
+    a resolver matching a label that names a country needs the suffixed key. A
+    jurisdiction with no confirmed fact must be absent, not stored as "", so it
+    abstains rather than resolving to an empty answer.
+    """
+    from core.config import get_settings
+
+    profile_path, settings = _seeded_settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        payload = _onboarding_base() | {
+            "work_authorization_il": "Israeli citizen, no sponsorship required",
+            "sponsorship_il": "No",
+        }
+        assert _put_onboarding(payload).status_code == 200
+
+        stored = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+        confirmed = stored["evidence"]["user_confirmed"]
+        assert confirmed["work_authorization_il"] == "Israeli citizen, no sponsorship required"
+        assert confirmed["visa_sponsorship_il"] == "No"
+        # Never confirmed for the US, so the key must not exist at all.
+        assert "work_authorization_us" not in confirmed
+        assert "visa_sponsorship_us" not in confirmed
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_onboarding_derives_both_years_experience_shapes(tmp_path):
+    """Free-text fields want '2 years'; NUMBER controls want '2'."""
+    from core.config import get_settings
+
+    profile_path, settings = _seeded_settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        assert _put_onboarding(_onboarding_base() | {"years_experience": "2"}).status_code == 200
+        confirmed = yaml.safe_load(profile_path.read_text(encoding="utf-8"))["evidence"][
+            "user_confirmed"
+        ]
+        assert confirmed["years_experience"] == "2 years"
+        assert confirmed["years_experience_number"] == "2"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_onboarding_stores_recurring_facts_and_removes_blanks(tmp_path):
+    from core.config import get_settings
+
+    profile_path, settings = _seeded_settings(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        filled = _onboarding_base() | {
+            "notice_period": "30 days",
+            "salary_expectation": "35000",
+            "salary_currency": "ILS",
+            "relocation": "No",
+            "work_mode": "Hybrid",
+            "highest_degree": "M.Sc. Information Systems",
+            "demographic_disclosure": "decline",
+        }
+        assert _put_onboarding(filled).status_code == 200
+        confirmed = yaml.safe_load(profile_path.read_text(encoding="utf-8"))["evidence"][
+            "user_confirmed"
+        ]
+        assert confirmed["notice_period"] == "30 days"
+        assert confirmed["salary_currency"] == "ILS"
+        assert confirmed["demographic_disclosure"] == "decline"
+        assert "how_did_you_hear" not in confirmed
+
+        # Re-submitting with a blank must remove the fact, not store "".
+        assert _put_onboarding(filled | {"notice_period": ""}).status_code == 200
+        confirmed = yaml.safe_load(profile_path.read_text(encoding="utf-8"))["evidence"][
+            "user_confirmed"
+        ]
+        assert "notice_period" not in confirmed
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_onboarding_rejects_unknown_field():
+    resp = _put_onboarding(_onboarding_base() | {"not_a_real_field": "x"})
+    assert resp.status_code == 422
+
+
+def test_onboarding_rejects_invalid_demographic_disclosure():
+    resp = _put_onboarding(_onboarding_base() | {"demographic_disclosure": "male"})
+    assert resp.status_code == 422
+
+
+def test_onboarding_rejects_non_numeric_years_experience():
+    resp = _put_onboarding(_onboarding_base() | {"years_experience": "about two"})
+    assert resp.status_code == 422
