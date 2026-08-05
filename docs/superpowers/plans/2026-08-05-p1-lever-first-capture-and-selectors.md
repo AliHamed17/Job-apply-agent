@@ -88,6 +88,47 @@ transport rewrite.
     that its `_FORM_CANDIDATES`/tripwire logic matches real Lever markup shape;
     the transport-level tripwires should **not** fire on a normal posting.
 
+## Read-only reconnaissance done since (2026-08-05, live browser, blank form only)
+
+Loaded `https://jobs.lever.co/palantir/c4442730-2926-41ad-8c0e-5e5a6b4d14ae/apply`
+in a real browser and read the rendered DOM — no field typed, no file chosen, no
+button clicked. This is exactly Step 1 of `lever_selector_capture.py`, run by
+hand once to sanity-check the tool's assumptions against a third live tenant
+before anyone spends a real application. It is **not** a substitute for Task 1
+below; it cannot observe network requests or the post-submit page.
+
+Confirmed, third tenant, same as gopuff/shieldai: `id="application-form"`,
+`method="post"`, `enctype="multipart/form-data"`, 1 file input, 1 submit
+button. Identity fields carry `data-qa` directly on the input
+(`name-input`/`email-input`/`phone-input`/`location-input`/`org-input`) inside
+minimal wrappers, exactly as the plan already described.
+
+Three corrections/additions to what Task 2 should expect, found only because
+this tenant happens to use more form features than gopuff/shieldai did:
+
+- **Two different UUID-namespace conventions for custom questions**, not one:
+  `cards[<uuid>][fieldN]` (this tenant) and `surveysResponses[<uuid>][responses]
+  [fieldN]` (the earlier gopuff sample). Both match the
+  `looks_like_dynamic_survey_name` regex already in `lever_selector_capture.py`
+  (`/\[[0-9a-f-]{20,}\]/`) — no tooling change needed, just don't hardcode either
+  prefix in the Task 2 rewrite.
+- **`urls[LinkedIn]` / `urls[GitHub]` / `urls[Portfolio]`** and a **location
+  field backed by an autocomplete widget** (paired hidden `selectedLocation`
+  field, "Loading" / "No location found" states) — more structure than the
+  gopuff sample showed. Treat as additional stable, cross-tenant fields
+  alongside the core five, pending confirmation on the next tenant.
+- **A hidden `h-captcha-response` field** — this tenant's form has hCaptcha
+  wired in. Tenant-specific, not a Lever-platform universal, but it means a
+  human is required at submit time for *this* posting regardless of adapter
+  correctness — pick a different tenant for the first canary if this one still
+  has it when Task 3 gets there, or accept that Task 3's live canary needs a
+  human solving a captcha, which the design spec's ladder already assumes.
+
+The resume-upload widget's own DOM text already contains `"Couldn't auto-read
+resume."`, `"Analyzing resume..."`, `"Success!"` before any file is chosen —
+suggestive that it's async, but not proof. Only Task 1's real file-select with
+network observation resolves this; treat it as still open.
+
 ## What's still open — genuinely blocked on the operator
 
 ### Task 1: Run the Lever capture — **requires the operator**
