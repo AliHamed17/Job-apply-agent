@@ -34,7 +34,7 @@ _PLATFORM_CASES = (
         "lever",
         "https://jobs.lever.co/fixture/11111111-2222-4333-8444-555555555555/apply",
         "1.0.0",
-        "lever-candidate-v2",
+        "lever-candidate-v3",
         id="lever",
     ),
     pytest.param(

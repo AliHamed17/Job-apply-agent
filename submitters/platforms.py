@@ -127,11 +127,19 @@ _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     AdapterDescriptor(
         platform="lever",
         adapter_version="1.0.0",
-        selector_version="lever-candidate-v2",
+        # v3 replaces v2, which never matched real markup (see
+        # submitters/lever_v1.py). Deliberately NOT re-claiming
+        # FIXTURE_QUALIFIED here: that tier means the committed fixture
+        # baseline passes, and only one new fixture (built from a real,
+        # completed submission) exists so far -- the other 24 v2 fixtures
+        # still encode the old, wrong markup and have not been migrated.
+        # DRY_RUN_ONLY is the honest claim: real evidence backs the code,
+        # a comprehensive fixture baseline does not yet.
+        selector_version="lever-candidate-v3",
         transport="browser",
         authentication_mode="public_candidate_flow",
         supported_controls=_COMMON_CONTROLS,
-        qualification=QualificationTier.FIXTURE_QUALIFIED,
+        qualification=QualificationTier.DRY_RUN_ONLY,
         qualified_form_scope=(),
         domains=("jobs.lever.co", "jobs.eu.lever.co"),
         execution_contract_version=TWO_PHASE_EXECUTION_CONTRACT_VERSION,

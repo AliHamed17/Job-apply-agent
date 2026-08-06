@@ -68,8 +68,19 @@ from submitters.platforms import (
 )
 
 LEVER_V1_ADAPTER_VERSION = "1.0.0"
-LEVER_V1_SELECTOR_VERSION = "lever-candidate-v2"
-LEVER_FORM_SELECTOR = 'form[data-qa="application-form"][data-posting-id][data-site]'
+# v2 assumed markup (data-qa="application-form", data-field-id wrappers,
+# authenticity_token) that a real, completed Lever submission on 2026-08-06
+# (jobs.lever.co/collate, capture.json committed alongside this change)
+# proved never exists on a real page: every v2 inspection would SELECTOR_DRIFT
+# before a real form was ever read. v3 is a genuinely different, evidence-
+# backed contract, not a patch -- bumping the version is what keeps any old
+# fixture-qualified evidence for v2 from silently vouching for v3's behavior.
+LEVER_V1_SELECTOR_VERSION = "lever-candidate-v3"
+LEVER_FORM_SELECTOR = "form#application-form"
+# Unverified: the real capture's confirmation-candidate search found no match
+# on the actual post-submit page (confirmation_selector: None in the captured
+# report), so this selector is still the old, unproven assumption. Left
+# unchanged rather than guessed; see the P1 plan doc for the open question.
 LEVER_CONFIRMATION_SELECTOR = (
     'main[data-qa="application-confirmation"][data-application-id][data-posting-id]'
 )
@@ -79,7 +90,38 @@ _MAX_RESUME_BYTES = 20 * 1024 * 1024
 _FIELD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,500}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _REFERENCE_RE = re.compile(r"^[A-Za-z0-9_.:-]{6,160}$")
-_SYSTEM_CONTROL_NAMES = frozenset({"authenticity_token", "csrf_token", "_csrf", "utf8"})
+# Real hidden fields observed on a live, completed Lever submission. None of
+# these existed in the v2 assumption (authenticity_token/csrf_token/_csrf/utf8
+# -- a Rails-form convention Lever does not use).
+_SYSTEM_CONTROL_NAMES = frozenset(
+    {
+        "accountId",
+        "linkedInData",
+        "origin",
+        "referer",
+        "timezone",
+        "socialReferralKey",
+        "socialSource",
+        "resumeStorageId",
+        "h-captcha-response",
+        "source",
+    }
+)
+_FIELD_WRAPPER_SELECTOR = "li.application-question"
+_NAME_TO_FIELD_ID_RE = re.compile(r"[^A-Za-z0-9_.:-]")
+
+
+def _field_id_from_name(name: str) -> str:
+    """Derive a stable field_id from a control's name attribute.
+
+    Real Lever markup has no per-field equivalent of a stable data-field-id:
+    data-qa exists only on some controls (name-input, email-input, ...) and
+    is absent on others that are just as real (urls[LinkedIn], ...). name is
+    the one attribute every real control has, so it is the identifier this
+    adapter keys on, transformed only enough to satisfy _FIELD_ID_RE (e.g.
+    "urls[LinkedIn]" -> "urls_LinkedIn_").
+    """
+    return _NAME_TO_FIELD_ID_RE.sub("_", name)
 
 
 class LeverPageState(StrEnum):
@@ -337,14 +379,16 @@ def _exact_form(
     html: str,
     identity: LeverPostingIdentity,
 ) -> Tag | None:
+    """Real Lever markup carries no data-posting-id/data-site on the form
+    itself -- confirmed on a live, completed submission -- so posting
+    identity cannot be re-verified from form attributes the way v2 assumed.
+    identity is accepted for signature/call-site stability and because the
+    caller has already navigated to identity.apply_url before snapshotting;
+    that navigation, not a form attribute, is what scopes this page to the
+    right posting."""
+    del identity
     soup = BeautifulSoup(html or "", "html.parser")
-    forms = [
-        form
-        for form in soup.select(LEVER_FORM_SELECTOR)
-        if _visible(form)
-        and str(form.get("data-posting-id", "")).strip().casefold() == identity.posting_id
-        and str(form.get("data-site", "")).strip() == identity.site
-    ]
+    forms = [form for form in soup.select(LEVER_FORM_SELECTOR) if _visible(form)]
     return forms[0] if len(forms) == 1 else None
 
 
@@ -490,19 +534,12 @@ def observe_lever_v1_fields(
     form = _exact_form(html, identity)
     if form is None:
         raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
-    wrappers = [
-        node
-        for node in form.select('[data-qa="application-field"][data-field-id]')
-        if _visible(node)
-    ]
+    wrappers = [node for node in form.select(_FIELD_WRAPPER_SELECTOR) if _visible(node)]
     if not wrappers or len(wrappers) > _MAX_FIELD_COUNT:
         raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
     fields: list[FormFieldV1] = []
     seen_ids: set[str] = set()
     for position, wrapper in enumerate(wrappers):
-        field_id = str(wrapper.get("data-field-id", "")).strip()
-        if not _FIELD_ID_RE.fullmatch(field_id) or field_id in seen_ids:
-            raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
         controls = [
             control
             for control in wrapper.select("input, textarea, select")
@@ -518,6 +555,9 @@ def observe_lever_v1_fields(
             or (field_type is FieldType.RADIO and len(names) != 1)
             or (field_type is not FieldType.RADIO and len(controls) != 1)
         ):
+            raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
+        field_id = _field_id_from_name(str(control.get("name", "")).strip())
+        if not _FIELD_ID_RE.fullmatch(field_id) or field_id in seen_ids:
             raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
         label_node = wrapper.select_one("label, legend, [data-qa='field-label']")
         label = label_node.get_text(" ", strip=True) if label_node is not None else ""
@@ -559,6 +599,34 @@ def observe_lever_v1_fields(
     return tuple(fields)
 
 
+def _wrapper_field_ids(
+    form: Tag,
+    field_by_id: Mapping[str, FormFieldV1],
+) -> dict[int, str]:
+    """Map each field wrapper (by Python object id) to the field_id
+    observe_lever_v1_fields would have assigned it, via the same
+    primary-control rule. Used so a hidden companion control sharing a
+    mapped field's wrapper -- the location autocomplete's selectedLocation,
+    confirmed on a live submission -- is recognised as belonging to that
+    field instead of being rejected as an unexplained control."""
+    result: dict[int, str] = {}
+    for wrapper in form.select(_FIELD_WRAPPER_SELECTOR):
+        visible_controls = [
+            c
+            for c in wrapper.select("input, textarea, select")
+            if str(c.get("type", "")).casefold() != "hidden"
+        ]
+        if not visible_controls:
+            continue
+        name = str(visible_controls[0].get("name", "")).strip()
+        if not name:
+            continue
+        candidate_id = _field_id_from_name(name)
+        if candidate_id in field_by_id:
+            result[id(wrapper)] = candidate_id
+    return result
+
+
 def lever_v1_final_action_binding(
     html: str,
     *,
@@ -570,17 +638,20 @@ def lever_v1_final_action_binding(
     form = _exact_form(html, identity)
     if form is None:
         raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
+    # No action-URL check: real markup has no action attribute at all (a
+    # browser posts an action-less form to its own page, which is already
+    # identity.apply_url because the session navigated there before
+    # snapshotting -- confirmed on a live submission).
     if (
-        str(form.get("action", "")).strip() != identity.apply_url
-        or str(form.get("method", "")).strip().casefold() != "post"
+        str(form.get("method", "")).strip().casefold() != "post"
         or str(form.get("enctype", "")).strip().casefold() != "multipart/form-data"
     ):
         raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
-    submits = [
-        node
-        for node in form.select('button[data-qa="btn-submit"][type="submit"]')
-        if _visible(node)
-    ]
+    # type="button", not type="submit": the visible button does not natively
+    # submit the form. hCaptcha's own script gates a second, hidden,
+    # nameless type="submit" button -- confirmed on a live submission. The
+    # adapter still only ever clicks the one visible, named data-qa button.
+    submits = [node for node in form.select('button[data-qa="btn-submit"]') if _visible(node)]
     if len(submits) != 1:
         raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
     submit = submits[0]
@@ -599,6 +670,7 @@ def lever_v1_final_action_binding(
     field_by_id = {field.field_id: field for field in fields}
     if len(field_by_id) != len(fields):
         raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
+    wrapper_field_id = _wrapper_field_ids(form, field_by_id)
     owners: dict[str, dict[str, object]] = {}
     seen_system: set[str] = set()
     mapped_fields: set[str] = set()
@@ -614,37 +686,40 @@ def lever_v1_final_action_binding(
         ):
             raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
         input_type = str(control.get("type", "")).casefold()
-        wrapper = control.find_parent(
-            attrs={
-                "data-qa": "application-field",
-                "data-field-id": True,
-            }
-        )
-        if wrapper is None:
+        wrapper = control.find_parent("li", class_="application-question")
+        wrapper_key = id(wrapper) if wrapper is not None else None
+        if wrapper_key is None or wrapper_key not in wrapper_field_id:
             if (
                 control.name != "input"
                 or input_type != "hidden"
                 or name not in _SYSTEM_CONTROL_NAMES
-                or name in seen_system
-                or not str(control.get("value", ""))
-                or len(str(control.get("value", "")).encode("utf-8")) > 4096
             ):
+                raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
+            # Lever's own system fields are legitimately allowed to start
+            # empty (e.g. origin/referer/socialSource on a direct visit) --
+            # unlike v2's authenticity_token assumption, presence of a
+            # nonempty value is not required, only that the name is exactly
+            # one of the confirmed real system fields and appears once.
+            if name in seen_system:
                 raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
             seen_system.add(name)
             continue
-        field_id = str(wrapper.get("data-field-id", "")).strip()
-        field = field_by_id.get(field_id)
-        if field is None or not _visible(wrapper) or input_type == "hidden":
+        if not _visible(wrapper):
             raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
-        prior = owners.get(name)
-        if prior is not None and (
-            prior["field_id"] != field_id or field.field_type is not FieldType.RADIO
-        ):
+        field_id = wrapper_field_id[wrapper_key]
+        field = field_by_id[field_id]
+        is_primary_control = _field_id_from_name(name) == field_id and input_type != "hidden"
+        if is_primary_control:
+            prior = owners.get(name)
+            if prior is not None and (
+                prior["field_id"] != field_id or field.field_type is not FieldType.RADIO
+            ):
+                raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
+            owners[name] = {"field_id": field_id, "field_type": field.field_type.value}
+        elif input_type != "hidden":
+            # A second non-hidden, non-primary control inside a mapped
+            # wrapper is a shape observe_lever_v1_fields did not account for.
             raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
-        owners[name] = {
-            "field_id": field_id,
-            "field_type": field.field_type.value,
-        }
         mapped_fields.add(field_id)
     if mapped_fields != set(field_by_id):
         raise LeverAdapterBlockedError(ReasonCode.FORM_CHANGED)
@@ -658,7 +733,7 @@ def lever_v1_final_action_binding(
         "action_sha256": _sha(identity.apply_url),
         "method": "POST",
         "encoding": "multipart/form-data",
-        "submitter": "button:data-qa=btn-submit:type=submit",
+        "submitter": "button:data-qa=btn-submit:type=button",
         "actionability_sha256": _sha(
             json.dumps(
                 actionability_capture,

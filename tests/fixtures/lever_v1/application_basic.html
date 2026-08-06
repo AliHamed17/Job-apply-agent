@@ -1,16 +1,205 @@
-<!doctype html>
-<html lang="en"><body>
-<form data-qa="application-form" data-site="sample-company" data-posting-id="11111111-2222-4333-8444-555555555555" action="https://jobs.lever.co/sample-company/11111111-2222-4333-8444-555555555555/apply" method="post" enctype="multipart/form-data">
-  <input type="hidden" name="authenticity_token" value="sanitized-token">
-  <div data-qa="application-field" data-field-id="candidate-name" data-canonical-name="full_name">
-    <label>Full name</label><input name="name" required>
-  </div>
-  <div data-qa="application-field" data-field-id="candidate-email" data-canonical-name="email">
-    <label>Email</label><input type="email" name="email" required>
-  </div>
-  <div data-qa="application-field" data-field-id="candidate-resume" data-canonical-name="resume">
-    <label>Resume</label><input type="file" name="resume" accept=".pdf,.docx" required>
-  </div>
-  <button data-qa="btn-submit" type="submit">Submit application</button>
-</form>
-</body></html>
+<html>
+ <body>
+  <form enctype="multipart/form-data" id="application-form" method="POST">
+   <div class="section page-centered application-form">
+    <h4>
+     Submit your application
+    </h4>
+    <ul>
+     <li class="application-question resume">
+      <label>
+       <div class="application-label">
+        Resume/CV
+       </div>
+       <div class="application-field">
+        <a class="postings-btn template-btn-utility visible-resume-upload">
+         <span class="filename">
+         </span>
+         <span class="default-label">
+          ATTACH RESUME/CV
+         </span>
+         <input class="application-file-input invisible-resume-upload" data-qa="input-resume" id="resume-upload-input" name="resume" type="file"/>
+        </a>
+        <span class="resume-upload-failure">
+         <div class="resume-upload-label">
+          Couldn't auto-read resume.
+         </div>
+        </span>
+        <span class="resume-upload-working">
+         <div class="loading-indicator">
+         </div>
+         <div class="resume-upload-label">
+          Analyzing resume...
+         </div>
+        </span>
+        <span class="resume-upload-success">
+         <div class="loading-indicator completed">
+         </div>
+         <div class="resume-upload-label">
+          Success!
+         </div>
+        </span>
+       </div>
+      </label>
+      <span class="resume-upload-oversize">
+       <p class="error-message">
+        File exceeds the maximum upload size of
+        <b>
+         100MB
+        </b>
+        . Please try a smaller size.
+       </p>
+      </span>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        Full name
+        <span class="required">
+         ✱
+        </span>
+       </div>
+       <div class="application-field">
+        <input data-qa="name-input" name="name" required="" type="text"/>
+       </div>
+      </label>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        Email
+        <span class="required">
+         ✱
+        </span>
+       </div>
+       <div class="application-field">
+        <input data-qa="email-input" name="email" required="" type="email"/>
+       </div>
+      </label>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        Phone
+       </div>
+       <div class="application-field">
+        <input data-qa="phone-input" name="phone" type="text"/>
+       </div>
+      </label>
+     </li>
+     <li class="application-question" data-qa="structured-contact-location-question">
+      <label>
+       <div class="application-label">
+        Current location
+       </div>
+       <div class="application-field">
+        <input class="location-input" data-qa="location-input" id="location-input" name="location" type="text"/>
+        <input id="selected-location" name="selectedLocation" type="hidden"/>
+        <div class="momentum-body flex flex-column items-start width-full height-auto bg-gray-800 text-gray-200 rounded dropdown-container">
+         <div class="dropdown-results width-full cursor-pointer">
+         </div>
+         <div class="dropdown-no-results width-full break-word py1 px2 pointer-events-none">
+          No location found. Try entering a different location
+         </div>
+         <div class="dropdown-loading-results width-full break-word height-full py1 px2 pointer-events-none">
+          <div class="theme-inverse items-center">
+           <span>
+            Loading
+           </span>
+          </div>
+         </div>
+        </div>
+       </div>
+      </label>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        Current company
+       </div>
+       <div class="application-field">
+        <input data-qa="org-input" name="org" type="text"/>
+       </div>
+      </label>
+     </li>
+    </ul>
+   </div>
+   <div class="section page-centered application-form">
+    <h4>
+     Links
+    </h4>
+    <ul>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        LinkedIn URL
+       </div>
+       <div class="application-field">
+        <input name="urls[LinkedIn]" type="text"/>
+       </div>
+      </label>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        Twitter URL
+       </div>
+       <div class="application-field">
+        <input name="urls[Twitter]" type="text"/>
+       </div>
+      </label>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        GitHub URL
+       </div>
+       <div class="application-field">
+        <input name="urls[GitHub]" type="text"/>
+       </div>
+      </label>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        Portfolio URL
+       </div>
+       <div class="application-field">
+        <input name="urls[Portfolio]" type="text"/>
+       </div>
+      </label>
+     </li>
+     <li class="application-question">
+      <label>
+       <div class="application-label">
+        Collate
+       </div>
+       <div class="application-field">
+        <input name="urls[Other]" type="text"/>
+       </div>
+      </label>
+     </li>
+    </ul>
+   </div>
+   <input name="accountId" type="hidden"/>
+   <input name="linkedInData" type="hidden"/>
+   <input name="origin" type="hidden"/>
+   <input name="referer" type="hidden"/>
+   <input id="applicant-timezone" name="timezone" type="hidden"/>
+   <input name="socialReferralKey" type="hidden"/>
+   <input name="socialSource" type="hidden"/>
+   <input name="resumeStorageId" type="hidden"/>
+   <input id="hcaptchaResponseInput" name="h-captcha-response" type="hidden"/>
+   <button class="hidden" id="hcaptchaSubmitBtn" type="submit">
+   </button>
+   <input name="source" type="hidden"/>
+   <div class="h-captcha" data-sitekey="e33f87f8-88ec-4e1a-9a13-df9bbb1d8120" id="h-captcha">
+   </div>
+   <div class="section page-centered application-form last-section-apply">
+    <button class="postings-btn template-btn-submit hex-color" data-qa="btn-submit" id="btn-submit" type="button">
+     Submit application
+    </button>
+   </div>
+  </form>
+ </body>
+</html>

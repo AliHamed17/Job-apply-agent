@@ -263,10 +263,17 @@ def test_current_adapters_have_no_live_final_execution_scope():
         assert descriptor.allows_live_submission is False
         assert descriptor.allows_final_execution is False
         assert descriptor.qualified_form_scope == ()
-        if descriptor.platform in {
+        if descriptor.platform == "lever":
+            # dry_run_only, not fixture_qualified: v3's selector contract is
+            # backed by a real, completed submission (see
+            # submitters/lever_v1.py) but the comprehensive fixture baseline
+            # FIXTURE_QUALIFIED certifies has not been migrated from v2's
+            # disproven markup yet. See the P1 plan doc.
+            assert descriptor.execution_contract_version == TWO_PHASE_EXECUTION_CONTRACT_VERSION
+            assert descriptor.qualification is QualificationTier.DRY_RUN_ONLY
+        elif descriptor.platform in {
             "workday",
             "greenhouse",
-            "lever",
             "ashby",
             "smartrecruiters",
         }:

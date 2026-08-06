@@ -167,85 +167,163 @@ resume."`, `"Analyzing resume..."`, `"Success!"` before any file is chosen —
 suggestive that it's async, but not proof. Only Task 1's real file-select with
 network observation resolves this; treat it as still open.
 
-## What's still open — genuinely blocked on the operator
+## Task 1: DONE — the operator ran the capture (2026-08-06)
 
-### Task 1: Run the Lever capture — **requires the operator**
+Real capture completed against `jobs.lever.co/collate/bc4a840c-71f1-4190-8826-6b42d236e375/apply`
+(the posting screened as simplest — see the screening note preserved below).
+Result: **zero tripwires**, `proceed: true`. Specifically:
 
-**Why an agent cannot do this:** it is a real job application. The tool
-observes; it does not act. Someone has to pick a real posting, attach a real
-CV, answer real questions, and click a real submit button, because that is the
-only way to learn Lever's actual submit mechanism (is the resume upload
-synchronous or does "Analyzing resume..." mean an async parse-then-attach flow
-that needs different handling entirely) and get real field markup to build a
-selector contract from.
+- The real submit is `POST` + `document` + navigating (not XHR) with
+  `content_type: multipart/form-data`, to the same `/apply` URL — confirms
+  the transport model this adapter already assumed.
+- The resume upload did **not** fire a request during the file-selection
+  phase — `ASYNC_UPLOAD` did not trip. (A separate `/parseResume` XHR was
+  observed, but bucketed under the post-submit phase, not file-selection;
+  the file itself travels inside the main multipart POST regardless.)
+- `.capture/lever/capture.json` stays local (`.capture/` is gitignored by
+  design, not an oversight here). Its `form_blank.html` — sanitized, no typed
+  values, no PII — is committed directly as the new
+  `tests/fixtures/lever_v1/application_basic.html`, which is the durable,
+  reviewable copy of this evidence.
 
-- [ ] **Step 1: Pick a target.** One real, currently open Lever posting.
-  Prefer: single resume upload (not multiple file inputs — `MULTIPLE_FILE_INPUTS`
-  tripwire), and ideally no survey/EEO block for the first proof (each extra
-  field shape is real coverage work the first proof doesn't need — the tool
-  will flag any present via `dynamic_survey_name_fields` in its report either
-  way).
+Screening note (preserved from before the capture ran): five real postings
+were checked read-only for simplicity first; Collate came out cleanest — 0
+dynamic-UUID survey fields, 1 file input, no EEO/consent language, 22 total
+fields, versus 6-7 survey fields on everything else checked (Voltus,
+Metabase, Palantir).
 
-  Screened five real postings this session the same read-only way (blank-page
-  DOM read, zero fields touched) specifically to find the simplest one:
-  `Collate — Full-Stack Software Engineer (Backend-Leaning)`
-  (`jobs.lever.co/collate/bc4a840c-71f1-4190-8826-6b42d236e375/apply`) came out
-  cleanest — 0 dynamic-UUID survey fields, 1 file input, no EEO/consent
-  language detected, 22 total fields. Everything else checked (Voltus,
-  Metabase, Palantir) had 6-7 survey fields. Note this posting can close at
-  any time like the several others that already 404'd during screening —
-  re-verify it's still live before running Step 2, and re-screen a fresh
-  candidate the same way if not.
-- [ ] **Step 2: Run the tool.**
-  ```powershell
-  python scripts/lever_selector_capture.py --url https://jobs.lever.co/<tenant>/<posting-id>/apply
-  ```
-  Follow its 4 on-screen steps exactly — confirm the blank form, attach the CV
-  and watch the upload indicator, fill the rest, then submit for real.
-- [ ] **Step 3: Hand the output back.** `.capture/lever/capture.json` plus
-  `form_blank.html`/`confirmation.html` (already sanitized — no typed values,
-  no PII, safe to share). This is the input the next task cannot start
-  without.
+## Task 2: substantially done — evidence-based rewrite landed (2026-08-06)
 
-**Stop rule (from the design spec §9, unchanged):** if `capture.json` shows
-`ASYNC_UPLOAD` or `SUBMIT_IS_XHR`, stop here and re-scope — do not proceed to
-Task 2 with a transport model the evidence just contradicted.
+`submitters/lever_v1.py` and `submitters/platforms.py` rewritten from the
+real capture, not from assumption. What changed and why, in the same order
+as the original task list:
 
-### Task 2: Rewrite the Lever selector contract — **from evidence, not before**
+- [x] `LEVER_FORM_SELECTOR` → `form#application-form`. Real markup carries no
+  `data-qa`/`data-posting-id`/`data-site` on the form element at all; `_exact_form`
+  no longer tries to re-verify posting identity from form attributes that
+  don't exist — identity is established by the navigation that already
+  happened before snapshotting.
+- [x] `observe_lever_v1_fields`'s wrapper query → `li.application-question`
+  (confirmed, not `capture.json`-inferred). field_id is now derived from each
+  control's `name` attribute via `_field_id_from_name` (sanitized to satisfy
+  `_FIELD_ID_RE`, e.g. `urls[LinkedIn]` → `urls_LinkedIn_`) rather than a
+  `data-field-id` that does not exist in reality — `data-qa` exists only on
+  some controls (name-input, email-input, ...) and not others that are just
+  as real (the five `urls[...]` fields), so `name` is the one identifier
+  every real control actually has.
+- [x] Simple identity fields and the resume field: handled, proven against
+  the real fixture (`tests/fixtures/lever_v1/application_basic.html`, now the
+  real sanitized Collate markup, not hand-authored).
+- [x] The location field's extra hidden `selectedLocation` companion control
+  (an autocomplete widget backing a single logical field) — not anticipated
+  in the original task list, found during the rewrite. `lever_v1_final_action_binding`
+  now maps a wrapper to one field_id and recognises companion hidden controls
+  sharing that wrapper, rather than treating the second named control as an
+  unexplained field and blocking with `FORM_CHANGED`.
+- [x] `_SYSTEM_CONTROL_NAMES` replaced wholesale: v2's assumption
+  (`authenticity_token`/`csrf_token`/`_csrf`/`utf8` — a Rails convention Lever
+  does not use) matched none of the real hidden fields observed
+  (`accountId`, `linkedInData`, `origin`, `referer`, `timezone`,
+  `socialReferralKey`, `socialSource`, `resumeStorageId`,
+  `h-captcha-response`, `source`).
+- [x] The visible submit button is `type="button"`, not `type="submit"` —
+  a real hCaptcha-gated hidden button (`type="submit"`, no `name`, unrelated
+  to the adapter's own click target) does the actual native submit.
+  `lever_v1_final_action_binding`'s selector and submitter-identity payload
+  updated to match.
+- [x] `LEVER_V1_SELECTOR_VERSION` bumped `v2` → `v3`, and
+  `submitters/platforms.py`'s matching descriptor entry updated in lockstep
+  (required — `_descriptor()` refuses to instantiate the adapter on any
+  mismatch between the two). Qualification tier deliberately set to
+  `DRY_RUN_ONLY`, not re-claimed as `FIXTURE_QUALIFIED`: that tier means the
+  *committed fixture baseline* passes, and only one of 28 fixtures has been
+  migrated to real markup so far.
+- [ ] Survey/EEO custom questions (Lever's `cards[<uuid>][fieldN]` /
+  `surveysResponses[<uuid>][...]` patterns) — **not implemented**. Collate's
+  own posting has none, so there is no completed-submission evidence to build
+  this from yet, only the blank-form reconnaissance recorded earlier in this
+  doc. `observe_lever_v1_fields` correctly `SELECTOR_DRIFT`s on any posting
+  that has them, which is the right fail-closed behavior until real evidence
+  exists — not a gap to guess through.
+- [ ] Consent/attestation detection — **not implemented, and now known to
+  need a different design than v2 assumed**. v2 read a `data-control-kind`
+  attribute that does not exist anywhere in real Lever markup; a real consent
+  question (seen in blank-form recon, not yet in a completed submission) is
+  structurally just an ordinary radio question ("Yes, I consent" / "No, I do
+  not consent"). Detecting it will need label-text matching, not a structural
+  marker, and touches `core/form_planning.py`'s answer policy, not just this
+  file. Explicitly out of scope for this pass.
+- [ ] `LEVER_CONFIRMATION_SELECTOR` — **still the old, unverified v2 guess**.
+  The real capture's confirmation-candidate search found no match on the
+  actual post-submit page (`confirmation_selector: null` in the committed
+  `capture.json`), so what real Lever shows after a successful submit remains
+  unknown. Left unchanged rather than guessed.
+- [ ] **A significant new finding, not in the original task list**: the real
+  fixture's hCaptcha widget (`<div class="h-captcha">`, present on every real
+  posting checked this session, not just this tenant) trips
+  `assess_lever_v1_snapshot`'s existing `CHALLENGE_DETECTED` logic, which
+  treats mere presence of `.h-captcha` as an active, blocking challenge. This
+  means **`assess_lever_v1_snapshot` currently cannot reach `FORM` state on
+  any real Lever page** — not a fixture-migration gap, an architecture
+  question: hCaptcha's DOM presence does not necessarily mean an active
+  challenge is being presented (invisible/checkbox modes usually resolve
+  without blocking), but distinguishing "present" from "actively challenging"
+  from static HTML alone is genuinely hard and not attempted here. This
+  blocks Task 3's dry run regardless of how complete the field-selector work
+  is, and needs its own scoped investigation before Task 3 can start.
+- [x] `ruff check .`, `ruff format --check .` — clean on every touched file.
+  `pytest -q` on the four core tests exercising the real fixture (field
+  extraction, final-action binding, both directly against real captured
+  markup) — all pass. The other 24 fixtures (built against v2's disproven
+  markup) and tests depending on them now fail, expected and explicitly not
+  fixed here — see the follow-up task below.
 
-Blocked on Task 1's output existing. Once it does:
+### Follow-up (not done in this pass, scoped so the next session can pick it up)
 
-- [ ] Replace `LEVER_FORM_SELECTOR` in `submitters/lever_v1.py` with the real
-  form selector `capture.json.form_selector` reports (expected:
-  `form#application-form`, matching the two independently-checked tenants —
-  confirm against the actual capture rather than assuming).
-- [ ] Rewrite `observe_lever_v1_fields`'s wrapper query from
-  `[data-qa="application-field"][data-field-id]` to match
-  `capture.json.controls_filled[*].wrapper_selector` — expected pattern is
-  `li.application-question`, with per-field identity coming from each control's
-  own `data-qa` (e.g. `name-input`, `email-input`) rather than a shared
-  `data-field-id`, since real Lever has no `data-field-id` at all.
-- [ ] Handle the three field shapes the docstring in
-  `lever_selector_capture.py` documents separately, per what the capture
-  actually shows for this posting:
-  1. simple identity fields (`data-qa` per field, stable),
-  2. resume upload (only build submit-time file handling here if
-     `capture.json` confirms it's synchronous; if async, stop per the rule
-     above),
-  3. survey/EEO fields flagged in `dynamic_survey_name_fields` — these need a
-     `name`-independent approach (label text, `data-qa="multiple-choice"` /
-     `data-qa="checkboxes"` wrapper) since the `name` attribute itself is not
-     stable across postings.
-- [ ] Replace `tests/fixtures/lever_v1/*.html` with the sanitized captured
-  markup (already PII-free; review once more before committing regardless).
-- [ ] Update `lever_v1_form_fingerprint` and any qualification-evidence digest
-  that encodes the old wrapper pattern — check for the same kind of
-  `native_transport`-style version tag P0 found on the Greenhouse side
-  (`GREENHOUSE_V1_NATIVE_TRANSPORT`) and bump it if present, so this is
-  legible as a new selector-contract version, not a silent rewrite of what
-  qualification evidence already vouches for.
-- [ ] `ruff check .`, `ruff format --check .`, `pytest -q` — all green before
-  commit, same bar as every other change this session.
+1. Migrate or retire the other 24 `tests/fixtures/lever_v1/*.html` fixtures
+   (currently v2 markup, will `SELECTOR_DRIFT` against v3). Some encode
+   concerns unrelated to field structure (`captcha.html`, `mfa.html`,
+   `session_expired.html`, ...) and may not need changing; others
+   (`application_custom_select.html`, `application_radio_checkbox.html`,
+   `application_consent.html`, the `outer_*` actionability fixtures) need
+   real evidence or a deliberate decision to hand-author from the blank-form
+   recon, clearly labeled as such.
+2. `docs/qualification/lever-browser-v1.json` and its `.md` counterpart are
+   now stale (still claim v2, `fixture_qualified`) and were deliberately left
+   unchanged rather than hand-edited to a false "passed" state — regenerating
+   them honestly needs the fixture migration above done first, the same
+   `chore(qualification): re-earn ... after the config change` pattern this
+   repo already uses elsewhere. This has one more consequence than it looks:
+   `scripts/build_adapter_qualification_matrix.py` (docstring: "the
+   deterministic, fixture-only first-five ATS qualification matrix")
+   structurally assumes all five first-wave adapters sit at the same
+   `FIXTURE_QUALIFIED` tier and hard-fails on any registry/report mismatch —
+   which Lever now is, correctly. `test_adapter_qualification_matrix.py`'s
+   two tests fail as a result. Fixing this for real means either fast-tracking
+   Lever's fixture migration back to parity with the other four, or teaching
+   the matrix script to represent a mixed-tier cohort — a real design
+   decision, not a mechanical fix, so left alone rather than guessed at here.
+3. Investigate the hCaptcha/`CHALLENGE_DETECTED` finding above — this is the
+   actual blocker for Task 3, independent of selector-contract completeness.
+4. Investigate `LEVER_CONFIRMATION_SELECTOR` — ask the operator what the real
+   post-submit page showed (screenshot or plain description), since the
+   capture tool itself found no match.
+
+### Task 3: Fixture-qualify, then dry-run, then the live canary — **operator present throughout, and now also blocked on the hCaptcha finding above**
+
+Unchanged from the design spec's existing ladder (§2 qualification stages) —
+not rewritten here because nothing learned this session changes the ladder
+itself, only what has to happen before Task 3 can start:
+
+- [ ] Offline fixture suite passes against the rewritten contract.
+- [ ] Real-Chromium rehearsal with `HTMLFormElement.prototype.submit` stubbed —
+  confirms no request leaves before spending a real application on it.
+- [ ] One real-URL dry run (`DRY_RUN=true`) against a **different** real Lever
+  posting than the one captured, to catch overfitting to a single tenant's
+  markup.
+- [ ] One live canary — operator selects and approves the exact job,
+  handles CAPTCHA/MFA manually, confirms via the employer's own confirmation
+  email. This is the step that actually produces the P1 exit criterion.
 
 ### Task 3: Fixture-qualify, then dry-run, then the live canary — **operator present throughout**
 

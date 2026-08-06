@@ -71,24 +71,47 @@ def test_fixture_state_contract(
 
 
 def test_basic_form_observer_is_ordered_bounded_and_attachment_explicit() -> None:
+    """application_basic.html is the real, sanitized markup from a completed
+    Lever submission (jobs.lever.co/collate, captured 2026-08-06 -- see
+    .capture/lever/capture.json and the P1 plan doc), not hand-authored. Real
+    Lever has no data-field-id; field_id is derived from each control's name
+    attribute (see _field_id_from_name), which is why these read "name" /
+    "email" rather than an invented "candidate-name" / "candidate-email"."""
     fields = observe_lever_v1_fields(
         _fixture("application_basic.html"),
         identity=IDENTITY,
     )
 
     assert [(field.field_id, field.position) for field in fields] == [
-        ("candidate-name", 0),
-        ("candidate-email", 1),
-        ("candidate-resume", 2),
+        ("resume", 0),
+        ("name", 1),
+        ("email", 2),
+        ("phone", 3),
+        ("location", 4),
+        ("org", 5),
+        ("urls_LinkedIn_", 6),
+        ("urls_Twitter_", 7),
+        ("urls_GitHub_", 8),
+        ("urls_Portfolio_", 9),
+        ("urls_Other_", 10),
     ]
-    assert [field.field_type for field in fields] == [
-        FieldType.TEXT,
-        FieldType.EMAIL,
-        FieldType.FILE,
-    ]
-    assert fields[2].canonical_name == "resume"
-    assert fields[2].constraints.accepted_file_types == (".pdf", ".docx")
-    assert all(field.required for field in fields)
+    assert fields[0].field_type is FieldType.FILE
+    assert fields[1].field_type is FieldType.TEXT  # name
+    assert fields[2].field_type is FieldType.EMAIL
+    assert all(field.field_type is FieldType.TEXT for field in fields[3:])
+    # Real Lever does not set the HTML `required` attribute on the resume
+    # file input even though the label shows a visual required marker (✱) --
+    # this reads the literal HTML, not the visual presentation.
+    assert fields[0].required is False
+    assert fields[1].required is True  # name
+    assert fields[2].required is True  # email
+    assert fields[3].required is False  # phone
+    # No data-canonical-name exists in real markup; always None until a
+    # separate mechanism maps real names to canonical ones.
+    assert all(field.canonical_name is None for field in fields)
+    assert "Resume/CV" in fields[0].label
+    assert fields[1].label == "Full name ✱"
+    assert fields[2].label == "Email ✱"
 
 
 def test_exact_options_and_sensitive_consent_semantics_are_observed() -> None:
