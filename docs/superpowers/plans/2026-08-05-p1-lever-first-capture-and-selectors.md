@@ -152,12 +152,15 @@ this tenant happens to use more form features than gopuff/shieldai did:
   field, "Loading" / "No location found" states) — more structure than the
   gopuff sample showed. Treat as additional stable, cross-tenant fields
   alongside the core five, pending confirmation on the next tenant.
-- **A hidden `h-captcha-response` field** — this tenant's form has hCaptcha
-  wired in. Tenant-specific, not a Lever-platform universal, but it means a
-  human is required at submit time for *this* posting regardless of adapter
-  correctness — pick a different tenant for the first canary if this one still
-  has it when Task 3 gets there, or accept that Task 3's live canary needs a
-  human solving a captcha, which the design spec's ladder already assumes.
+- **A hidden `h-captcha-response` field, plus a visible `div#h-captcha`
+  widget.** Update after checking four tenants total (Palantir, Voltus,
+  Metabase, Collate): **all four** have it. Correcting the earlier note in
+  this doc — this looks like a Lever-platform default, not a per-tenant
+  opt-in, though four is still a small sample. Practically this means: don't
+  bother screening candidate postings for captcha-absence, there may not be
+  one. It doesn't change anything about the plan — Task 3's live canary
+  already assumes a human solves any CAPTCHA/MFA challenge, so this is the
+  ladder working as designed, not a new blocker.
 
 The resume-upload widget's own DOM text already contains `"Couldn't auto-read
 resume."`, `"Analyzing resume..."`, `"Success!"` before any file is chosen —
@@ -182,6 +185,17 @@ selector contract from.
   field shape is real coverage work the first proof doesn't need — the tool
   will flag any present via `dynamic_survey_name_fields` in its report either
   way).
+
+  Screened five real postings this session the same read-only way (blank-page
+  DOM read, zero fields touched) specifically to find the simplest one:
+  `Collate — Full-Stack Software Engineer (Backend-Leaning)`
+  (`jobs.lever.co/collate/bc4a840c-71f1-4190-8826-6b42d236e375/apply`) came out
+  cleanest — 0 dynamic-UUID survey fields, 1 file input, no EEO/consent
+  language detected, 22 total fields. Everything else checked (Voltus,
+  Metabase, Palantir) had 6-7 survey fields. Note this posting can close at
+  any time like the several others that already 404'd during screening —
+  re-verify it's still live before running Step 2, and re-screen a fresh
+  candidate the same way if not.
 - [ ] **Step 2: Run the tool.**
   ```powershell
   python scripts/lever_selector_capture.py --url https://jobs.lever.co/<tenant>/<posting-id>/apply
