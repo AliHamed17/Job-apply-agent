@@ -653,11 +653,18 @@ _CANONICAL_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
     "github_url": ("github", "github profile", "github url", "קישור לגיטהאב"),
     "portfolio": ("portfolio", "portfolio link", "portfolio url", "תיק עבודות"),
     "portfolio_url": ("portfolio", "portfolio link", "portfolio url", "תיק עבודות"),
+    # "resume/cv" is a real, observed label (Lever's own real markup, not a
+    # guess -- tests/fixtures/lever_v1/application_basic.html). It matters as
+    # its own alias variant, not just "resume" and "cv" separately: the
+    # shared normalize_policy_text strips "/" without inserting a space, so
+    # "Resume/CV" normalizes to "resumecv", one word that equals neither
+    # "resume" nor "cv" alone.
     "resume": (
         "resume",
         "resume upload",
         "upload resume",
         "upload your resume",
+        "resume/cv",
         "cv",
         "curriculum vitae",
         "קורות חיים",
@@ -668,6 +675,7 @@ _CANONICAL_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
         "resume upload",
         "upload resume",
         "upload your resume",
+        "resume/cv",
         "cv",
         "curriculum vitae",
         "קורות חיים",
@@ -679,6 +687,7 @@ _CANONICAL_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
         "upload cv",
         "upload your cv",
         "resume",
+        "resume/cv",
         "curriculum vitae",
         "קורות חיים",
         "העלאת קורות חיים",
@@ -689,6 +698,7 @@ _CANONICAL_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
         "upload cv",
         "upload your cv",
         "resume",
+        "resume/cv",
         "curriculum vitae",
         "קורות חיים",
         "העלאת קורות חיים",

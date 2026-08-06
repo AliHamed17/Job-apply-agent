@@ -127,15 +127,16 @@ _ADAPTERS: tuple[AdapterDescriptor, ...] = (
     AdapterDescriptor(
         platform="lever",
         adapter_version="1.0.0",
-        # v3 replaces v2, which never matched real markup (see
-        # submitters/lever_v1.py). Deliberately NOT re-claiming
-        # FIXTURE_QUALIFIED here: that tier means the committed fixture
-        # baseline passes, and only one new fixture (built from a real,
-        # completed submission) exists so far -- the other 24 v2 fixtures
-        # still encode the old, wrong markup and have not been migrated.
-        # DRY_RUN_ONLY is the honest claim: real evidence backs the code,
-        # a comprehensive fixture baseline does not yet.
-        selector_version="lever-candidate-v3",
+        # v3 replaces v2, which never matched real markup; v4 fixes v3's
+        # label-extraction imprecision (see submitters/lever_v1.py for both).
+        # Deliberately NOT re-claiming FIXTURE_QUALIFIED here: that tier
+        # means the committed fixture baseline passes, and only one fixture
+        # (built from a real, completed submission) reflects the current
+        # contract so far -- the other 24 v2 fixtures still encode the old,
+        # wrong markup and have not been migrated. DRY_RUN_ONLY is the
+        # honest claim: real evidence backs the code, a comprehensive
+        # fixture baseline does not yet.
+        selector_version="lever-candidate-v4",
         transport="browser",
         authentication_mode="public_candidate_flow",
         supported_controls=_COMMON_CONTROLS,

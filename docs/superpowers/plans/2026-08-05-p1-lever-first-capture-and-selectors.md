@@ -289,23 +289,166 @@ as the original task list:
   alone are not proven to catch every real active-challenge presentation — no
   capture has observed the DOM during that moment — so this is evidence the
   old check was wrong, not a claim the new one is complete.
+- [x] **Second finding, same day, much larger: `AnswerPolicyV1` could never
+  deterministically resolve *any* real Lever field, not just custom
+  questions.** Traced end to end (not assumed): every deterministic
+  resolution path in `core/form_planning.py` — `_identity_value`,
+  `_operator_approved`, the user-confirmed-evidence path, even the local-LLM
+  path's `_allowed_llm_evidence_keys` gate — requires `field.canonical_name`
+  to be set before it runs at all. `observe_lever_v1_fields` left it `None`
+  for every field (no `data-canonical-name` attribute exists on real
+  wrappers), a decision the v3 rewrite's own comment flagged as needing "a
+  separate mechanism" later. That mechanism is now built: `lever_v1.py`'s
+  new `_CANONICAL_NAME_BY_FIELD_ID` maps the real, stable field_ids
+  (`name`, `email`, `phone`, `location`, `urls_LinkedIn_`, `urls_GitHub_`,
+  `urls_Portfolio_`) to `core.submission_domain._CANONICAL_LABEL_ALIASES`
+  keys — the same field_id → canonical-key fallback pattern
+  `submitters/greenhouse_v1.py`'s `_canonical_name` already uses, not a new
+  design. Every mapped field's real, *actually extracted* label was checked
+  against `field_canonical_label_compatible` by direct measurement, not by
+  eyeballing the HTML — because that check is stricter once canonical_name
+  is set than when it's `None` (permissive `True`), a wrong mapping would
+  have made resolution *worse* than doing nothing, not better. Two
+  fields were caught exactly this way and are deliberately NOT mapped:
+  `org` ("Current company") and `urls_Twitter_`/`urls_Other_` have no
+  matching concept anywhere in `_CANONICAL_LABEL_ALIASES` at all — not
+  "unmapped yet", genuinely no such concept exists in this policy (see the
+  unresolved architecture gap below, which is the real consequence of this).
+- [x] **Third finding, found while verifying the second: label extraction was
+  silently wrong for any field whose control has rich nested UI state.**
+  `observe_lever_v1_fields` took the whole `<label>` element's text; on real
+  markup two fields (`resume`, `location`) wrap sibling
+  `.application-field` content with the actual question inside their
+  `<label>` — upload-progress status spans for resume ("Couldn't auto-read
+  resume.", "Analyzing resume...", "Success!"), autocomplete dropdown chrome
+  for location ("Loading", "No location found..."). The extracted label for
+  resume was `"Resume/CV ATTACH RESUME/CV Couldn't auto-read resume. ..."`,
+  not `"Resume/CV"` — which meant `field_is_reviewed_cv_attachment` returned
+  `False` on the *one field every application needs*, silently, with no
+  `SELECTOR_DRIFT` to surface it. Fixed by preferring the real, consistently-
+  present `.application-label` div (confirmed 1:1 against all 11 fields in
+  the real fixture) over the whole `<label>`, falling back to the old
+  broader selector only if that div is absent. This is a real change to how
+  `observe_lever_v1_fields` reads real markup, so `LEVER_V1_SELECTOR_VERSION`
+  bumped `v3` → `v4` (with `submitters/platforms.py`'s descriptor and every
+  hardcoded test string updated in lockstep, same discipline as the v2→v3
+  bump) — old v3 fingerprints must not be treated as equivalent to v4 ones.
+- [x] Fourth, smaller finding, same root cause as the third: even with the
+  clean `.application-label` text, `"Resume/CV"` normalizes to `"resumecv"`
+  (`core.sensitive_policy.normalize_policy_text` strips `/` without adding a
+  space), which matched neither the `"resume"` nor `"cv"` alias alone.
+  `"resume/cv"` — a real, observed label, not a guess — added to
+  `_CANONICAL_LABEL_ALIASES`'s `resume`/`resume_upload`/`cv`/`cv_upload`
+  entries. Narrow, additive, doesn't touch matching logic.
+- [x] Verified cumulative effect empirically at every step (`python -c
+  "..."` against the real fixture + `AnswerPolicyV1.plan_fields` directly,
+  not just re-running pytest) rather than assuming the fixes composed
+  correctly: before this pass, all 11 real fields abstained and
+  `ready_for_permit` could never be reached; after, `resume`/`name`/`email`
+  resolve with real, inspectable provenance
+  (`verified_attachment`/`deterministic_identity`), and `phone`/`location`/
+  `urls_LinkedIn_`/`urls_GitHub_`/`urls_Portfolio_` correctly abstain for a
+  mundane, expected reason (the fake test profile has no data for them, not
+  a mapping gap — a populated profile resolves them too). `org`/
+  `urls_Twitter_`/`urls_Other_` still correctly abstain, for the real
+  architecture reason below.
+- [ ] **New, now the actual top blocker for Task 3 — bigger than the hCaptcha
+  finding, and NOT fixed this session, deliberately**: Lever's real Playwright
+  `fill()` (`submitters/lever_playwright.py:1114-1116`) raises on *any*
+  non-`RESOLVED` decision rather than skipping it — confirmed a deliberate,
+  coherent design shared with `submitters/smartrecruiters_playwright.py`
+  (not shared by `greenhouse_playwright.py`/`workday_playwright.py`, which
+  both skip). `LeverBrowserV1.inspect()` and `preflight()` each carry their
+  own independent copy of the matching "any decision not RESOLVED blocks"
+  check. Combined with the second finding above: `org`/`urls_Twitter_`/
+  `urls_Other_` have no canonical concept anywhere in
+  `_CANONICAL_LABEL_ALIASES`, so **nothing can ever resolve them** —not
+  identity, not a pre-seeded `OperatorApprovedAnswer` row (`_operator_approved`
+  *also* requires `canonical_name` to be set before it even queries), not a
+  configured local LLM (`_allowed_llm_evidence_keys` returns empty for a
+  label with no recognized canonical/semantic key, so `_local_llm` bails
+  with `UNSUPPORTED_CLAIM` before generating anything). It's not even
+  possible to represent "reviewed and intentionally left blank" as a
+  workaround: `AnswerDecisionV1`'s own validator forbids a `RESOLVED`
+  decision from carrying a blank string value. **Net effect: under the
+  current domain model, `ready_for_permit` is structurally unreachable for
+  any real Lever posting with even one generic optional field with no
+  identity/CV/LLM-answerable concept — which, based on the one real capture,
+  is ordinary, not an edge case** ("Current company" is exactly this kind of
+  field on most real job applications). Fixing this for real needs a design
+  decision in shared, safety-critical code (`core/submission_domain.py`/
+  `core/form_planning.py`, used by all five adapters, not just Lever) —
+  most plausibly a new disposition distinct from both `RESOLVED` and
+  today's abstain-with-reason, representing "an operator explicitly reviewed
+  and confirmed leaving this exact field blank," matched by
+  `field_contract_fingerprint` (which already exists and already scopes to
+  one exact real field instance) rather than requiring a generic
+  `canonical_name` concept the field may never have. That's a genuine,
+  wide-blast-radius architecture change, not a mechanical fix, and is
+  deliberately left as a scoped-but-undone follow-up rather than guessed at
+  here. The four browser-level tests that need a *ready* plan to exercise
+  their own logic (attachment binding, confirmation-injection resistance,
+  click-timeout handling, invalid-proof detection) now use a test-only
+  `_assume_ready` helper (`tests/test_lever_browser_v1.py`) that synthesizes
+  placeholder-valued `RESOLVED` decisions for whatever's still abstained,
+  clearly documented as standing in for "assume an operator already
+  reviewed this through a mechanism that doesn't exist yet" — proven correct
+  the hard way, by first discovering that clearing only `plan.blockers`
+  produced two tests that passed *for the wrong reason* (coincidentally
+  matching `FORM_CHANGED` from the still-unresolved-decisions check, never
+  reaching the confirmation-injection/proof-validation logic they were
+  named for) before fixing `_assume_ready` to actually clear every decision.
 - [x] `ruff check .`, `ruff format --check .` — clean on every touched file.
-  `pytest -q` on the four core tests exercising the real fixture (field
-  extraction, final-action binding, both directly against real captured
-  markup) — all pass. The other 24 fixtures (built against v2's disproven
-  markup) and tests depending on them now fail, expected and explicitly not
-  fixed here — see the follow-up task below.
+  Full suite (`pytest tests/ -q`, the reliable run — a first attempt piped
+  through `tail -50` before backgrounding and silently discarded the earlier,
+  alphabetically-first failures, producing a misleading 90-failed count;
+  rerun with complete output redirected straight to a file instead): **26
+  failed, 2941 passed, 20 skipped** — down from this session's 33-failing
+  starting point (after the earlier v2→v3 rewrite + hCaptcha fix). Every one
+  of the 26 is accounted for: 19 in `test_lever_v1_fixtures.py` + 1 in
+  `test_lever_browser_v1.py` (the pre-existing, already-scoped unmigrated-
+  fixture backlog, follow-up item 1), 2 in `test_adapter_qualification_matrix.py`
+  (follow-up item 2's mixed-tier issue), 1 in `test_lever_v1_qualification_report.py`
+  (the deliberately-stale Lever report), `test_webhook_ingest_text.py` and
+  `test_control_plane_runner_scripts.py`'s one each (pre-existing/unrelated,
+  confirmed via `git stash` comparison earlier this session) — and one new,
+  real, narrow, and fully understood side effect:
+  `test_v4_local_model_qualification.py::test_committed_local_model_report_is_aggregate_only`
+  now fails because `scripts/evaluate_v4_local_model_qualification.py`'s
+  `_SOURCE_FILES` set includes `core/submission_domain.py`, and its committed
+  report's `source_integrity` hash no longer matches that file's content
+  after the `resume/cv` alias addition above — the exact same
+  "re-earn qualification after the source changed" situation this doc
+  already describes for the Lever report, just for a different, unrelated
+  qualification (a real local-model evaluation, `real_local_model: true`
+  over 410 real cases — not something to trigger casually or fake by
+  hand-editing the committed hash). Left honestly failing rather than
+  silently patched.
 
 ### Follow-up (not done in this pass, scoped so the next session can pick it up)
 
 1. Migrate or retire the other 24 `tests/fixtures/lever_v1/*.html` fixtures
-   (currently v2 markup, will `SELECTOR_DRIFT` against v3). Some encode
-   concerns unrelated to field structure (`captcha.html`, `mfa.html`,
-   `session_expired.html`, ...) and may not need changing; others
-   (`application_custom_select.html`, `application_radio_checkbox.html`,
-   `application_consent.html`, the `outer_*` actionability fixtures) need
-   real evidence or a deliberate decision to hand-author from the blank-form
-   recon, clearly labeled as such.
+   (currently v2 markup, will `SELECTOR_DRIFT` against v4). A full
+   reconnaissance pass (per-fixture: real markup gap, exact failure cause,
+   what the test is actually trying to prove, mutation-vs-retire read) is
+   done and was used to plan this session's fixes; the remaining fixtures
+   split roughly into: generic actionability mutations honestly buildable
+   from `application_basic.html` with one labeled change each
+   (`wrong_method.html`, `unreviewed_hidden_control.html`,
+   `disabled_submit.html`, the four `outer_*` fixtures,
+   `outer_has_proxy_guard.html`), fixtures whose whole premise no longer
+   exists in v4 and should be retired outright rather than migrated
+   (`invalid_action.html` — v3 already deleted the action-URL check its own
+   code comment confirms this), and fixtures needing real evidence or an
+   explicit hypothetical label because the one real capture never showed the
+   scenario (`application_custom_select.html`, `application_radio_checkbox.html`,
+   `application_consent.html` — note `application_consent.html`'s detection
+   mechanism, `data-control-kind="consent"`, is itself unverified against any
+   real page, a second-order gap, not just an unseen scenario).
+   `test_fixture_set_is_sanitized_and_contains_no_live_identity` also needs
+   `application_basic.html` added to its allowlist (it currently requires
+   every fixture to contain the literal string `"sample-company"`, a v2-era
+   convention the real fixture never had occasion to carry).
 2. `docs/qualification/lever-browser-v1.json` and its `.md` counterpart are
    now stale (still claim v2, `fixture_qualified`) and were deliberately left
    unchanged rather than hand-edited to a false "passed" state — regenerating
@@ -326,6 +469,18 @@ as the original task list:
 4. Investigate `LEVER_CONFIRMATION_SELECTOR` — ask the operator what the real
    post-submit page showed (screenshot or plain description), since the
    capture tool itself found no match.
+5. **The real top priority for Task 3**: design and implement a way to
+   represent "an operator reviewed this exact field and confirmed leaving it
+   blank" in `core/submission_domain.py`/`core/form_planning.py` — see the
+   detailed finding above. Everything else in this follow-up list is
+   independent of Task 3 readiness; this one isn't.
+6. Re-earn `scripts/evaluate_v4_local_model_qualification.py`'s committed
+   report (`test_v4_local_model_qualification.py::test_committed_local_model_report_is_aggregate_only`
+   now fails on source-integrity, not logic — see above): unrelated to
+   Lever, a side effect of `core/submission_domain.py` being one of that
+   qualification's tracked source files. Needs an actual local-model
+   evaluation run (`real_local_model: true`), not a quick fix — left
+   honestly failing rather than faked.
 
 ### Task 3: Fixture-qualify, then dry-run, then the live canary — **operator present throughout**
 
@@ -333,9 +488,12 @@ Unchanged from the design spec's existing ladder (§2 qualification stages) —
 not rewritten here because nothing learned this session changes the ladder
 itself, only what has to happen before Task 3 can start. The hCaptcha
 false-positive that previously blocked `assess_lever_v1_snapshot` from ever
-reaching `FORM` state on a real page is now fixed (see Task 2 above); the
-remaining blockers are the unmigrated-fixture and stale-qualification-report
-follow-up items, not this:
+reaching `FORM` state on a real page is fixed, and so is field-level
+resolution for every identity-shaped field a profile actually has data for
+(see Task 2 above) — but follow-up item 5 (no way to explicitly resolve a
+generic optional field with no canonical concept) is now the real,
+structural blocker for reaching `ready_for_permit` on a real page, not the
+unmigrated-fixture or stale-qualification-report items:
 
 - [ ] Offline fixture suite passes against the rewritten contract.
 - [ ] Real-Chromium rehearsal with `HTMLFormElement.prototype.submit` stubbed —

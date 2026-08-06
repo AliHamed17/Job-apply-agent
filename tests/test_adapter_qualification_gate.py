@@ -151,7 +151,7 @@ async def test_ats_inventory_exposes_dry_run_only_lever_as_send_disabled():
     assert lever.final_execution_enabled is False
     assert lever.qualified_form_scope == []
     assert lever.adapter_version == "1.0.0"
-    assert lever.selector_version == "lever-candidate-v3"
+    assert lever.selector_version == "lever-candidate-v4"
     assert lever.transport == "browser"
     assert lever.authentication_mode == "public_candidate_flow"
 

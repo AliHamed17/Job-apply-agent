@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from core.submission_domain import FieldType, ReasonCode, SensitiveCategory
+from core.submission_domain import (
+    FieldType,
+    ReasonCode,
+    SensitiveCategory,
+    field_canonical_label_compatible,
+)
 from submitters.lever_identity import parse_lever_posting_identity
 from submitters.lever_v1 import (
     LeverAdapterBlockedError,
@@ -106,12 +111,46 @@ def test_basic_form_observer_is_ordered_bounded_and_attachment_explicit() -> Non
     assert fields[1].required is True  # name
     assert fields[2].required is True  # email
     assert fields[3].required is False  # phone
-    # No data-canonical-name exists in real markup; always None until a
-    # separate mechanism maps real names to canonical ones.
-    assert all(field.canonical_name is None for field in fields)
-    assert "Resume/CV" in fields[0].label
+    # No data-canonical-name attribute exists in real markup, so this always
+    # comes from _CANONICAL_NAME_BY_FIELD_ID (see lever_v1.py) instead --
+    # populated only for the field_ids whose real, *actually extracted*
+    # label was confirmed by hand to normalize into an approved
+    # core.submission_domain._CANONICAL_LABEL_ALIASES entry for the mapped
+    # key. "org" ("Current company") and the urls_Twitter_/urls_Other_ links
+    # have no matching alias key at all -- none of the three get a guessed
+    # mapping, since field_canonical_label_compatible would then reject them
+    # for a label mismatch, *more* restrictive than leaving canonical_name
+    # unset (see the comment on _CANONICAL_NAME_BY_FIELD_ID for why that
+    # matters).
+    assert [field.canonical_name for field in fields] == [
+        None,  # resume: FILE fields never consult this map at all
+        "name",
+        "email",
+        "phone",
+        "location",
+        None,  # org / "Current company": no matching alias key exists
+        "linkedin_url",
+        None,  # urls_Twitter_: no matching alias key exists
+        "github_url",
+        "portfolio_url",
+        None,  # urls_Other_: label is the employer's own name, not stable
+    ]
+    # Every mapped field's real label must actually satisfy the compatibility
+    # check _identity_value's caller gates on -- proving the mapping isn't
+    # just present but functional, since a wrong alias would silently make
+    # resolution *more* restrictive than doing nothing (see above).
+    for field in fields:
+        if field.canonical_name is not None:
+            assert field_canonical_label_compatible(field), field.field_id
+    # Labels come from each wrapper's .application-label div specifically,
+    # not the whole <label> (which for resume/location would otherwise pull
+    # in sibling .application-field UI chrome -- upload-progress text,
+    # autocomplete "Loading"/"No results" text -- that isn't part of the
+    # actual question and silently broke label-text matching downstream).
+    assert fields[0].label == "Resume/CV"
     assert fields[1].label == "Full name ✱"
     assert fields[2].label == "Email ✱"
+    assert fields[4].label == "Current location"
 
 
 def test_exact_options_and_sensitive_consent_semantics_are_observed() -> None:

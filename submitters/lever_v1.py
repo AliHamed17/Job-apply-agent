@@ -75,7 +75,20 @@ LEVER_V1_ADAPTER_VERSION = "1.0.0"
 # before a real form was ever read. v3 is a genuinely different, evidence-
 # backed contract, not a patch -- bumping the version is what keeps any old
 # fixture-qualified evidence for v2 from silently vouching for v3's behavior.
-LEVER_V1_SELECTOR_VERSION = "lever-candidate-v3"
+#
+# v4 (same day): v3's label extraction took the whole <label> element's
+# text, which on real markup pulls in sibling .application-field UI chrome
+# (upload-progress status text, autocomplete "Loading"/"No results" text)
+# for any field whose control has rich nested state -- silently breaking
+# label-text matching (resume attachment recognition returned False on the
+# real resume field; the location field's label could never satisfy any
+# alias check) without ever surfacing as SELECTOR_DRIFT. v4 reads
+# .application-label specifically, confirmed 1:1 present across every field
+# in the real fixture. This changes observe_lever_v1_fields's output for the
+# same real HTML, which is exactly what selector_version exists to track --
+# lever_v1_form_fingerprint hashes it into every fingerprint, and v3
+# fingerprints must not be treated as equivalent to v4 ones.
+LEVER_V1_SELECTOR_VERSION = "lever-candidate-v4"
 LEVER_FORM_SELECTOR = "form#application-form"
 # Unverified: the real capture's confirmation-candidate search found no match
 # on the actual post-submit page (confirmation_selector: None in the captured
@@ -122,6 +135,49 @@ def _field_id_from_name(name: str) -> str:
     "urls[LinkedIn]" -> "urls_LinkedIn_").
     """
     return _NAME_TO_FIELD_ID_RE.sub("_", name)
+
+
+# Real field_id -> core.submission_domain._CANONICAL_LABEL_ALIASES key, for the
+# subset where both sides are confirmed against the real fixture
+# (tests/fixtures/lever_v1/application_basic.html): the field_id is real
+# (derived from the control's actual name attribute), and the field's real,
+# *actually extracted* label -- verified by running observe_lever_v1_fields
+# against the real fixture and printing each field.label, not by eyeballing
+# the HTML's <div class="application-label"> text -- was checked by hand
+# against _CANONICAL_LABEL_ALIASES and does normalize into an approved alias
+# for the mapped key ("full name" in aliases["name"], "linkedin url" in
+# aliases["linkedin_url"], etc). Without this, AnswerPolicyV1.plan_fields
+# could never resolve even these identity fields deterministically:
+# canonical_name was always None (no data-canonical-name attribute exists on
+# real wrappers -- see observe_lever_v1_fields below), and
+# _identity_value/_operator_approved/the user-confirmed-evidence path all
+# require canonical_name to be set before they run at all.
+#
+# Deliberately NOT mapped, despite a real field_id existing:
+# - "org" (label "Current company") and "urls_Twitter_" / "urls_Other_": no
+#   matching key exists anywhere in _CANONICAL_LABEL_ALIASES (no canonical
+#   concept of "current employer" or "twitter"/"generic other link" in this
+#   policy). Mapping one of these to an invented key would make
+#   field_canonical_label_compatible *stricter* than leaving canonical_name
+#   unset (it requires an exact approved-alias match once canonical_name is
+#   set, vs. permissively returning True when it's None) -- confirmed by
+#   direct measurement, not assumption. "urls_Other_"'s real label is
+#   literally the employer's own name ("Collate"), not a stable phrase at
+#   all, so it could never have a real alias regardless.
+# - "resume": FieldType.FILE fields never reach this alias-compatibility
+#   check in the first place (form_planning.py gates automatic_resolution_
+#   allowed on `not file_control`); resume verification runs through
+#   _verified_attachment_decision/field_is_reviewed_cv_attachment instead,
+#   entirely independent of this map.
+_CANONICAL_NAME_BY_FIELD_ID: dict[str, str] = {
+    "name": "name",
+    "email": "email",
+    "phone": "phone",
+    "location": "location",
+    "urls_LinkedIn_": "linkedin_url",
+    "urls_GitHub_": "github_url",
+    "urls_Portfolio_": "portfolio_url",
+}
 
 
 class LeverPageState(StrEnum):
@@ -573,7 +629,23 @@ def observe_lever_v1_fields(
         field_id = _field_id_from_name(str(control.get("name", "")).strip())
         if not _FIELD_ID_RE.fullmatch(field_id) or field_id in seen_ids:
             raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
-        label_node = wrapper.select_one("label, legend, [data-qa='field-label']")
+        # .application-label is checked first, not folded into the selector
+        # list below: real markup wraps each question's actual label text in
+        # exactly one such div, sibling to a .application-field div that can
+        # itself contain unrelated nested UI chrome (upload-progress status
+        # text, autocomplete "Loading"/"No results" text) -- confirmed 1:1
+        # against every field in the real fixture. Taking the whole <label>
+        # instead (as this used to) pulls that sibling chrome in too, which
+        # silently breaks label-text matching elsewhere (e.g. resume
+        # attachment recognition) without ever raising SELECTOR_DRIFT to
+        # surface it. select_one on a comma-joined selector list would not
+        # give .application-label priority -- it returns the first match in
+        # document order, and the outer <label> always opens before its own
+        # nested .application-label child -- so the fallback must be a
+        # separate lookup, tried only once the precise one comes up empty.
+        label_node = wrapper.select_one(".application-label") or wrapper.select_one(
+            "label, legend, [data-qa='field-label']"
+        )
         label = label_node.get_text(" ", strip=True) if label_node is not None else ""
         if not label:
             raise LeverAdapterBlockedError(ReasonCode.SELECTOR_DRIFT)
@@ -588,7 +660,10 @@ def observe_lever_v1_fields(
         fields.append(
             FormFieldV1(
                 field_id=field_id,
-                canonical_name=str(wrapper.get("data-canonical-name", "")).strip() or None,
+                canonical_name=(
+                    str(wrapper.get("data-canonical-name", "")).strip()
+                    or _CANONICAL_NAME_BY_FIELD_ID.get(field_id)
+                ),
                 label=label,
                 field_type=field_type,
                 required=(
