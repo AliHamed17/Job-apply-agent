@@ -403,10 +403,24 @@ def assess_lever_v1_snapshot(
     soup = BeautifulSoup(html or "", "html.parser")
     text = " ".join(soup.stripped_strings).casefold()
     low_url = (url or "").casefold()
+    # No structural captcha-widget check (e.g. .h-captcha, iframe[src*=captcha]):
+    # a real, completed Lever submission (jobs.lever.co/collate, 2026-08-06;
+    # request transcript in .capture/lever/capture.json) showed hCaptcha's
+    # widget div AND its iframe (newassets.hcaptcha.com/.../static/...) are
+    # both already present at the very first form_load, alongside only
+    # passive resources (secure-api.js, checksiteconfig) -- normal page
+    # furniture on every real Lever posting checked this session, not a
+    # signal anything is blocking. The actual active challenge (real puzzle
+    # images, the image_label_area_select endpoint) only appeared in the
+    # transcript after the operator clicked submit, as part of the normal
+    # submit flow the qualification ladder already requires a human for.
+    # Checking for the widget's mere existence gave a 100% false-positive
+    # rate on real pages -- assess_lever_v1_snapshot could never reach FORM
+    # state at all. Text markers are kept as the only signal for now; this
+    # is evidence that the old structural check was wrong, not proof these
+    # markers alone catch every real active-challenge presentation, since no
+    # capture has observed the DOM during that moment.
     if any(
-        soup.select_one(selector) is not None
-        for selector in (".g-recaptcha", ".h-captcha", 'iframe[src*="captcha"]', "[data-captcha]")
-    ) or any(
         marker in text
         for marker in ("verify you are human", "security challenge", "complete the captcha")
     ):

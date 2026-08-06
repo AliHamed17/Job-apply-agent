@@ -258,19 +258,37 @@ as the original task list:
   actual post-submit page (`confirmation_selector: null` in the committed
   `capture.json`), so what real Lever shows after a successful submit remains
   unknown. Left unchanged rather than guessed.
-- [ ] **A significant new finding, not in the original task list**: the real
-  fixture's hCaptcha widget (`<div class="h-captcha">`, present on every real
-  posting checked this session, not just this tenant) trips
-  `assess_lever_v1_snapshot`'s existing `CHALLENGE_DETECTED` logic, which
-  treats mere presence of `.h-captcha` as an active, blocking challenge. This
-  means **`assess_lever_v1_snapshot` currently cannot reach `FORM` state on
-  any real Lever page** — not a fixture-migration gap, an architecture
-  question: hCaptcha's DOM presence does not necessarily mean an active
-  challenge is being presented (invisible/checkbox modes usually resolve
-  without blocking), but distinguishing "present" from "actively challenging"
-  from static HTML alone is genuinely hard and not attempted here. This
-  blocks Task 3's dry run regardless of how complete the field-selector work
-  is, and needs its own scoped investigation before Task 3 can start.
+- [x] **A significant new finding, not in the original task list, now fixed
+  (2026-08-06)**: the real fixture's hCaptcha widget (`<div class="h-captcha">`,
+  present on every real posting checked this session, not just this tenant)
+  tripped `assess_lever_v1_snapshot`'s `CHALLENGE_DETECTED` logic, which
+  treated mere presence of `.h-captcha`/`.g-recaptcha`/`iframe[src*="captcha"]`/
+  `[data-captcha]` as an active, blocking challenge — meaning
+  `assess_lever_v1_snapshot` could never reach `FORM` state on any real Lever
+  page. Resolved by querying `.capture/lever/capture.json`'s network-request
+  transcript across all three capture phases: the widget's div and its iframe
+  (`newassets.hcaptcha.com/.../static/...`) are both already present at
+  `form_load`, alongside only passive resources (`secure-api.js`,
+  `checksiteconfig`); the actual active challenge (real puzzle images, the
+  `image_label_area_select` endpoint) appears in the transcript only after the
+  operator clicks submit. That's decisive evidence the four structural
+  selectors are always-true false positives on real pages, not a genuine
+  signal — so they were removed from `assess_lever_v1_snapshot`, keeping only
+  the three text-marker checks (`"verify you are human"`, `"security
+  challenge"`, `"complete the captcha"`), which still correctly catch
+  `tests/fixtures/lever_v1/captcha.html` (its own heading/body text matches
+  those markers independent of the structural check). The real safety
+  boundary — qualification-tier gating on final execution, and the live-canary
+  stage's existing requirement that a human handle CAPTCHA/MFA — is untouched;
+  this only fixes a too-eager *inspection-time* heuristic. Confirmed via
+  before/after test comparison: 31 failed/20 passed → 28 failed/23 passed,
+  with the 3 newly-passing tests being exactly `application_basic.html`
+  reaching `FORM` state plus two tests that depend on it, and the remaining 28
+  failures byte-for-byte identical to the pre-fix set (the unmigrated-fixture
+  issue in the follow-up list below, untouched by this change). Text markers
+  alone are not proven to catch every real active-challenge presentation — no
+  capture has observed the DOM during that moment — so this is evidence the
+  old check was wrong, not a claim the new one is complete.
 - [x] `ruff check .`, `ruff format --check .` — clean on every touched file.
   `pytest -q` on the four core tests exercising the real fixture (field
   extraction, final-action binding, both directly against real captured
@@ -303,17 +321,21 @@ as the original task list:
    Lever's fixture migration back to parity with the other four, or teaching
    the matrix script to represent a mixed-tier cohort — a real design
    decision, not a mechanical fix, so left alone rather than guessed at here.
-3. Investigate the hCaptcha/`CHALLENGE_DETECTED` finding above — this is the
-   actual blocker for Task 3, independent of selector-contract completeness.
+3. ~~Investigate the hCaptcha/`CHALLENGE_DETECTED` finding above~~ — done
+   2026-08-06, see the checked item above.
 4. Investigate `LEVER_CONFIRMATION_SELECTOR` — ask the operator what the real
    post-submit page showed (screenshot or plain description), since the
    capture tool itself found no match.
 
-### Task 3: Fixture-qualify, then dry-run, then the live canary — **operator present throughout, and now also blocked on the hCaptcha finding above**
+### Task 3: Fixture-qualify, then dry-run, then the live canary — **operator present throughout**
 
 Unchanged from the design spec's existing ladder (§2 qualification stages) —
 not rewritten here because nothing learned this session changes the ladder
-itself, only what has to happen before Task 3 can start:
+itself, only what has to happen before Task 3 can start. The hCaptcha
+false-positive that previously blocked `assess_lever_v1_snapshot` from ever
+reaching `FORM` state on a real page is now fixed (see Task 2 above); the
+remaining blockers are the unmigrated-fixture and stale-qualification-report
+follow-up items, not this:
 
 - [ ] Offline fixture suite passes against the rewritten contract.
 - [ ] Real-Chromium rehearsal with `HTMLFormElement.prototype.submit` stubbed —
@@ -324,8 +346,6 @@ itself, only what has to happen before Task 3 can start:
 - [ ] One live canary — operator selects and approves the exact job,
   handles CAPTCHA/MFA manually, confirms via the employer's own confirmation
   email. This is the step that actually produces the P1 exit criterion.
-
-### Task 3: Fixture-qualify, then dry-run, then the live canary — **operator present throughout**
 
 Unchanged from the design spec's existing ladder (§2 qualification stages) —
 not rewritten here because nothing learned this session changes it:
