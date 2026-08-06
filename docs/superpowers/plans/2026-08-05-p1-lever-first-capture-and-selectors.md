@@ -88,6 +88,41 @@ transport rewrite.
     that its `_FORM_CANDIDATES`/tripwire logic matches real Lever markup shape;
     the transport-level tripwires should **not** fire on a normal posting.
 
+## Greenhouse: what a future transport rewrite would need (not scheduled — scoping only)
+
+Same read-only method used on Lever below, run against a live, junior-level
+Greenhouse posting (`job-boards.greenhouse.io/waymark/jobs/4711827005`) to
+de-risk *future* work, not to start it now. Confirms and sharpens §6.1's
+finding:
+
+- **Proof, not suspicion, that submission can't be a native form POST.**
+  `method="get"` on a form with two `<input type="file">` children is not
+  just wrong per `structureReady()` — it's structurally incapable of carrying
+  file content at all (GET requests have no body). The real submit is
+  necessarily a JS-driven API call. `SUBMIT_IS_XHR` was always the right
+  tripwire name for this ATS.
+- **Every field is identified by `id`, not `name`** — `first_name`,
+  `last_name`, `preferred_name`, `email`, `phone`, `candidate-location`,
+  `resume`, `cover_letter`, `school--0`, `degree--0`, and per-posting custom
+  questions as `question_<numeric-id>` (a Greenhouse internal question ID,
+  not a UUID like Lever's cards). Every `name` attribute is empty. Any future
+  rewrite keys off `id`, full stop — there is nothing to read from `name`.
+- **The real wrapper class is `.field-wrapper`**, not `data-field-id`
+  (confirming §6.1) and not `data-testid` either, though `data-testid`
+  appears elsewhere in the form and may be worth a second look when this work
+  is actually scheduled.
+- Two file inputs confirmed present on a real posting (resume + cover
+  letter) — the existing `MULTIPLE_FILE_INPUTS` tripwire would correctly
+  flag this exact posting as needing the single-file-first-proof rule applied
+  carefully, or a different target chosen.
+
+This does not change P1's priority. Lever remains the near-term target
+because its transport already matches what the codebase assumes; Greenhouse
+needs the transport rewrite itself before a capture is even worth running.
+Recorded here so that whenever that work is scheduled, it starts from real
+field-identity evidence instead of the assumptions that produced the original
+22 fixtures.
+
 ## Read-only reconnaissance done since (2026-08-05, live browser, blank form only)
 
 Loaded `https://jobs.lever.co/palantir/c4442730-2926-41ad-8c0e-5e5a6b4d14ae/apply`
